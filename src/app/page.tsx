@@ -1,10 +1,11 @@
-import { FileSearch, ScanSearch, Zap } from "lucide-react";
+import { BookPlus, FileSearch, ScanSearch, Zap } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { AiDetectorPanel } from "@/components/detector/ai-detector-panel";
 import { FadeIn } from "@/components/detector/fade-in";
 import { HallucinationPanel } from "@/components/detector/hallucination-panel";
+import { NovelPanel } from "@/components/novel/novel-panel";
 
 export default function Home() {
   return (
@@ -25,7 +26,7 @@ export default function Home() {
                   TruthLab
                 </h1>
                 <p className="text-sm text-muted-foreground">
-                  AI Detector &amp; Hallucination Detector
+                  AI Detector · Hallucination Detector · Novel Creator
                 </p>
               </div>
             </div>
@@ -35,16 +36,20 @@ export default function Home() {
             </Badge>
           </header>
 
-          {/* Detector tabs */}
+          {/* Detector + creator tabs */}
           <Tabs defaultValue="ai">
-            <TabsList className="grid h-auto w-full grid-cols-1 sm:w-[560px] sm:grid-cols-2">
+            <TabsList className="grid h-auto w-full grid-cols-1 sm:w-[640px] sm:grid-cols-3">
               <TabsTrigger value="ai" className="h-11 gap-2 px-4 sm:h-9">
                 <ScanSearch aria-hidden="true" />
-                AI Content Detector
+                AI Detector
               </TabsTrigger>
               <TabsTrigger value="hallucination" className="h-11 gap-2 px-4 sm:h-9">
                 <FileSearch aria-hidden="true" />
-                Hallucination Detector
+                Hallucination
+              </TabsTrigger>
+              <TabsTrigger value="novel" className="h-11 gap-2 px-4 sm:h-9">
+                <BookPlus aria-hidden="true" />
+                Novel Creator
               </TabsTrigger>
             </TabsList>
             <TabsContent value="ai" className="mt-6">
@@ -57,6 +62,11 @@ export default function Home() {
                 <HallucinationPanel />
               </FadeIn>
             </TabsContent>
+            <TabsContent value="novel" className="mt-6">
+              <FadeIn>
+                <NovelPanel />
+              </FadeIn>
+            </TabsContent>
           </Tabs>
         </div>
       </main>
@@ -66,10 +76,10 @@ export default function Home() {
       <footer className="mt-auto border-t">
         <div className="mx-auto flex w-full max-w-6xl flex-col items-center justify-between gap-2 px-4 pb-[max(1rem,env(safe-area-inset-bottom))] pt-4 text-xs text-muted-foreground sm:flex-row">
           <p>
-            TruthLab · GLM-powered detection for research &amp; education —
-            probabilistic, not proof.
+            TruthLab · GLM-powered detection &amp; creation for research &amp;
+            education — probabilistic, not proof.
           </p>
-          <p>AI score · Hallucination check · Heuristics + LLM analysis</p>
+          <p>AI score · Hallucination check · Novel pipeline (webnovel-writer inspired)</p>
         </div>
       </footer>
     </div>

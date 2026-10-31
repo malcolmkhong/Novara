@@ -30,3 +30,105 @@ model Post {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }
+
+// ---------------------------------------------------------------------------
+// Novel Creator (webnovel-writer inspired pipeline)
+// init(设定集+总纲) → plan(卷节拍表+章纲) → write(流式正文) → sediment(记忆沉淀)
+// → review(审查) with a foreshadowing ledger (伏笔台账) for long-range
+// consistency, mirroring the webnovel-writer skill workflow.
+// JSON payloads (bible, beats, facts…) are stored as serialized strings
+// because SQLite + Prisma do not support Json on this datasource.
+// ---------------------------------------------------------------------------
+
+model Novel {
+  id             String   @id @default(cuid())
+  title          String
+  genre          String
+  logline        String
+  coreConflict   String?
+  targetChapters Int      @default(24)
+  platform       String?
+  // JSON: { world, power, goldenFinger, themes[] }
+  bible          String?
+  // JSON: [{ name, role, desire, flaw, arc }]
+  characters     String?
+  // JSON: { name, scheme, mirror }
+  villain        String?
+  // JSON: [{ index, name, startChapter, endChapter, coreConflict, climax, hook }]
+  masterOutline  String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  volumes     Volume[]
+  chapters    NovelChapter[]
+  foreshadows Foreshadow[]
+}
+
+model Volume {
+  id           String  @id @default(cuid())
+  novelId      String
+  index        Int
+  name         String
+  startChapter Int
+  endChapter   Int
+  coreConflict String?
+  climax       String?
+  hook         String?
+  // JSON: [{ phase, title, description }]
+  beats        String?
+  planned      Boolean @default(false)
+
+  novel    Novel          @relation(fields: [novelId], references: [id], onDelete: Cascade)
+  chapters NovelChapter[]
+
+  @@unique([novelId, index])
+}
+
+model NovelChapter {
+  id         String  @id @default(cuid())
+  novelId    String
+  volumeId   String
+  number     Int
+  title      String
+  // outline fields
+  goal       String?
+  timeAnchor String?
+  // JSON: string[]
+  mustCover  String?
+  endHook    String?
+  // prose
+  content    String?
+  wordCount  Int     @default(0)
+  // sediment (memory)
+  summary    String?
+  // JSON: string[]
+  facts      String?
+  // JSON: [{ name, change }]
+  charStates String?
+  // JSON: review result { overallScore, dimensions[], blocking[], suggestions[], consistencyFlags[] }
+  review     String?
+  // outlined | drafted | final
+  status     String  @default("outlined")
+  revision   Int     @default(0)
+
+  novel  Novel  @relation(fields: [novelId], references: [id], onDelete: Cascade)
+  volume Volume @relation(fields: [volumeId], references: [id], onDelete: Cascade)
+
+  @@unique([novelId, number])
+}
+
+model Foreshadow {
+  id          String @id @default(cuid())
+  novelId     String
+  title       String
+  description String
+  plantedAt   Int
+  lastTouched Int?
+  // open | advanced | paid
+  status      String @default("open")
+  paidAt      Int?
+
+  novel Novel @relation(fields: [novelId], references: [id], onDelete: Cascade)
+
+  @@index([novelId, status])
+}
