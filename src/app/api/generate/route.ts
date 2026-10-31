@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import ZAI from "z-ai-web-dev-sdk";
+import { GLM_TIMEOUT_MS, withTimeout } from "@/lib/ai-heuristics";
 
 export const maxDuration = 120;
 
@@ -96,10 +97,14 @@ export async function POST(req: Request) {
 
   try {
     const zai = await ZAI.create();
-    const completion: unknown = await zai.chat.completions.create({
-      messages,
-      thinking: { type: "disabled" },
-    });
+    const completion: unknown = await withTimeout(
+      zai.chat.completions.create({
+        messages,
+        thinking: { type: "disabled" },
+      }),
+      GLM_TIMEOUT_MS,
+      "[generate] GLM request",
+    );
     const text = extractCompletionContent(completion);
     if (text === null || text.trim().length === 0) {
       return NextResponse.json(
@@ -115,7 +120,11 @@ export async function POST(req: Request) {
   } catch (error) {
     console.error("[generate] GLM request failed:", error);
     return NextResponse.json(
-      { success: false, error: "Failed to generate text with GLM." },
+      {
+        success: false,
+        error:
+          "GLM is busy or took too long to respond. Please try again in a moment.",
+      },
       { status: 502 },
     );
   }

@@ -1,7 +1,13 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import ZAI from "z-ai-web-dev-sdk";
-import { clamp, extractJson } from "@/lib/ai-heuristics";
+import {
+  capForGlm,
+  clamp,
+  extractJson,
+  GLM_TIMEOUT_MS,
+  withTimeout,
+} from "@/lib/ai-heuristics";
 
 export const maxDuration = 120;
 
@@ -17,9 +23,9 @@ const bodySchema = z.object({
 
 const JSON_SHAPE_INSTRUCTION = `Respond with ONLY valid JSON, no fences: {"hallucinationScore": <0-100, 0 = fully factual, 100 = mostly fabricated>, "riskLevel": "low"|"medium"|"high", "summary": "<2-3 sentences>", "claims": [{"claim": "...", "status": "supported"|"unsupported"|"contradicted"|"unverifiable", "explanation": "<1-2 sentences with your reasoning>", "confidence": <0-100>}]}. If there are no checkable claims, return an empty claims array and a low score.`;
 
-const OPEN_DOMAIN_SYSTEM_PROMPT = `You are a rigorous fact-checking analyst detecting hallucinations in an AI-generated answer. Extract every checkable factual claim (dates, numbers, names, events, quotes, statistics, attributions, causal claims). Verify each against your own knowledge. Classify each claim as: "supported" (well-established true), "unsupported" (likely false or no evidence exists), "contradicted" (known false), "unverifiable" (subjective, obscure, or insufficient data). ${JSON_SHAPE_INSTRUCTION}`;
+const OPEN_DOMAIN_SYSTEM_PROMPT = `You are a rigorous fact-checking analyst detecting hallucinations in an AI-generated answer. Extract the most significant checkable factual claims (up to 20) about dates, numbers, names, events, quotes, statistics, attributions and causal statements. Verify each against your own knowledge. Classify each claim as: "supported" (well-established true), "unsupported" (likely false or no evidence exists), "contradicted" (known false), "unverifiable" (subjective, obscure, or insufficient data). ${JSON_SHAPE_INSTRUCTION}`;
 
-const GROUNDED_SYSTEM_PROMPT = `You are a rigorous fact-checking analyst detecting hallucinations in an AI-generated answer. Extract every checkable factual claim (dates, numbers, names, events, quotes, statistics, attributions, causal claims). Verify each claim STRICTLY against the provided source document. Classify each claim as: "supported" (directly stated or entailed by the source), "unsupported" (not present in the source; invented), "contradicted" (contradicts the source), "unverifiable" (the source does not cover it). The hallucinationScore (0-100) expresses the degree of (un)grounding: 0 means every claim is grounded in the source, 100 means most claims are fabricated or absent from the source. ${JSON_SHAPE_INSTRUCTION}`;
+const GROUNDED_SYSTEM_PROMPT = `You are a rigorous fact-checking analyst detecting hallucinations in an AI-generated answer. Extract the most significant checkable factual claims (up to 20) about dates, numbers, names, events, quotes, statistics, attributions and causal statements. Verify each claim STRICTLY against the provided source document. Classify each claim as: "supported" (directly stated or entailed by the source), "unsupported" (not present in the source; invented), "contradicted" (contradicts the source), "unverifiable" (the source does not cover it). The hallucinationScore (0-100) expresses the degree of (un)grounding: 0 means every claim is grounded in the source, 100 means most claims are fabricated or absent from the source. ${JSON_SHAPE_INSTRUCTION}`;
 
 // ---------------------------------------------------------------------------
 // Types (GLM output is untrusted — validated defensively below)
@@ -214,16 +220,33 @@ export async function POST(req: Request) {
       : "open-domain";
   const source = mode === "grounded" ? parsedBody.data.source : undefined;
 
+  // GLM gets a bounded excerpt of both answer and source so the prompt and
+  // the JSON it must return stay small and the call finishes well within
+  // upstream proxy timeouts. Nothing else changes semantically.
+  const glmText = capForGlm(text);
+  const glmSource =
+    mode === "grounded" && source !== undefined
+      ? capForGlm(source)
+      : undefined;
+
   try {
-    let raw = await requestGlmText(
-      buildMessages(mode, text, source, parsedBody.data.question, false),
+    let raw = await withTimeout(
+      requestGlmText(
+        buildMessages(mode, glmText, glmSource, parsedBody.data.question, false),
+      ),
+      GLM_TIMEOUT_MS,
+      "[detect/hallucination] first GLM attempt",
     );
     let analysis = raw === null ? null : parseGlmAnalysis(raw);
 
     // Retry ONCE with an explicit JSON-only instruction before giving up.
     if (analysis === null) {
-      raw = await requestGlmText(
-        buildMessages(mode, text, source, parsedBody.data.question, true),
+      raw = await withTimeout(
+        requestGlmText(
+          buildMessages(mode, glmText, glmSource, parsedBody.data.question, true),
+        ),
+        GLM_TIMEOUT_MS,
+        "[detect/hallucination] retry GLM attempt",
       );
       analysis = raw === null ? null : parseGlmAnalysis(raw);
     }
@@ -232,7 +255,8 @@ export async function POST(req: Request) {
       return NextResponse.json(
         {
           success: false,
-          error: "GLM failed to return a valid analysis after one retry.",
+          error:
+            "GLM could not finish the fact-check in time. Please try again — shorter text checks faster.",
         },
         { status: 502 },
       );

@@ -262,3 +262,53 @@ export function extractJson<T>(raw: string): T | null {
   }
   return null;
 }
+
+// ---------------------------------------------------------------------------
+// GLM budgeting helpers (server-side routes use these to keep latency bounded
+// so responses finish well before gateway/proxy timeouts).
+// ---------------------------------------------------------------------------
+
+/**
+ * Max characters of raw user text forwarded to GLM in a single prompt.
+ * Long inputs make the model echo huge JSON payloads (90s+), which trips
+ * upstream proxy timeouts. Heuristics still run on the FULL text.
+ */
+export const GLM_TEXT_BUDGET = 6000;
+
+/** Per-attempt GLM call budget in milliseconds. */
+export const GLM_TIMEOUT_MS = 60_000;
+
+/** Truncate text to the GLM budget, on a whitespace boundary when possible. */
+export function capForGlm(text: string, budget: number = GLM_TEXT_BUDGET): string {
+  if (text.length <= budget) return text;
+  const slice = text.slice(0, budget);
+  const lastSpace = slice.lastIndexOf(" ");
+  // Keep a readable cutoff; fall back to the hard slice for pathological input.
+  return lastSpace > budget * 0.8 ? slice.slice(0, lastSpace) : slice;
+}
+
+/**
+ * Reject a promise that takes longer than `ms`. The underlying work is NOT
+ * cancelled, but the route regains control and can degrade gracefully.
+ */
+export function withTimeout<T>(
+  promise: Promise<T>,
+  ms: number = GLM_TIMEOUT_MS,
+  label = "GLM request",
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error(`${label} timed out after ${ms}ms.`));
+    }, ms);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
+}

@@ -314,7 +314,8 @@ export function AiDetectorPanel() {
         {analyzing ? (
           <p className="flex items-center gap-2 text-sm text-muted-foreground">
             <Loader2 className="size-4 animate-spin" aria-hidden="true" />
-            GLM is analyzing… this can take 10–30 seconds.
+            GLM is analyzing… this can take up to a minute for long texts
+            (shorter text is faster; failed calls retry once automatically).
           </p>
         ) : null}
 
