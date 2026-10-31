@@ -3,8 +3,10 @@
 import * as React from "react";
 import { motion } from "framer-motion";
 import {
+  BookOpen,
   Bot,
   Eraser,
+  FileText,
   Info,
   Loader2,
   ScanSearch,
@@ -25,6 +27,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Progress } from "@/components/ui/progress";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
@@ -37,6 +40,7 @@ import type {
   AIVerdict,
   GenerateResponse,
   Severity,
+  TextType,
 } from "./types";
 
 /* ------------------------------------------------------------------ */
@@ -48,6 +52,12 @@ const AI_SAMPLE =
 
 const HUMAN_SAMPLE =
   "ok so honestly i have no idea how this happened lol. woke up at like 6:40am?? couldn't sleep again. the neighbors dog started barking around 5 and that was... that. anyway made coffee, burnt the toast AGAIN (third time this week, i need a new toaster fr). my sister called mid-breakfast talking about some drama at work and i just nodded along, wasn't really listening tbh. whatever. kinda dreading tonight's meeting but also?? free pizza. so yk, silver linings i guess. gonna finish this coffee, maybe go for a walk if it stops raining. probs won't tho. oh and i finally booked that dentist thing. only took me four months lol. small wins.";
+
+const AI_NOVEL_SAMPLE =
+  "Elara stood at the edge of the forest, her heart pounding like a drum against her ribs. The air hung heavy with the scent of pine and secrets, a mixture of wonder and fear settling over her like a shroud.\n\n\"You shouldn't be here,\" Kael said softly, his eyes darkening with something she couldn't quite name.\n\nShe let out a breath she didn't know she'd been holding. \"I had to come,\" she replied, her voice barely above a whisper. \"The letter—it changed everything.\"\n\nSomething shifted between them, unspoken yet palpable. He took a step closer, and she felt a jolt of electricity course through her veins. The weight of the moment pressed down upon them both.\n\n\"We don't have much time,\" he murmured gently. \"They'll realize you're gone.\"\n\nShe nodded, a wave of determination washing over her. Whatever came next, she couldn't help but feel that this was the beginning of something extraordinary—a thread of destiny that would bind their fates together, for better or for worse.";
+
+const HUMAN_NOVEL_SAMPLE =
+  "Deb wasn't drunk. Two beers, maybe two and a half, and the third was still sweating on the card table by the garage. She checked. It was there, ring-staining an old invoice.\n\n\"You going to listen or what?\" Marty said.\n\n\"I'm listening.\" She wasn't. Down the street the Diaz kid was washing his truck at nine at night, which explained the country music, sort of. Nothing else explained it.\n\n\"The Lechugas want forty for the chair,\" Marty said. \"Forty. For a chair.\"\n\nDeb turned her beer can in her hand. Somebody had written FLORIDA on it in pen, years ago probably, and she wondered who'd carried it here, what they'd been drinking, whether they'd made it back. \"Tell 'em twenty-five,\" she said.\n\n\"Twenty-five.\"\n\n\"And I'll throw in the cooler.\" She could hear her mother's TV through the wall, laughing at something. It was only Tuesday. That felt wrong somehow, Tuesday, like it should've been a Friday for this.";
 
 /* ------------------------------------------------------------------ */
 /* Display mappings                                                    */
@@ -121,6 +131,7 @@ export function AiDetectorPanel() {
   const { toast } = useToast();
 
   const [text, setText] = React.useState("");
+  const [textType, setTextType] = React.useState<TextType>("novel");
   const [topic, setTopic] = React.useState("");
   const [analyzing, setAnalyzing] = React.useState(false);
   const [generating, setGenerating] = React.useState(false);
@@ -137,7 +148,10 @@ export function AiDetectorPanel() {
     setAnalyzing(true);
     setError(null);
     try {
-      const data = await postJSON<AIDetectResponse>("/api/detect/ai", { text });
+      const data = await postJSON<AIDetectResponse>("/api/detect/ai", {
+        text,
+        textType,
+      });
       if (!data.success) {
         throw new Error(data.error || "Detection failed.");
       }
@@ -162,7 +176,7 @@ export function AiDetectorPanel() {
     setError(null);
     try {
       const data = await postJSON<GenerateResponse>("/api/generate", {
-        mode: "ai-essay",
+        mode: textType === "novel" ? "ai-fiction" : "ai-essay",
         topic: topic.trim() || undefined,
       });
       if (!data.success) {
@@ -171,7 +185,10 @@ export function AiDetectorPanel() {
       setText(data.text);
       toast({
         title: "Generated with GLM",
-        description: "A fresh AI-style sample was placed in the editor.",
+        description:
+          textType === "novel"
+            ? "A fresh AI-style fiction scene was placed in the editor."
+            : "A fresh AI-style sample was placed in the editor.",
       });
     } catch (err) {
       const message =
@@ -196,17 +213,65 @@ export function AiDetectorPanel() {
         <CardHeader>
           <CardTitle>Text to analyze</CardTitle>
           <CardDescription>
-            Paste any text — GLM scores how likely it is AI-generated.
+            Paste any text — GLM scores how likely it is AI-generated, with a
+            fiction-forensic lens for novels.
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
+          <div className="flex flex-col gap-2">
+            <Label>Text type</Label>
+            <RadioGroup
+              value={textType}
+              onValueChange={(value) => setTextType(value as TextType)}
+              className="grid gap-3 sm:grid-cols-2"
+              aria-label="Text type"
+            >
+              <Label
+                htmlFor="type-novel"
+                className="flex cursor-pointer flex-col gap-1.5 rounded-lg border p-4 transition-colors hover:bg-muted/60 has-[[data-state=checked]]:border-primary has-[[data-state=checked]]:bg-primary/5"
+              >
+                <span className="flex items-center gap-2">
+                  <RadioGroupItem id="type-novel" value="novel" />
+                  <BookOpen
+                    className="size-4 text-muted-foreground"
+                    aria-hidden="true"
+                  />
+                  <span className="text-sm font-medium">Novel / fiction</span>
+                </span>
+                <span className="text-xs leading-relaxed text-muted-foreground">
+                  Tuned for narrative prose, dialogue &amp; scene writing.
+                </span>
+              </Label>
+              <Label
+                htmlFor="type-general"
+                className="flex cursor-pointer flex-col gap-1.5 rounded-lg border p-4 transition-colors hover:bg-muted/60 has-[[data-state=checked]]:border-primary has-[[data-state=checked]]:bg-primary/5"
+              >
+                <span className="flex items-center gap-2">
+                  <RadioGroupItem id="type-general" value="general" />
+                  <FileText
+                    className="size-4 text-muted-foreground"
+                    aria-hidden="true"
+                  />
+                  <span className="text-sm font-medium">General prose</span>
+                </span>
+                <span className="text-xs leading-relaxed text-muted-foreground">
+                  Essays, articles, emails &amp; non-fiction.
+                </span>
+              </Label>
+            </RadioGroup>
+          </div>
+
           <div className="flex flex-col gap-2">
             <Label htmlFor="ai-text">Text</Label>
             <Textarea
               id="ai-text"
               value={text}
               onChange={(e) => setText(e.target.value)}
-              placeholder="Paste or generate a sample to analyze…"
+              placeholder={
+                textType === "novel"
+                  ? "Paste a scene or chapter to analyze…"
+                  : "Paste or generate a sample to analyze…"
+              }
               className="min-h-[220px] resize-y font-normal"
               aria-describedby="ai-text-counts"
             />
@@ -238,33 +303,45 @@ export function AiDetectorPanel() {
               variant="outline"
               size="sm"
               className="h-9"
-              onClick={() => setText(AI_SAMPLE)}
+              onClick={() =>
+                setText(textType === "novel" ? AI_NOVEL_SAMPLE : AI_SAMPLE)
+              }
               disabled={analyzing}
             >
               <Bot aria-hidden="true" />
-              AI sample
+              {textType === "novel" ? "AI fiction sample" : "AI sample"}
             </Button>
             <Button
               type="button"
               variant="outline"
               size="sm"
               className="h-9"
-              onClick={() => setText(HUMAN_SAMPLE)}
+              onClick={() =>
+                setText(
+                  textType === "novel" ? HUMAN_NOVEL_SAMPLE : HUMAN_SAMPLE,
+                )
+              }
               disabled={analyzing}
             >
               <User aria-hidden="true" />
-              Human sample
+              {textType === "novel" ? "Human fiction sample" : "Human sample"}
             </Button>
           </div>
 
           <div className="flex flex-col gap-2">
-            <Label htmlFor="ai-topic">Topic (optional)</Label>
+            <Label htmlFor="ai-topic">
+              {textType === "novel" ? "Scene idea (optional)" : "Topic (optional)"}
+            </Label>
             <div className="flex flex-col gap-2 sm:flex-row">
               <Input
                 id="ai-topic"
                 value={topic}
                 onChange={(e) => setTopic(e.target.value)}
-                placeholder="Topic (optional)"
+                placeholder={
+                  textType === "novel"
+                    ? "e.g. a stormy reunion at a train station"
+                    : "Topic (optional)"
+                }
                 className="flex-1"
               />
               <Button
@@ -327,7 +404,8 @@ export function AiDetectorPanel() {
             <p className="text-sm font-medium">Run an analysis to see results</p>
             <p className="max-w-xs text-xs text-muted-foreground">
               GLM combines heuristic signals with an LLM judgment to estimate
-              how likely the text is machine-generated.
+              how likely the text is machine-generated — novel mode uses a
+              fiction-forensic lens.
             </p>
           </div>
         ) : null}
@@ -344,7 +422,9 @@ export function AiDetectorPanel() {
               <CardHeader>
                 <CardTitle>Verdict</CardTitle>
                 <CardDescription>
-                  Overall judgment from GLM with local heuristic support.
+                  {result.textType === "novel"
+                    ? "Fiction-forensic judgment from GLM with novel-tuned heuristic support."
+                    : "Overall judgment from GLM with local heuristic support."}
                 </CardDescription>
               </CardHeader>
               <CardContent className="flex flex-col gap-4 sm:flex-row sm:items-center">
@@ -543,6 +623,27 @@ export function AiDetectorPanel() {
                     value={String(result.heuristics.repetitiveStarters)}
                     hint="Sentences beginning the same way"
                   />
+                  {result.heuristics.fiction ? (
+                    <>
+                      <StatTile
+                        label="Em-dash density"
+                        value={`${result.heuristics.fiction.emDashDensity.toFixed(1)}/k chars`}
+                        hint="AI fiction leans on em-dashes"
+                      />
+                      <StatTile
+                        label="Adverb dialogue tags"
+                        value={String(
+                          result.heuristics.fiction.dialogueAdverbTags,
+                        )}
+                        hint={'"said softly"-style tags'}
+                      />
+                      <StatTile
+                        label="Participial phrases"
+                        value={`${result.heuristics.fiction.participialDensity.toFixed(1)}/k chars`}
+                        hint={'", turning toward her" cadence'}
+                      />
+                    </>
+                  ) : null}
                 </div>
               </CardContent>
             </Card>

@@ -19,6 +19,8 @@ export type RiskLevel = "low" | "medium" | "high";
 
 export type CheckMode = "open-domain" | "grounded";
 
+export type TextType = "novel" | "general";
+
 export interface ApiFailure {
   success: false;
   error: string;
@@ -38,6 +40,15 @@ export interface SentenceScore {
   note?: string;
 }
 
+export interface FictionHeuristics {
+  /** Em/en dashes per 1000 characters. */
+  emDashDensity: number;
+  /** Dialogue tags with an adverb ("said softly"). */
+  dialogueAdverbTags: number;
+  /** ", <word>ing" participial phrases per 1000 characters. */
+  participialDensity: number;
+}
+
 export interface AIHeuristics {
   burstiness: number;
   avgSentenceLength: number;
@@ -47,6 +58,8 @@ export interface AIHeuristics {
   repetitiveStarters: number;
   punctuationDiversity: number;
   heuristicScore: number;
+  /** Present only for novel/fiction analysis. */
+  fiction?: FictionHeuristics;
 }
 
 export interface AIDetectSuccess {
@@ -59,6 +72,7 @@ export interface AIDetectSuccess {
   signals: AISignal[];
   sentences: SentenceScore[];
   heuristics: AIHeuristics;
+  textType: TextType;
   model: string;
 }
 

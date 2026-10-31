@@ -10,13 +10,16 @@ export const maxDuration = 120;
 // ---------------------------------------------------------------------------
 
 const bodySchema = z.object({
-  mode: z.enum(["ai-essay", "glm-answer"]),
+  mode: z.enum(["ai-essay", "ai-fiction", "glm-answer"]),
   topic: z.string().max(300).optional(),
   question: z.string().max(2000).optional(),
 });
 
 const ESSAY_SYSTEM_PROMPT =
   "You generate realistic sample AI-assistant prose for testing an AI detector. Write 150-220 words of typical polished chatbot-style text about the given topic: smooth generic transitions, balanced paragraphs, hallmark AI phrasing. Output ONLY the text, no preamble.";
+
+const FICTION_SYSTEM_PROMPT =
+  "You generate realistic sample AI-assistant FICTION for testing a novel-writing AI detector. Write a 150-220 word fiction scene about the given topic, full of hallmark LLM fiction tells: purple metaphors and over-description, emotional over-narration (naming feelings instead of showing them), dialogue tags with adverbs ('she said softly'), em-dashes, trailing participial phrases (', turning toward her'), tricolon rhythm, and stock phrases like 'couldn't help but', 'something shifted', 'a mixture of awe and fear', 'the air hung heavy'. Output ONLY the scene text, no preamble.";
 
 const ANSWER_SYSTEM_PROMPT = "You are a helpful, confident assistant.";
 
@@ -64,7 +67,7 @@ export async function POST(req: Request) {
         success: false,
         error:
           parsedBody.error.issues[0]?.message ??
-          "Invalid body: provide `mode` ('ai-essay' | 'glm-answer') plus optional `topic` / `question`.",
+          "Invalid body: provide `mode` ('ai-essay' | 'ai-fiction' | 'glm-answer') plus optional `topic` / `question`.",
       },
       { status: 400 },
     );
@@ -79,6 +82,17 @@ export async function POST(req: Request) {
       {
         role: "user",
         content: topic && topic.trim().length > 0 ? topic : "the benefits of remote work",
+      },
+    ];
+  } else if (mode === "ai-fiction") {
+    messages = [
+      { role: "assistant", content: FICTION_SYSTEM_PROMPT },
+      {
+        role: "user",
+        content:
+          topic && topic.trim().length > 0
+            ? topic
+            : "a lighthouse keeper discovers a mysterious door",
       },
     ];
   } else {

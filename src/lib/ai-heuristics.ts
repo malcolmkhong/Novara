@@ -76,6 +76,17 @@ export interface HeuristicResult {
   punctuationDiversity: number;
   /** 0-100 composite probability-of-AI from these signals. */
   heuristicScore: number;
+  /** Extra fiction-only metrics, present for novel/fiction analysis. */
+  fiction?: FictionExtras;
+}
+
+export interface FictionExtras {
+  /** Em/en dashes per 1000 characters — LLM fiction leans on them heavily. */
+  emDashDensity: number;
+  /** Dialogue tags with a "-ly" adverb ("said softly") — classic AI tell. */
+  dialogueAdverbTags: number;
+  /** ", <word>ing" participial phrases per 1000 characters (", turning toward…"). */
+  participialDensity: number;
 }
 
 /** Clamp a number into [min, max]. */
@@ -311,4 +322,122 @@ export function withTimeout<T>(
       },
     );
   });
+}
+
+// ---------------------------------------------------------------------------
+// Fiction / novel-writing heuristics
+// ---------------------------------------------------------------------------
+
+/**
+ * Hallmark AI-generated FICTION phrases (checked case-insensitively).
+ * These are the stock tells of LLM novel prose: emotional over-narration,
+ * formulaic body-language beats, and generic sensory filler.
+ */
+const FICTION_AI_PHRASES: readonly string[] = [
+  "couldn't help but",
+  "couldnt help but",
+  "a breath she didn't know",
+  "a breath he didn't know",
+  "a breath they didn't know",
+  "let out a breath",
+  "something shifted",
+  "something in her chest",
+  "something in his chest",
+  "something in them tightened",
+  "the air hung heavy",
+  "hung in the air",
+  "a wave of",
+  "a flood of",
+  "a mixture of",
+  "a mix of",
+  "heart pounded",
+  "heart hammered",
+  "heart skipped a beat",
+  "heart clenched",
+  "time stood still",
+  "eyes widened",
+  "eyes darkened",
+  "knuckles whitened",
+  "sent a jolt",
+  "a jolt of electricity",
+  "shivers down her spine",
+  "shivers down his spine",
+  "the weight of the moment",
+  "the weight of his words",
+  "the weight of her words",
+  "a beat of silence",
+  "a beat passed",
+  "palpable",
+  "she said softly",
+  "he said softly",
+  "voice barely above a whisper",
+  "barely above a whisper",
+  "couldn't shake the feeling",
+  "couldnt shake the feeling",
+  "little did she know",
+  "little did he know",
+  "a testament to",
+  "tapestry of",
+  "symphony of",
+  "dance of",
+  "against her ribs",
+  "against his ribs",
+  "thread of destiny",
+  "fates intertwined",
+];
+
+/** Count dialogue tags carrying an adverb: "said softly", "asked nervously"… */
+function countDialogueAdverbTags(text: string): number {
+  const matches = text.match(
+    /\b(said|asked|replied|shouted|whispered|murmured|breathed|offered)\s+\w+ly\b/gi,
+  );
+  return matches ? matches.length : 0;
+}
+
+/**
+ * Fiction/novel-tuned heuristics. Reuses the general statistical base
+ * (sentence rhythm, diversity…) but scores stock fiction tells instead of
+ * essay clichés and adds fiction-specific density metrics.
+ */
+export function computeFictionHeuristics(text: string): HeuristicResult {
+  const base = computeHeuristics(text);
+  const trimmed = text.trim();
+  const perK = 1000 / Math.max(trimmed.length, 1);
+
+  let fictionPhraseCount = 0;
+  const fictionPhrasesFound: string[] = [];
+  for (const phrase of FICTION_AI_PHRASES) {
+    const matches = trimmed.match(new RegExp(escapeRegExp(phrase), "gi"));
+    if (matches && matches.length > 0) {
+      fictionPhraseCount += matches.length;
+      fictionPhrasesFound.push(phrase);
+    }
+  }
+
+  const emDashDensity =
+    Math.round(((trimmed.match(/[—–]/g) ?? []).length * perK) * 10) / 10;
+  const dialogueAdverbTags = countDialogueAdverbTags(trimmed);
+  const participialDensity =
+    Math.round(
+      ((trimmed.match(/,\s+\b\w+ing\b/gi) ?? []).length * perK) * 10,
+    ) / 10;
+
+  // Fiction-tuned composite: stock phrases and formulaic dialogue weigh most;
+  // rhythm variance still counts (LLM scenes are rhythmically even).
+  let score = 50;
+  score -= base.burstiness * 0.2;
+  score -= base.punctuationDiversity * 0.1;
+  score += Math.min(fictionPhraseCount * 5, 35);
+  score += Math.min(dialogueAdverbTags * 4, 16);
+  score += emDashDensity >= 6 ? 8 : 0;
+  score += participialDensity >= 4 ? 8 : 0;
+  score += base.lexicalDiversity < 55 ? 5 : 0;
+
+  return {
+    ...base,
+    aiPhraseCount: fictionPhraseCount,
+    aiPhrasesFound: fictionPhrasesFound,
+    heuristicScore: clamp(Math.round(score), 0, 100),
+    fiction: { emDashDensity, dialogueAdverbTags, participialDensity },
+  };
 }
