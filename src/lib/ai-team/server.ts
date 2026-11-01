@@ -654,6 +654,14 @@ export async function createTasksFromDelegations(
 // Budget-exhaustion self-healing (continuation tasks)
 // ---------------------------------------------------------------------------
 
+/** Marker prefix identifying auto-continuation tasks (telemetry + exemption
+ *  from write-verification: they are finish-the-answer jobs, not write jobs). */
+export const CONTINUATION_TITLE_PREFIX = "⟳ 自动续作：";
+
+function isContinuationTask(title: string): boolean {
+  return title.startsWith(CONTINUATION_TITLE_PREFIX);
+}
+
 /**
  * The chat turn ended mid-tooling: the round budget ran out while the model
  * was still emitting tool blocks. Instead of dead-ending with a canned
@@ -691,7 +699,7 @@ export async function createContinuationTask(
     ].join("\n");
     const task = await db.teamTask.create({
       data: {
-        title: "⟳ 自动续作：完成被截断的回复",
+        title: `${CONTINUATION_TITLE_PREFIX}完成被截断的回复`,
         description,
         sessionKey,
         assigneeId: agent.id,
@@ -968,6 +976,7 @@ export async function runTask(taskId: string): Promise<void> {
       result !== null &&
       result.length > 0 &&
       writes.length === 0 &&
+      !isContinuationTask(task.title) &&
       (isNovelWriteTask(task) || claimsNovelCompletion(result))
     ) {
       await addTaskLog(taskId, "No database write detected — requesting persistence repair…", 60);
@@ -991,9 +1000,15 @@ export async function runTask(taskId: string): Promise<void> {
       }
       writes = [...writes, ...repair.writes];
       if (writes.length === 0) {
-        throw new Error(
-          '任务答复声称完成，但小说库中没有任何成功写入 (claimed completion, but zero write actions reached the database).',
-        );
+        // The model's explicit NO_WRITE_NEEDED is trustworthy for tasks that
+        // never intended writes (read-and-report jobs legitimately end with
+        // library status claims like “已完成12章”); write-intent tasks must
+        // still produce receipts.
+        if (!(/^NO_WRITE_NEEDED$/i.test(repairedClean.trim()) && !isNovelWriteTask(task))) {
+          throw new Error(
+            '任务答复声称完成，但小说库中没有任何成功写入 (claimed completion, but zero write actions reached the database).',
+          );
+        }
       }
     }
 
@@ -1087,31 +1102,53 @@ export async function runTask(taskId: string): Promise<void> {
     // A failed task must never just vanish: forward a failure report to the
     // same conversation that would have received the success report, and
     // wake the leader so it can retry / re-delegate / inform the user.
+    // Self-continuations report to their own conversation instead (the user
+    // was promised the follow-up there); a leader wake-up on a failed
+    // self-continuation would just duplicate the answer the leader was
+    // already trying to produce.
     try {
       const leader = await getLeader();
-      const reportAgentId = task.creatorIsUser ? leader?.id ?? null : task.creatorId;
-      if (reportAgentId) {
-        const reportConversation = await getOrCreateConversation(reportAgentId, task.sessionKey);
-        if (reportConversation) {
+      const selfContinuation = task.creatorId === task.assigneeId;
+      if (selfContinuation) {
+        const ownConversation = await getOrCreateConversation(task.assigneeId, task.sessionKey);
+        if (ownConversation) {
           await db.teamMessage.create({
             data: {
-              conversationId: reportConversation.id,
-              role: "system",
-              content: `❌ Task failed — ${task.assignee.name}: "${task.title}"\nReason: ${message}`,
+              conversationId: ownConversation.id,
+              role: "assistant",
+              content: `⚠️ 自动续作执行失败：${message}\n任务记录保留在任务列表中；直接告诉我需要什么，我会重新处理。`,
             },
           });
           await db.teamConversation.update({
-            where: { id: reportConversation.id },
+            where: { id: ownConversation.id },
             data: { updatedAt: new Date() },
           });
         }
-        if (leader && reportAgentId === leader.id && task.autoDepth < MAX_AUTO_DEPTH) {
-          await runLeaderFollowUp(
-            task.sessionKey,
-            `❌ Task "${task.title}" FAILED. Reason: ${message}\n` +
-              "Decide NOW: retry the same task once, delegate a smaller version of it, or close with a clear status for the user plus a recommended next step.",
-            task.autoDepth + 1,
-          );
+      } else {
+        const reportAgentId = task.creatorIsUser ? leader?.id ?? null : task.creatorId;
+        if (reportAgentId) {
+          const reportConversation = await getOrCreateConversation(reportAgentId, task.sessionKey);
+          if (reportConversation) {
+            await db.teamMessage.create({
+              data: {
+                conversationId: reportConversation.id,
+                role: "system",
+                content: `❌ Task failed — ${task.assignee.name}: "${task.title}"\nReason: ${message}`,
+              },
+            });
+            await db.teamConversation.update({
+              where: { id: reportConversation.id },
+              data: { updatedAt: new Date() },
+            });
+          }
+          if (leader && reportAgentId === leader.id && task.autoDepth < MAX_AUTO_DEPTH) {
+            await runLeaderFollowUp(
+              task.sessionKey,
+              `❌ Task "${task.title}" FAILED. Reason: ${message}\n` +
+                "Decide NOW: retry the same task once, delegate a smaller version of it, or close with a clear status for the user plus a recommended next step.",
+              task.autoDepth + 1,
+            );
+          }
         }
       }
     } catch (reportError) {
