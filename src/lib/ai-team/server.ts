@@ -23,12 +23,15 @@ import {
   buildMemberChatPrompt,
   buildTaskExecutionMessages,
 } from "@/lib/ai-team/prompts";
-import { buildNovelToolPrompt } from "@/lib/ai-team/novel-tools";
 import {
+  buildCompactLibraryTruth,
+  buildNovelToolPrompt,
+  buildUnwrittenWorkSummary,
   collectWriteEvidence,
   executeNovelToolCalls,
   executeNovelWrites,
   formatToolResults,
+  hasUnwrittenChapters,
   parseNovelToolCalls,
   parseNovelWriteBlocks,
 } from "@/lib/ai-team/novel-tools";
@@ -422,11 +425,16 @@ export async function glmAgentTurn(
   // truncated mid-sentence fragment — replace it with a proper closing.
   // The same applies when the model was STILL emitting tool blocks at the
   // round budget: its leftover text is a preamble, not a deliverable.
+  // Write receipts are embedded so the reader (leader's follow-up turn)
+  // can see WHAT actually landed in the database instead of re-delegating
+  // blindly.
+  const writeReceipts =
+    writes.length > 0 ? `；已写入库：${writes.slice(0, 3).join(" | ")}` : "";
   const text =
     clean.length >= 40 && !lastRoundHadTools
       ? clean
       : toolLog
-        ? "本轮工具操作已执行（见任务日志/工具记录）；回复被轮次预算截断，回复“继续”我会接着完成剩余部分。"
+        ? `本轮工具操作已执行（见任务日志/工具记录）${writeReceipts}；回复被轮次预算截断，回复“继续”我会接着完成剩余部分。`
         : clean.length > 0
           ? clean
           : "";
@@ -551,6 +559,98 @@ export function synthesizeAssignmentReply(tasks: TaskRow[]): string {
 }
 
 // ---------------------------------------------------------------------------
+// Completion-claim ground-truth verification
+// ---------------------------------------------------------------------------
+
+/** Is this text even ABOUT novel work? */
+const NOVEL_TOPIC_RE = /(章|小说|novel|大纲|伏笔|正文)/i;
+
+/** Past-tense completion claims (已完成 / 写完 / 完结 / completed …). */
+const COMPLETION_CLAIM_RE =
+  /((已|已经)(全部|基本)?(完成|写完|写入|保存|创作)|写完(了)?|完本|完结(了)?|已写好|全部(完结|写完|完成)|completed|finished writing|all chapters)/i;
+
+/** Suggestions that work remains (chain-death phrasing: "建议继续创作…"). */
+const REMAINING_WORK_RE =
+  /(建议继续|继续创作|还剩|尚未(创作|完成|写)|剩余章节|其余章节|待写|还没(有)?(写|完成)|接下来(还|要|应))/i;
+
+/** Does this text CLAIM (past tense) that novel content is done? */
+export function claimsNovelCompletion(text: string): boolean {
+  return NOVEL_TOPIC_RE.test(text) && COMPLETION_CLAIM_RE.test(text);
+}
+
+/**
+ * One bounded ground-truth round for a reply that claims novel completion
+ * (or suggests remaining work) while the turn produced no successful write
+ * and no delegation. The history of a long multi-chapter job fills up with
+ * "chapter N completed" reports and the model pattern-matches them into
+ * fabricated completions ("全部6章完成" while ch6 was never written) — the
+ * live database is the only authority that can break that loop.
+ *
+ * Returns the (possibly corrected) reply plus any delegations the
+ * corrective round emitted so the caller can create real tasks from them.
+ */
+export async function verifyCompletionClaims(options: {
+  baseMessages: GlmMessage[];
+  draftReply: string;
+  label: string;
+}): Promise<{ text: string; delegations: Delegation[] }> {
+  const { baseMessages, draftReply, label } = options;
+  if (draftReply.trim().length === 0) {
+    return { text: draftReply, delegations: [] };
+  }
+  const suspicious =
+    claimsNovelCompletion(draftReply) || REMAINING_WORK_RE.test(draftReply);
+  if (!suspicious) return { text: draftReply, delegations: [] };
+  // Everything already written → completion claims are credible; skip.
+  if (!(await hasUnwrittenChapters())) return { text: draftReply, delegations: [] };
+
+  const groundTruth = await buildCompactLibraryTruth();
+  const instruction = [
+    "🔍 FACT-CHECK REQUIRED — your reply above is under verification.",
+    "GROUND TRUTH from the novel database RIGHT NOW (authoritative; it overrules anything in the conversation history, including 📦 task reports, whenever they disagree):",
+    groundTruth,
+    "",
+    "Rules for your corrected reply:",
+    "- Claim a chapter/novel 完成 ONLY if the ground truth above shows it written.",
+    "- NEVER invent or sum word counts; NEVER summarize chapters that no real report covers.",
+    "- If unwritten chapters remain and the user expects the job to continue: state the true status in one line, then delegate the NEXT single chapter with the team-delegate block now.",
+    "- Plain text and/or the team-delegate block only — NO novel-tool/novel-write blocks in this reply.",
+    "- If your reply above was already fully accurate, restate it (possibly trimmed).",
+  ].join("\n");
+  const raw = await glmText(
+    [
+      ...baseMessages,
+      { role: "assistant", content: draftReply },
+      { role: "user", content: instruction },
+    ],
+    label,
+    25_000,
+  );
+  if (raw === null) return { text: draftReply, delegations: [] };
+  // Strip any stray novel-tool/write blocks so nothing unexecuted leaks
+  // into the visible reply.
+  const stripped = parseNovelWriteBlocks(parseNovelToolCalls(raw).clean).clean;
+  const parsed = parseDelegations(stripped);
+  const text = parsed.clean.trim();
+  return {
+    text: text.length > 0 ? text : draftReply,
+    delegations: parsed.delegations,
+  };
+}
+
+/**
+ * Safety net under the verification round: when a reply still claims
+ * completion while unwritten chapters exist, append the factual library
+ * state so the user always sees the truth even if the model insists.
+ */
+export async function appendGroundTruthIfClaimed(text: string): Promise<string> {
+  if (!claimsNovelCompletion(text)) return text;
+  if (!(await hasUnwrittenChapters())) return text;
+  const groundTruth = await buildCompactLibraryTruth();
+  return `${text}\n\n📌 库内实况（系统核验，以此为准）：${groundTruth}`;
+}
+
+// ---------------------------------------------------------------------------
 // Task execution
 // ---------------------------------------------------------------------------
 
@@ -569,7 +669,10 @@ async function addTaskLog(taskId: string, message: string, progress: number): Pr
  */
 const NOVEL_WRITE_INTENT_RE =
   /(创作|撰写|写作|写入|保存|续写|转化|补全|完善|新建|创建|更新|write|save|persist|draft)/i;
-const NOVEL_CONTEXT_RE = /(章节|正文|大纲|伏笔|小说|novel|chapter|outline|foreshadow)/i;
+// `章` alone is matched too: titles like “《X》第四章《Y》” carry no exact
+// “章节/小说/novel” token yet are clearly novel work (this gap let a fake
+// completion through once).
+const NOVEL_CONTEXT_RE = /(章节?|正文|大纲|伏笔|小说|novel|chapter|outline|foreshadow)/i;
 
 function isNovelWriteTask(task: { title: string; description: string }): boolean {
   const text = `${task.title}\n${task.description}`;
@@ -661,15 +764,18 @@ export async function runTask(taskId: string): Promise<void> {
     let toolLog = turn.toolLog;
     let writes = turn.writes;
 
-    // Write-verification: a novel-persistence task whose reply CLAIMS
-    // success but performed zero database writes is the sneakiest failure
-    // mode ("已完成" with nothing saved). Give the assignee one repair
-    // round to actually persist; fail honestly if it still writes nothing.
+    // Write-verification: a task whose reply CLAIMS novel work is done but
+    // which performed zero database writes is the sneakiest failure mode
+    // ("已完成" with nothing saved). Trigger on task intent OR on a
+    // completion claim in the result itself (intent regexes can never cover
+    // every phrasing — a claim-based check always catches the lie). Give
+    // the assignee one repair round to actually persist; fail honestly if
+    // it still writes nothing.
     if (
       result !== null &&
       result.length > 0 &&
-      isNovelWriteTask(task) &&
-      writes.length === 0
+      writes.length === 0 &&
+      (isNovelWriteTask(task) || claimsNovelCompletion(result))
     ) {
       await addTaskLog(taskId, "No database write detected — requesting persistence repair…", 60);
       const repair = await glmAgentTurn(
@@ -832,8 +938,13 @@ export async function runTasksSequentially(taskIds: string[]): Promise<void> {
 // Leader auto-continue (task reports wake the leader)
 // ---------------------------------------------------------------------------
 
-/** Max leader follow-up rounds per user-initiated job (runaway guard). */
-const MAX_AUTO_DEPTH = 3;
+/**
+ * Max leader follow-up rounds per user-initiated job (runaway guard).
+ * A 6-chapter job needs one hop per chapter (report → delegate next) plus a
+ * closing turn and retry headroom — 3 starved real jobs mid-chain and the
+ * leader then hallucinated progress when the user kept nudging.
+ */
+const MAX_AUTO_DEPTH = 8;
 
 /**
  * After a task report lands in the LEADER's conversation, give the leader
@@ -873,6 +984,11 @@ export async function runLeaderFollowUp(
             .map((t) => `- [${t.status}] "${t.title}" → ${t.assignee.name}`)
             .join("\n")}`
         : "No other tasks are queued for this session.";
+    // Computed ground truth: which chapters STILL need writing. This is the
+    // chain's targeting data — reports in history can be stale or wrong
+    // (a faked "第一章已完成" once sent the chain to the wrong chapters); the
+    // database cannot lie.
+    const unwrittenWork = await buildUnwrittenWorkSummary();
     const instruction = [
       "⏰ AUTONOMOUS FOLLOW-UP — a task report just arrived (repeated below). The user is waiting on this job.",
       "",
@@ -880,9 +996,13 @@ export async function runLeaderFollowUp(
       "",
       openTasksNote,
       "",
+      "UNWRITTEN WORK right now (database truth — overrides ANY report or claim in history that contradicts it):",
+      unwrittenWork,
+      "",
       "Decide the next move NOW:",
-      "- If the overall job is DONE: write a short closing summary for the user — what was accomplished, what was persisted (chapters/word counts), and 1-2 suggested next steps.",
-      "- If it is NOT done: delegate the next concrete step with the team-delegate block (split big jobs chapter-by-chapter), or reply with the precise status plus your recommended next step.",
+      "- If UNWRITTEN WORK above is not empty and this job is about that novel: delegate the NEXT single unwritten chapter (split big jobs chapter-by-chapter) with the team-delegate block. Never delegate a chapter the unwritten-work list does not include.",
+      "- If the overall job is DONE (nothing unwritten for this novel): write a short closing summary for the user — what was accomplished, what was persisted (chapter numbers), and 1-2 suggested next steps.",
+      "- Otherwise reply with the precise status plus your recommended next step.",
       "Never reply with a bare acknowledgment like “Understood” or “好的”。",
     ].join("\n");
 
@@ -943,6 +1063,22 @@ export async function runLeaderFollowUp(
       }
     }
 
+    // Ground-truth verification: a follow-up that claims completion or
+    // merely "suggests" continuing without delegating is exactly how the
+    // auto-chain used to die (and how fabricated "已完成" replies were
+    // born). One corrective round — its delegations become real tasks.
+    if (delegations.length === 0 && clean.length > 0) {
+      const verified = await verifyCompletionClaims({
+        baseMessages: followUpMessages,
+        draftReply: clean,
+        label: "leader-followup-verify",
+      });
+      if (verified.delegations.length > 0) {
+        delegations = verified.delegations;
+      }
+      clean = verified.text;
+    }
+
     const tasks =
       delegations.length > 0
         ? await createTasksFromDelegations(delegations, leader, false, sessionKey, depth)
@@ -959,7 +1095,7 @@ export async function runLeaderFollowUp(
         },
       });
     }
-    const reply =
+    let reply =
       clean.length > 0
         ? clean
         : tasks.length > 0
@@ -967,6 +1103,9 @@ export async function runLeaderFollowUp(
           : turn.toolLog
             ? "我已核查库内数据（见上方工具记录），暂时没有需要补派的步骤；回复“继续”可让我复查进度并推进下一步。"
             : "任务报告已收到，但这轮我没能给出有效的下一步决策。回复“继续”让我重新评估并推进，或直接告诉我新的方向。";
+    if (tasks.length === 0 && clean.length > 0) {
+      reply = await appendGroundTruthIfClaimed(reply);
+    }
     await db.teamMessage.create({
       data: {
         conversationId: conversation.id,

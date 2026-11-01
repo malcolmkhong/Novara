@@ -108,7 +108,7 @@ export async function buildNovelLibraryContext(): Promise<string> {
     orderBy: { updatedAt: "desc" },
     take: 12,
     include: {
-      chapters: { select: { status: true } },
+      chapters: { select: { number: true, status: true, content: true } },
       _count: { select: { foreshadows: true } },
     },
   });
@@ -117,12 +117,87 @@ export async function buildNovelLibraryContext(): Promise<string> {
   }
   const lines = novels.map((novel) => {
     const written = novel.chapters.filter(
-      (ch) => ch.status === "drafted" || ch.status === "final",
+      (ch) =>
+        (ch.status === "drafted" || ch.status === "final") &&
+        (ch.content ?? "").length > 0,
     ).length;
     const outlined = novel.chapters.filter((ch) => ch.status === "outlined").length;
-    return `• [${novel.id}] 《${novel.title}》 ${novel.genre} · ${cap(novel.logline, 70)} · chapters: ${written} written/${outlined} outlined/${novel.chapters.length} total · foreshadows: ${novel._count.foreshadows}`;
+    // Per-chapter status map: defeats stale/fake "已完成" claims in chat
+    // history by keeping the WHICH-chapter ground truth in every prompt.
+    // Long novels fall back to counts only (prompt budget).
+    let chapterMap = "";
+    if (novel.chapters.length > 0 && novel.chapters.length <= 16) {
+      chapterMap = ` (${novel.chapters
+        .map(
+          (ch) =>
+            `#${ch.number}:${(ch.status === "drafted" || ch.status === "final") && (ch.content ?? "").length > 0 ? "written" : "unwritten"}`,
+        )
+        .join(",")})`;
+    }
+    return `• [${novel.id}] 《${novel.title}》 ${novel.genre} · ${cap(novel.logline, 70)} · chapters: ${written} written/${outlined} outlined/${novel.chapters.length} total${chapterMap} · foreshadows: ${novel._count.foreshadows}`;
   });
   return cap(lines.join("\n"), 1800);
+}
+
+/** True when ANY novel still has a chapter without persisted prose. */
+export async function hasUnwrittenChapters(): Promise<boolean> {
+  const count = await db.novelChapter.count({
+    where: {
+      OR: [{ status: "outlined" }, { content: null }, { content: "" }],
+    },
+  });
+  return count > 0;
+}
+
+/**
+ * Explicit "work that still needs writing" lines (or "(none)"). Used in the
+ * leader follow-up instruction so the chain targets the ACTUAL unwritten
+ * chapters instead of stale/incorrect beliefs from chat history.
+ */
+export async function buildUnwrittenWorkSummary(): Promise<string> {
+  const chapters = await db.novelChapter.findMany({
+    where: { OR: [{ status: "outlined" }, { content: null }, { content: "" }] },
+    include: { novel: { select: { title: true } } },
+    orderBy: [{ novelId: "asc" }, { number: "asc" }],
+    take: 12,
+  });
+  if (chapters.length === 0) return "(none — every chapter in the library is written)";
+  return chapters
+    .map(
+      (ch) =>
+        `《${ch.novel.title}》[novel ${ch.novelId}] 第${ch.number}章《${ch.title}》(chapter id: ${ch.id}) — goal: ${cap(ch.goal ?? "(no goal)", 50)}`,
+    )
+    .join("\n");
+}
+
+/**
+ * Ultra-compact per-novel truth lines (used by completion-claim fact-checks
+ * and system correction notes). Ground truth is the database itself — not
+ * model memory, not task reports.
+ */
+export async function buildCompactLibraryTruth(): Promise<string> {
+  const novels = await db.novel.findMany({
+    orderBy: { updatedAt: "desc" },
+    take: 8,
+    include: {
+      chapters: { select: { number: true, title: true, status: true, content: true } },
+    },
+  });
+  if (novels.length === 0) return "(novel library is empty)";
+  const lines = novels.map((novel) => {
+    const unwritten = novel.chapters.filter(
+      (ch) => ch.status === "outlined" || (ch.content ?? "").length === 0,
+    );
+    const written = novel.chapters.length - unwritten.length;
+    const unwrittenLabel = unwritten
+      .slice(0, 6)
+      .map((ch) => `第${ch.number}章《${ch.title}》未写`)
+      .join("、");
+    return `《${novel.title}》已写入 ${written}/${novel.chapters.length} 章${
+      unwrittenLabel ? `（${unwrittenLabel}）` : "（全部已写入）"
+    }`;
+  });
+  return cap(lines.join("；"), 700);
 }
 
 // ---------------------------------------------------------------------------

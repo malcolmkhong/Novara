@@ -4,6 +4,7 @@ import { z } from "zod";
 
 import { db } from "@/lib/db";
 import {
+  appendGroundTruthIfClaimed,
   buildHistoryMessages,
   createTasksFromDelegations,
   ensureSeed,
@@ -16,6 +17,7 @@ import {
   toAgentDto,
   toMessageDto,
   toTaskDto,
+  verifyCompletionClaims,
 } from "@/lib/ai-team/server";
 import { buildDelegationRepairMessages, buildLeaderSystemPrompt, buildMemberChatPrompt } from "@/lib/ai-team/prompts";
 import { buildNovelToolPrompt } from "@/lib/ai-team/novel-tools";
@@ -137,8 +139,9 @@ export async function POST(req: Request) {
       );
     }
 
-    const { clean, delegations: parsedDelegations } = parseDelegations(turn.text);
+    const { clean: initialClean, delegations: parsedDelegations } = parseDelegations(turn.text);
     let delegations = parsedDelegations;
+    let clean = initialClean;
 
     // Safety net: the agent announced work but skipped the protocol block,
     // so nothing would be tracked. One bounded repair round-trip converts
@@ -169,6 +172,23 @@ export async function POST(req: Request) {
       }
     }
 
+    // Ground-truth verification: a reply that claims novel completion (or
+    // merely suggests continuing) with zero writes/delegations this turn is
+    // the exact mechanism behind fabricated “已完成” answers. One bounded
+    // corrective round with the live library state; any delegations it
+    // emits become real tasks below.
+    if (delegations.length === 0 && clean.length > 0) {
+      const verified = await verifyCompletionClaims({
+        baseMessages: glmMessages,
+        draftReply: clean,
+        label: `${agent.key}-claim-verify`,
+      });
+      if (verified.delegations.length > 0) {
+        delegations = verified.delegations;
+      }
+      clean = verified.text;
+    }
+
     const userMessage = await db.teamMessage.create({
       data: { conversationId: conversation.id, role: "user", content },
     });
@@ -177,7 +197,7 @@ export async function POST(req: Request) {
       ? await createTasksFromDelegations(delegations, agent, false, sessionKey)
       : [];
 
-    const reply =
+    let reply =
       clean.length > 0
         ? clean
         : tasks.length > 0
@@ -185,6 +205,11 @@ export async function POST(req: Request) {
           : turn.toolLog
             ? "已根据库内数据完成查询/写入，结果见上方工具记录。需要我继续推进时说一声即可。"
             : "（这轮我没能生成有效回复——模型可能暂时不可用。请重发一次或换个说法，我会重新处理。）";
+    if (tasks.length === 0 && clean.length > 0) {
+      // Even after correction, make sure a lingering completion claim is
+      // labeled with the factual library state.
+      reply = await appendGroundTruthIfClaimed(reply);
+    }
 
     // Persist tool activity first (transparent, ordered before the reply).
     const replyTime = new Date();
