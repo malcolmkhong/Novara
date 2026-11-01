@@ -183,8 +183,8 @@ export async function POST(req: Request) {
         : tasks.length > 0
           ? synthesizeAssignmentReply(tasks)
           : turn.toolLog
-            ? "Done — the tool results above show what I read/wrote."
-            : "Understood — noted.";
+            ? "已根据库内数据完成查询/写入，结果见上方工具记录。需要我继续推进时说一声即可。"
+            : "（这轮我没能生成有效回复——模型可能暂时不可用。请重发一次或换个说法，我会重新处理。）";
 
     // Persist tool activity first (transparent, ordered before the reply).
     const replyTime = new Date();

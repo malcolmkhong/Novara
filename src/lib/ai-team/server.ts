@@ -71,31 +71,56 @@ function extractCompletionContent(completion: unknown): string | null {
   return typeof content === "string" ? content : null;
 }
 
-/** One GLM request. Returns reply text or null on ANY failure. Never throws. */
+/**
+ * Backoff schedule for rate-limited (HTTP 429) GLM calls. The multi-agent
+ * flow fires several GLM requests in a burst (chat turn → task rounds →
+ * report → leader follow-up), so the gateway throttles us; a 429 is
+ * transient and a short backoff almost always recovers the turn.
+ */
+const GLM_429_BACKOFF_MS = [1_200, 2_800] as const;
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+function isRateLimitError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes("429") || message.toLowerCase().includes("too many requests");
+}
+
+/**
+ * One GLM request (with 429-aware retry). Returns reply text or null on ANY
+ * failure. Never throws.
+ */
 export async function glmText(
   messages: GlmMessage[],
   label: string,
   timeoutMs: number = GLM_TIMEOUT_MS,
 ): Promise<string | null> {
-  try {
-    const zai = await ZAI.create();
-    const completion: unknown = await withTimeout(
-      zai.chat.completions.create({
-        messages: messages.map((message) => ({
-          ...message,
-          // System prompts now carry persona + team/novel-tool protocol +
-          // library snapshot, so they get the same budget as user turns.
-          content: capForGlm(message.content, message.role === "system" ? 6500 : 6000),
-        })),
-        thinking: { type: "disabled" },
-      }),
-      timeoutMs,
-      `[team/${label}]`,
-    );
-    return extractCompletionContent(completion);
-  } catch (error) {
-    console.error(`[team/${label}] GLM request failed:`, error);
-    return null;
+  for (let attempt = 0; ; attempt++) {
+    try {
+      const zai = await ZAI.create();
+      const completion: unknown = await withTimeout(
+        zai.chat.completions.create({
+          messages: messages.map((message) => ({
+            ...message,
+            // System prompts now carry persona + team/novel-tool protocol +
+            // library snapshot, so they get the same budget as user turns.
+            content: capForGlm(message.content, message.role === "system" ? 6500 : 6000),
+          })),
+          thinking: { type: "disabled" },
+        }),
+        timeoutMs,
+        `[team/${label}]`,
+      );
+      return extractCompletionContent(completion);
+    } catch (error) {
+      console.error(`[team/${label}] GLM request failed:`, error);
+      // Retry ONLY transient rate limits; timeouts and other errors fail
+      // immediately so request budgets stay bounded.
+      if (attempt < GLM_429_BACKOFF_MS.length && isRateLimitError(error)) {
+        await sleep(GLM_429_BACKOFF_MS[attempt]);
+        continue;
+      }
+      return null;
+    }
   }
 }
 
@@ -325,6 +350,8 @@ export async function glmAgentTurn(
   let toolLog: string | null = null;
   let current: GlmMessage[] = messages;
   let lastRaw = "";
+  let glmDied = false;
+  let lastRoundHadTools = false;
 
   const cleanAll = (raw: string): string => {
     // Strip JSON tool blocks first, then plain-text write blocks.
@@ -337,7 +364,10 @@ export async function glmAgentTurn(
       label,
       round === 0 ? timeoutMs : TOOL_FOLLOWUP_TIMEOUT_MS,
     );
-    if (raw === null) break;
+    if (raw === null) {
+      glmDied = true;
+      break;
+    }
     lastRaw = raw;
 
     const toolParsed = parseNovelToolCalls(raw);
@@ -346,6 +376,7 @@ export async function glmAgentTurn(
       0,
       MAX_TOOL_ROUNDS * 3,
     );
+    lastRoundHadTools = calls.length > 0;
     if (calls.length === 0) {
       // No usable blocks — return the text with any stray fences stripped
       // so protocol fragments never leak into the visible reply.
@@ -371,15 +402,25 @@ export async function glmAgentTurn(
     ];
   }
 
-  // Loop exhausted (or GLM died mid-loop) — strip any trailing tool blocks.
+  // GLM died mid-loop (rate limit / timeout): never recycle the stale
+  // partial text (e.g. a “我将…首先让我读取…” preamble) as the final
+  // answer — report failure so tasks fail honestly and the leader
+  // follow-up can recover the chain.
+  if (glmDied) {
+    return { text: null, toolLog };
+  }
+
+  // Loop exhausted while GLM was alive — strip any trailing tool blocks.
   const clean = cleanAll(lastRaw);
   // A very short leftover after writes (e.g. "现在创建第二章：") is a
   // truncated mid-sentence fragment — replace it with a proper closing.
+  // The same applies when the model was STILL emitting tool blocks at the
+  // round budget: its leftover text is a preamble, not a deliverable.
   const text =
-    clean.length >= 40
+    clean.length >= 40 && !lastRoundHadTools
       ? clean
       : toolLog
-        ? "Done — see the tool results above."
+        ? "本轮工具操作已执行（见任务日志/工具记录）；回复被轮次预算截断，回复“继续”我会接着完成剩余部分。"
         : clean.length > 0
           ? clean
           : "";
@@ -493,10 +534,12 @@ export async function createTasksFromDelegations(
 
 /**
  * Meaningful visible text for a reply whose content was ONLY a delegate
- * block (clean text empty). Replaces the useless "Understood — noted.".
+ * block (clean text empty). Never returns a bare acknowledgment.
  */
 export function synthesizeAssignmentReply(tasks: TaskRow[]): string {
-  if (tasks.length === 0) return "Understood — noted.";
+  if (tasks.length === 0) {
+    return "已记录你的消息，但这轮没有可执行的新任务。告诉我下一步方向即可。";
+  }
   const lines = tasks.map((task) => `• ${task.assignee.name}：${task.title}`);
   return `已安排执行：\n${lines.join("\n")}\n\n进度可在任务列表实时查看，完成后我会汇报结果并推进下一步。`;
 }
@@ -664,14 +707,51 @@ export async function runTask(taskId: string): Promise<void> {
     const message = error instanceof Error ? error.message : "Unknown error.";
     await setTask({ status: "failed", error: message });
     await addTaskLog(taskId, `Task failed: ${message}`, 100);
+
+    // A failed task must never just vanish: forward a failure report to the
+    // same conversation that would have received the success report, and
+    // wake the leader so it can retry / re-delegate / inform the user.
+    try {
+      const leader = await getLeader();
+      const reportAgentId = task.creatorIsUser ? leader?.id ?? null : task.creatorId;
+      if (reportAgentId) {
+        const reportConversation = await getOrCreateConversation(reportAgentId, task.sessionKey);
+        if (reportConversation) {
+          await db.teamMessage.create({
+            data: {
+              conversationId: reportConversation.id,
+              role: "system",
+              content: `❌ Task failed — ${task.assignee.name}: "${task.title}"\nReason: ${message}`,
+            },
+          });
+          await db.teamConversation.update({
+            where: { id: reportConversation.id },
+            data: { updatedAt: new Date() },
+          });
+        }
+        if (leader && reportAgentId === leader.id && task.autoDepth < MAX_AUTO_DEPTH) {
+          await runLeaderFollowUp(
+            task.sessionKey,
+            `❌ Task "${task.title}" FAILED. Reason: ${message}\n` +
+              "Decide NOW: retry the same task once, delegate a smaller version of it, or close with a clear status for the user plus a recommended next step.",
+            task.autoDepth + 1,
+          );
+        }
+      }
+    } catch (reportError) {
+      console.error("[team] failure report could not be delivered:", reportError);
+    }
   }
 }
 
 /** Run a batch of tasks sequentially (each GLM call has its own budget). */
 export async function runTasksSequentially(taskIds: string[]): Promise<void> {
-  for (const taskId of taskIds) {
+  for (let index = 0; index < taskIds.length; index++) {
+    // Small stagger between tasks: back-to-back GLM bursts trip the rate
+    // limiter and waste the whole chain.
+    if (index > 0) await sleep(900);
     try {
-      await runTask(taskId);
+      await runTask(taskIds[index]);
     } catch (error) {
       console.error("[team] background task run failed:", error);
     }
@@ -744,7 +824,24 @@ export async function runLeaderFollowUp(
       ],
       "leader-followup",
     );
-    if (turn.text === null) return;
+    if (turn.text === null) {
+      // Never die silently: the user just saw a task report land with no
+      // reaction. Leave a visible recovery hint instead.
+      await db.teamMessage.create({
+        data: {
+          conversationId: conversation.id,
+          role: "assistant",
+          content:
+            "⚠️ 我收到任务报告后尝试自动推进下一步，但模型暂时不可用（限流/超时），这次没能生成后续计划。" +
+            "任务进度已保存；回复“继续”我就会接着推进当前任务。",
+        },
+      });
+      await db.teamConversation.update({
+        where: { id: conversation.id },
+        data: { updatedAt: new Date() },
+      });
+      return;
+    }
 
     const { clean, delegations } = parseDelegations(turn.text);
     const tasks =
@@ -768,22 +865,22 @@ export async function runLeaderFollowUp(
         ? clean
         : tasks.length > 0
           ? synthesizeAssignmentReply(tasks)
-          : null;
-    if (reply !== null) {
-      await db.teamMessage.create({
-        data: {
-          conversationId: conversation.id,
-          role: "assistant",
-          content: reply,
-          taskIds: tasks.length > 0 ? JSON.stringify(tasks.map((task) => task.id)) : null,
-          createdAt: new Date(replyTime.getTime() + 2),
-        },
-      });
-      await db.teamConversation.update({
-        where: { id: conversation.id },
-        data: { updatedAt: new Date() },
-      });
-    }
+          : turn.toolLog
+            ? "我已核查库内数据（见上方工具记录），暂时没有需要补派的步骤；回复“继续”可让我复查进度并推进下一步。"
+            : "任务报告已收到，但这轮我没能给出有效的下一步决策。回复“继续”让我重新评估并推进，或直接告诉我新的方向。";
+    await db.teamMessage.create({
+      data: {
+        conversationId: conversation.id,
+        role: "assistant",
+        content: reply,
+        taskIds: tasks.length > 0 ? JSON.stringify(tasks.map((task) => task.id)) : null,
+        createdAt: new Date(replyTime.getTime() + 2),
+      },
+    });
+    await db.teamConversation.update({
+      where: { id: conversation.id },
+      data: { updatedAt: new Date() },
+    });
 
     if (tasks.length > 0) {
       await runTasksSequentially(tasks.map((task) => task.id));
