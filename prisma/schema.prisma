@@ -228,3 +228,33 @@ model TeamTaskLog {
 
   @@index([taskId, createdAt])
 }
+
+// ---------------------------------------------------------------------------
+// Turn telemetry — the observability layer of the self-healing loop.
+// One row per glmAgentTurn (chat turns, task executions, follow-ups),
+// classifying how the turn ended so problems (budget exhaustion, tool
+// param errors, model failures) can be counted, alerted on, and learned
+// from instead of only being visible as canned fallback texts.
+// ---------------------------------------------------------------------------
+
+model TeamTurnLog {
+  id         String   @id @default(cuid())
+  // Agent key when known ("leader", "writer"…); otherwise the glm label
+  // ("task", "leader-followup", "task-closeout"…).
+  agentKey   String
+  // glm label passed to glmAgentTurn.
+  label      String
+  // answered | tool_exhausted | model_error
+  outcome    String
+  rounds     Int      @default(1)
+  // JSON: [{round, action, ok, error}] — per-action outcomes.
+  toolCalls  String?
+  // JSON: string[] — corrections fired after this turn
+  // (delegation-repair / claim-verify / continuation / ground-truth-note).
+  correctionsFired String?
+  durationMs Int      @default(0)
+  createdAt  DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([agentKey, outcome])
+}

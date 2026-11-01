@@ -6,11 +6,13 @@ import { db } from "@/lib/db";
 import {
   appendGroundTruthIfClaimed,
   buildHistoryMessages,
+  createContinuationTask,
   createTasksFromDelegations,
   ensureSeed,
   getOrCreateConversation,
   glmAgentTurn,
   glmText,
+  noteTurnCorrections,
   parseDelegations,
   runTasksSequentially,
   synthesizeAssignmentReply,
@@ -19,6 +21,7 @@ import {
   toTaskDto,
   verifyCompletionClaims,
 } from "@/lib/ai-team/server";
+import type { TaskRow } from "@/lib/ai-team/server";
 import { buildDelegationRepairMessages, buildLeaderSystemPrompt, buildMemberChatPrompt } from "@/lib/ai-team/prompts";
 import { buildNovelToolPrompt } from "@/lib/ai-team/novel-tools";
 import type { ChatSendResponse } from "@/lib/ai-team/types";
@@ -142,6 +145,10 @@ export async function POST(req: Request) {
     const { clean: initialClean, delegations: parsedDelegations } = parseDelegations(turn.text);
     let delegations = parsedDelegations;
     let clean = initialClean;
+    const corrections: string[] = [];
+    // Repair/verify passes only make sense on turns that actually finished;
+    // an exhausted turn recovers through the continuation task instead.
+    const turnAnswered = turn.outcome === "answered";
 
     // Safety net: the agent announced work but skipped the protocol block,
     // so nothing would be tracked. One bounded repair round-trip converts
@@ -151,7 +158,7 @@ export async function POST(req: Request) {
     // clarifying question (“你想创作什么类型呢？我可以安排Sage…”) is a
     // conditional offer, not an assignment; auto-dispatching here would run
     // tasks the user has not confirmed yet.
-    if (delegations.length === 0 && !/[？?]/.test(clean)) {
+    if (turnAnswered && delegations.length === 0 && !/[？?]/.test(clean)) {
       const candidates = agent.isLeader
         ? await db.teamAgent.findMany({ where: { isLeader: false } })
         : [agent];
@@ -172,6 +179,7 @@ export async function POST(req: Request) {
           const repaired = parseDelegations(repairRaw);
           if (repaired.delegations.length > 0) {
             delegations = repaired.delegations;
+            corrections.push("delegation-repair");
           }
         }
       }
@@ -182,7 +190,7 @@ export async function POST(req: Request) {
     // the exact mechanism behind fabricated “已完成” answers. One bounded
     // corrective round with the live library state; any delegations it
     // emits become real tasks below.
-    if (delegations.length === 0 && clean.length > 0) {
+    if (turnAnswered && delegations.length === 0 && clean.length > 0) {
       const verified = await verifyCompletionClaims({
         baseMessages: glmMessages,
         draftReply: clean,
@@ -190,8 +198,18 @@ export async function POST(req: Request) {
       });
       if (verified.delegations.length > 0) {
         delegations = verified.delegations;
+        corrections.push("claim-verify");
       }
       clean = verified.text;
+    }
+
+    // Budget-exhaustion self-healing: the turn ended mid-tooling. Spawn ONE
+    // tracked continuation task assigned to the same agent so the job
+    // finishes on its own instead of asking the user to say “继续”.
+    let continuation: TaskRow | null = null;
+    if (delegations.length === 0 && turn.outcome === "tool_exhausted") {
+      continuation = await createContinuationTask(agent, sessionKey, turn, content);
+      if (continuation) corrections.push("continuation");
     }
 
     const userMessage = await db.teamMessage.create({
@@ -201,20 +219,36 @@ export async function POST(req: Request) {
     const tasks = delegations.length > 0
       ? await createTasksFromDelegations(delegations, agent, false, sessionKey)
       : [];
+    const allTaskIds = [
+      ...tasks.map((task) => task.id),
+      ...(continuation ? [continuation.id] : []),
+    ];
 
-    let reply =
-      clean.length > 0
-        ? clean
-        : tasks.length > 0
-          ? synthesizeAssignmentReply(tasks)
-          : turn.toolLog
-            ? "已根据库内数据完成查询/写入，结果见上方工具记录。需要我继续推进时说一声即可。"
-            : "（这轮我没能生成有效回复——模型可能暂时不可用。请重发一次或换个说法，我会重新处理。）";
-    if (tasks.length === 0 && clean.length > 0) {
-      // Even after correction, make sure a lingering completion claim is
-      // labeled with the factual library state.
-      reply = await appendGroundTruthIfClaimed(reply);
+    let reply: string;
+    if (continuation) {
+      const receipts =
+        turn.writes.length > 0
+          ? `（已写入库：${turn.writes.slice(0, 3).join(" | ")}）`
+          : "";
+      reply = `上一轮的工具操作已执行${receipts}，但轮次预算内没能给出最终答复。我已自动安排一次收尾执行来完成剩余部分，完成后结果会直接汇报到这里——不需要回复“继续”。`;
+    } else {
+      reply =
+        clean.length > 0
+          ? clean
+          : tasks.length > 0
+            ? synthesizeAssignmentReply(tasks)
+            : turn.toolLog
+              ? "已根据库内数据完成查询/写入，结果见上方工具记录。需要我继续推进时说一声即可。"
+              : "（这轮我没能生成有效回复——模型可能暂时不可用。请重发一次或换个说法，我会重新处理。）";
+      if (tasks.length === 0 && clean.length > 0) {
+        // Even after correction, make sure a lingering completion claim is
+        // labeled with the factual library state.
+        const beforeGroundTruth = reply;
+        reply = await appendGroundTruthIfClaimed(reply);
+        if (reply !== beforeGroundTruth) corrections.push("ground-truth-note");
+      }
     }
+    await noteTurnCorrections(turn.turnLogId, corrections);
 
     // Persist tool activity first (transparent, ordered before the reply).
     const replyTime = new Date();
@@ -234,7 +268,7 @@ export async function POST(req: Request) {
         conversationId: conversation.id,
         role: "assistant",
         content: reply,
-        taskIds: tasks.length > 0 ? JSON.stringify(tasks.map((task) => task.id)) : null,
+        taskIds: allTaskIds.length > 0 ? JSON.stringify(allTaskIds) : null,
         createdAt: new Date(replyTime.getTime() + 2),
       },
     });
@@ -243,10 +277,13 @@ export async function POST(req: Request) {
       data: { updatedAt: new Date() },
     });
 
-    const serializedTasks = tasks.map(toTaskDto);
-    if (serializedTasks.length > 0) {
+    const serializedTasks = [
+      ...tasks.map(toTaskDto),
+      ...(continuation ? [toTaskDto(continuation)] : []),
+    ];
+    if (allTaskIds.length > 0) {
       // Execute in the background so the POST returns well within budget.
-      after(() => runTasksSequentially(tasks.map((task) => task.id)));
+      after(() => runTasksSequentially(allTaskIds));
     }
 
     const payload: ChatSendResponse = {

@@ -330,6 +330,8 @@ export async function getOrCreateConversation(agentId: string, sessionKey: strin
 // Agent turn with novel-tool loop
 // ---------------------------------------------------------------------------
 
+export type AgentTurnOutcome = "answered" | "tool_exhausted" | "model_error";
+
 export interface AgentTurnResult {
   /** Final visible reply (novel-tool blocks stripped), or null on GLM failure. */
   text: string | null;
@@ -337,9 +339,71 @@ export interface AgentTurnResult {
   toolLog: string | null;
   /** Receipts of SUCCESSFUL novel-library writes performed during the turn. */
   writes: string[];
+  /** How the turn ended — drives downstream self-healing. */
+  outcome: AgentTurnOutcome;
+  /** GLM calls consumed by this turn (1..MAX_TOOL_ROUNDS). */
+  rounds: number;
+  /** Per-action results across all rounds (telemetry). */
+  toolCalls: { round: number; action: string; ok: boolean; error: string | null }[];
+  /** Formatted results of the FINAL tool round (feeds continuation). */
+  lastResults: string | null;
+  /** Conversation state after the final tool round — the continuation
+   *  entry point: appending one user message resumes exactly here. */
+  finalMessages: GlmMessage[];
+  durationMs: number;
+  /** TeamTurnLog row id (callers attach corrections to it). */
+  turnLogId: string | null;
 }
 
 const MAX_TOOL_ROUNDS = 3; // 1 initial call + up to 2 tool-execution rounds
+
+/** Plain length cap for telemetry strings (no GLM budget formatting). */
+function capText(text: string, max: number): string {
+  return text.length <= max ? text : `${text.slice(0, max)}…`;
+}
+
+/** Persist one telemetry row for an agent turn. Never throws. */
+async function logTurn(entry: {
+  agentKey: string;
+  label: string;
+  outcome: AgentTurnOutcome;
+  rounds: number;
+  toolCalls: { round: number; action: string; ok: boolean; error: string | null }[];
+  durationMs: number;
+}): Promise<string | null> {
+  try {
+    const row = await db.teamTurnLog.create({
+      data: {
+        agentKey: entry.agentKey,
+        label: entry.label,
+        outcome: entry.outcome,
+        rounds: entry.rounds,
+        toolCalls: entry.toolCalls.length > 0 ? JSON.stringify(entry.toolCalls.slice(0, 12)) : null,
+        durationMs: Math.min(entry.durationMs, 2_000_000_000),
+      },
+    });
+    return row.id;
+  } catch (error) {
+    console.error("[team] turn log failed:", error);
+    return null;
+  }
+}
+
+/** Attach post-turn corrections (repair/verify/continuation) to the log row. */
+export async function noteTurnCorrections(
+  turnLogId: string | null,
+  corrections: string[],
+): Promise<void> {
+  if (!turnLogId || corrections.length === 0) return;
+  try {
+    await db.teamTurnLog.update({
+      where: { id: turnLogId },
+      data: { correctionsFired: JSON.stringify(corrections.slice(0, 8)) },
+    });
+  } catch (error) {
+    console.error("[team] turn correction note failed:", error);
+  }
+}
 
 /**
  * One full agent turn with a bounded tool loop (JSON ```novel-tool actions
@@ -354,16 +418,46 @@ export async function glmAgentTurn(
   label: string,
   timeoutMs: number = GLM_TIMEOUT_MS,
 ): Promise<AgentTurnResult> {
+  const startedAt = Date.now();
   let toolLog: string | null = null;
   let current: GlmMessage[] = messages;
   let lastRaw = "";
   let glmDied = false;
   let lastRoundHadTools = false;
+  let lastResults: string | null = null;
+  let roundsUsed = 0;
   const writes: string[] = [];
+  const toolCalls: AgentTurnResult["toolCalls"] = [];
 
   const cleanAll = (raw: string): string => {
     // Strip JSON tool blocks first, then plain-text write blocks.
     return parseNovelWriteBlocks(parseNovelToolCalls(raw).clean).clean;
+  };
+
+  const finish = async (
+    outcome: AgentTurnOutcome,
+    text: string | null,
+  ): Promise<AgentTurnResult> => {
+    const turnLogId = await logTurn({
+      agentKey: label.split("-")[0] ?? label,
+      label,
+      outcome,
+      rounds: Math.max(roundsUsed, 1),
+      toolCalls,
+      durationMs: Date.now() - startedAt,
+    });
+    return {
+      text,
+      toolLog,
+      writes,
+      outcome,
+      rounds: Math.max(roundsUsed, 1),
+      toolCalls,
+      lastResults,
+      finalMessages: current,
+      durationMs: Date.now() - startedAt,
+      turnLogId,
+    };
   };
 
   for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
@@ -372,6 +466,7 @@ export async function glmAgentTurn(
       label,
       round === 0 ? timeoutMs : TOOL_FOLLOWUP_TIMEOUT_MS,
     );
+    roundsUsed = round + 1;
     if (raw === null) {
       glmDied = true;
       break;
@@ -388,15 +483,24 @@ export async function glmAgentTurn(
     if (calls.length === 0) {
       // No usable blocks — return the text with any stray fences stripped
       // so protocol fragments never leak into the visible reply.
-      return { text: cleanAll(raw), toolLog, writes };
+      return finish("answered", cleanAll(raw));
     }
 
     const results = [
       ...(await executeNovelToolCalls(toolParsed.calls)),
       ...(await executeNovelWrites(writeParsed.writes)),
     ];
+    for (const result of results) {
+      toolCalls.push({
+        round: round + 1,
+        action: result.action,
+        ok: result.ok,
+        error: result.ok ? null : capText(result.summary, 200),
+      });
+    }
     writes.push(...collectWriteEvidence(results));
     const roundLog = formatToolResults(results);
+    lastResults = roundLog;
     toolLog = toolLog === null
       ? roundLog
       : `${toolLog}\n${roundLog.split("\n").slice(1).join("\n")}`;
@@ -416,7 +520,7 @@ export async function glmAgentTurn(
   // answer — report failure so tasks fail honestly and the leader
   // follow-up can recover the chain.
   if (glmDied) {
-    return { text: null, toolLog, writes };
+    return finish("model_error", null);
   }
 
   // Loop exhausted while GLM was alive — strip any trailing tool blocks.
@@ -438,7 +542,7 @@ export async function glmAgentTurn(
         : clean.length > 0
           ? clean
           : "";
-  return { text: text.length > 0 ? text : null, toolLog, writes };
+  return finish("tool_exhausted", text.length > 0 ? text : null);
 }
 
 /** Recent history (oldest → newest) mapped into GLM messages. */
@@ -544,6 +648,65 @@ export async function createTasksFromDelegations(
     created.push(task);
   }
   return created;
+}
+
+// ---------------------------------------------------------------------------
+// Budget-exhaustion self-healing (continuation tasks)
+// ---------------------------------------------------------------------------
+
+/**
+ * The chat turn ended mid-tooling: the round budget ran out while the model
+ * was still emitting tool blocks. Instead of dead-ending with a canned
+ * “回复继续” message, spawn ONE tracked continuation task assigned to the
+ * SAME agent — task execution has its own full GLM budget and appends its
+ * result to the same conversation, so the job finishes without the user
+ * nudging. Bounded by construction: only the chat route spawns these, and
+ * task execution never spawns further continuations.
+ */
+export async function createContinuationTask(
+  agent: AgentRow,
+  sessionKey: string,
+  turn: AgentTurnResult,
+  userMessage: string,
+): Promise<TaskRow | null> {
+  try {
+    const receipts =
+      turn.writes.length > 0
+        ? `\nWrites already persisted (do NOT redo): ${turn.writes.slice(0, 5).join(" | ")}`
+        : "";
+    const description = [
+      "Your previous reply in the chat was interrupted by the tool-round budget while you were still working. Finish the job NOW and deliver the final answer to the user.",
+      "",
+      "The user's original message:",
+      capForGlm(userMessage, 1200),
+      "",
+      "Tool results already collected (authoritative — do NOT repeat these reads):",
+      turn.lastResults ? capForGlm(turn.lastResults, 3500) : "(no tool results recorded)",
+      receipts,
+      "",
+      "Rules:",
+      "- Complete what remains, then end with a clear final answer to the user (no tool blocks).",
+      "- If one decisive tool action is still missing, emit exactly one tool block for it, then finish in the follow-up round.",
+      "- Do not invent results: anything not confirmed by tool results or your own actions must be stated as unknown.",
+    ].join("\n");
+    const task = await db.teamTask.create({
+      data: {
+        title: "⟳ 自动续作：完成被截断的回复",
+        description,
+        sessionKey,
+        assigneeId: agent.id,
+        creatorId: agent.id,
+        creatorIsUser: false,
+        autoDepth: 0,
+      },
+      include: { assignee: true, creator: true, logs: true },
+    });
+    await addTaskLog(task.id, "Auto-continuation spawned — tool-round budget exhausted.", 5);
+    return task;
+  } catch (error) {
+    console.error("[team] continuation task creation failed:", error);
+    return null;
+  }
 }
 
 /**
@@ -760,10 +923,39 @@ export async function runTask(taskId: string): Promise<void> {
         : message,
     );
     const turn = await glmAgentTurn(execMessages, "task");
+    // Self-healing: the execution turn burned its tool-round budget while
+    // still working. ONE bounded closeout round (resuming from the exact
+    // tool-state conversation) finishes the deliverable instead of failing
+    // with a truncated reply. Task execution never spawns further
+    // continuations — this is the last extra round by construction.
+    let effectiveTurn = turn;
+    if (turn.outcome === "tool_exhausted") {
+      await addTaskLog(taskId, "工具轮次预算耗尽 — 自动追加一轮收尾执行…", 55);
+      const closeout = await glmAgentTurn(
+        [
+          ...turn.finalMessages,
+          {
+            role: "user",
+            content:
+              "⏱️ Your previous reply hit the tool-round budget while you were still working. " +
+              "The tool results above are collected and authoritative. Finish NOW: " +
+              "if the deliverable is complete, write the final completion report (NO tool blocks); " +
+              "if one decisive tool action is still missing, emit exactly ONE tool block for it.",
+          },
+        ],
+        "task-closeout",
+      );
+      effectiveTurn = {
+        ...closeout,
+        toolLog: mergeToolLogs(turn.toolLog, closeout.toolLog),
+        writes: [...turn.writes, ...closeout.writes],
+        rounds: turn.rounds + closeout.rounds,
+      };
+    }
     // Task results must never contain delegate blocks.
-    let result = turn.text === null ? null : parseDelegations(turn.text).clean;
-    let toolLog = turn.toolLog;
-    let writes = turn.writes;
+    let result = effectiveTurn.text === null ? null : parseDelegations(effectiveTurn.text).clean;
+    let toolLog = effectiveTurn.toolLog;
+    let writes = effectiveTurn.writes;
 
     // Write-verification: a task whose reply CLAIMS novel work is done but
     // which performed zero database writes is the sneakiest failure mode
@@ -851,8 +1043,15 @@ export async function runTask(taskId: string): Promise<void> {
 
     // Forward the report: to the creator, or to the leader when the user
     // assigned the task directly (keeps the leader in the loop).
+    // Self-continuations (creator === assignee) already append their result
+    // to that same conversation — a report would be pure duplication.
     const leader = await getLeader();
-    const reportAgentId = task.creatorIsUser ? leader?.id ?? null : task.creatorId;
+    const selfContinuation = task.creatorId === task.assigneeId;
+    const reportAgentId = selfContinuation
+      ? null
+      : task.creatorIsUser
+        ? leader?.id ?? null
+        : task.creatorId;
     if (reportAgentId) {
       const reportConversation = await getOrCreateConversation(reportAgentId, task.sessionKey);
       if (reportConversation) {
@@ -919,6 +1118,13 @@ export async function runTask(taskId: string): Promise<void> {
       console.error("[team] failure report could not be delivered:", reportError);
     }
   }
+}
+
+/** Merge two tool-log blocks (extra's header line is dropped). */
+function mergeToolLogs(base: string | null, extra: string | null): string | null {
+  if (!base) return extra;
+  if (!extra) return base;
+  return `${base}\n${extra.split("\n").slice(1).join("\n")}`;
 }
 
 /** Run a batch of tasks sequentially (each GLM call has its own budget). */

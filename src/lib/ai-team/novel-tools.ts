@@ -404,15 +404,19 @@ async function executeOne(call: NovelToolCall): Promise<NovelToolResult> {
       return { action: call.action, ok: true, summary: await buildNovelLibraryContext() };
 
     case "read_novel": {
+      const found = await resolveNovel(p);
+      if (!found) {
+        return fail(call.action, "Novel not found.", p, '{"action":"read_novel","params":{"novelId":"<id from snapshot>"}} or {"novelTitle":"<title>"}');
+      }
       const novel = await db.novel.findUnique({
-        where: { id: str(p.novelId) },
+        where: { id: found.id },
         include: {
           volumes: { orderBy: { index: "asc" } },
           chapters: { orderBy: { number: "asc" } },
           foreshadows: { orderBy: { plantedAt: "asc" } },
         },
       });
-      if (!novel) return fail(call.action, "Novel not found.");
+      if (!novel) return fail(call.action, "Novel not found.", p);
       const parts: string[] = [
         `《${novel.title}》 [${novel.id}] · ${novel.genre} · target ${novel.targetChapters} chapters`,
         `Logline: ${novel.logline}`,
@@ -442,10 +446,11 @@ async function executeOne(call: NovelToolCall): Promise<NovelToolResult> {
     case "read_chapter": {
       const chapter = await resolveChapter(p);
       if (!chapter) {
-        const got = Object.keys(p).length > 0 ? JSON.stringify(p).slice(0, 160) : "(no params)";
         return fail(
           call.action,
-          `Chapter not found with params ${got}. Pass {"chapterId":"<id>"} OR {"novelId":"<id>","number":<n>} (novel ids and per-chapter ids are in the library snapshot above; title-based lookup also works via {"novelTitle":"<title>","number":<n>}).`,
+          "Chapter not found.",
+          p,
+          '{"chapterId":"<id>"} | {"novelId":"<id>","number":<n>} | {"novelTitle":"<title>","number":<n>} (ids are in the library snapshot above)',
         );
       }
       const parts = [
@@ -463,11 +468,15 @@ async function executeOne(call: NovelToolCall): Promise<NovelToolResult> {
     }
 
     case "read_foreshadows": {
+      const found = await resolveNovel(p);
+      if (!found) {
+        return fail(call.action, "Novel not found.", p, '{"novelId":"<id>"} or {"novelTitle":"<title>"}');
+      }
       const novel = await db.novel.findUnique({
-        where: { id: str(p.novelId) },
+        where: { id: found.id },
         include: { foreshadows: { orderBy: { plantedAt: "asc" } } },
       });
-      if (!novel) return fail(call.action, "Novel not found.");
+      if (!novel) return fail(call.action, "Novel not found.", p);
       if (novel.foreshadows.length === 0) {
         return { action: call.action, ok: true, summary: "No foreshadows recorded." };
       }
@@ -502,12 +511,11 @@ async function executeOne(call: NovelToolCall): Promise<NovelToolResult> {
     }
 
     case "create_chapter": {
-      const novel = await db.novel.findUnique({
-        where: { id: str(p.novelId) },
-        include: { volumes: { orderBy: { index: "asc" } } },
-      });
-      if (!novel) return fail(call.action, "Novel not found.");
-      const number = int(p.number);
+      const novel = await resolveNovel(p, true);
+      if (!novel) {
+        return fail(call.action, "Novel not found.", p, '{"novelId":"<id>","number":<n>,"title":"<t>"} (novelTitle also accepted)');
+      }
+      const number = int(p.number ?? p.chapterNumber ?? p.num ?? p.no);
       if (number < 1 || number > 9999) return fail(call.action, "number must be 1-9999.");
       const title = str(p.title);
       if (!title) return fail(call.action, "title is required.");
@@ -562,8 +570,12 @@ async function executeOne(call: NovelToolCall): Promise<NovelToolResult> {
     }
 
     case "update_novel": {
-      const novel = await db.novel.findUnique({ where: { id: str(p.novelId) } });
-      if (!novel) return fail(call.action, "Novel not found.");
+      const found = await resolveNovel(p);
+      if (!found) {
+        return fail(call.action, "Novel not found.", p, '{"novelId":"<id>", ...fieldsToUpdate}');
+      }
+      const novel = await db.novel.findUnique({ where: { id: found.id } });
+      if (!novel) return fail(call.action, "Novel not found.", p);
       const data: Record<string, string> = {};
       const simple: [string, unknown][] = [
         ["title", p.title],
@@ -601,7 +613,9 @@ async function executeOne(call: NovelToolCall): Promise<NovelToolResult> {
 
     case "update_chapter_content": {
       const chapter = await resolveChapter(p);
-      if (!chapter) return fail(call.action, "Chapter not found (need chapterId, or novelId+number).");
+      if (!chapter) {
+        return fail(call.action, "Chapter not found.", p, '{"chapterId":"<id>","content":"<prose>"} | {"novelId":"<id>","number":<n>,"content":"<prose>"}');
+      }
       const content = typeof p.content === "string" ? p.content.trim() : "";
       if (!content) return fail(call.action, "content is required.");
       if (content.length > MAX_CONTENT_WRITE) {
@@ -624,7 +638,9 @@ async function executeOne(call: NovelToolCall): Promise<NovelToolResult> {
 
     case "update_chapter_outline": {
       const chapter = await resolveChapter(p);
-      if (!chapter) return fail(call.action, "Chapter not found (need chapterId, or novelId+number).");
+      if (!chapter) {
+        return fail(call.action, "Chapter not found.", p, '{"chapterId":"<id>", ...outlineFields} | {"novelId":"<id>","number":<n>, ...outlineFields}');
+      }
       const data: Record<string, string | undefined> = {};
       if (typeof p.goal === "string" && p.goal.trim()) data.goal = p.goal.trim().slice(0, 300);
       if (typeof p.timeAnchor === "string" && p.timeAnchor.trim()) data.timeAnchor = p.timeAnchor.trim().slice(0, 120);
@@ -652,8 +668,12 @@ async function executeOne(call: NovelToolCall): Promise<NovelToolResult> {
     }
 
     case "create_foreshadow": {
-      const novel = await db.novel.findUnique({ where: { id: str(p.novelId) } });
-      if (!novel) return fail(call.action, "Novel not found.");
+      const found = await resolveNovel(p);
+      if (!found) {
+        return fail(call.action, "Novel not found.", p, '{"novelId":"<id>","title":"<t>","description":"<d>","plantedAt":<n>} (novelTitle also accepted)');
+      }
+      const novel = await db.novel.findUnique({ where: { id: found.id } });
+      if (!novel) return fail(call.action, "Novel not found.", p);
       const title = str(p.title);
       const description = str(p.description);
       const plantedAt = int(p.plantedAt);
@@ -676,8 +696,12 @@ async function executeOne(call: NovelToolCall): Promise<NovelToolResult> {
     }
 
     case "update_foreshadow": {
-      const foreshadow = await db.foreshadow.findUnique({ where: { id: str(p.foreshadowId) } });
-      if (!foreshadow) return fail(call.action, "Foreshadow not found.");
+      const foreshadow = await db.foreshadow.findUnique({
+        where: { id: str(p.foreshadowId) || str(p.id) },
+      });
+      if (!foreshadow) {
+        return fail(call.action, "Foreshadow not found.", p, '{"foreshadowId":"<id from read_foreshadows>","status":"open|advanced|paid"}');
+      }
       const data: Record<string, number | string> = {};
       if (typeof p.status === "string") {
         if (!["open", "advanced", "paid"].includes(p.status)) {
@@ -755,8 +779,46 @@ export function collectWriteEvidence(results: NovelToolResult[]): string[] {
 // Param helpers
 // ---------------------------------------------------------------------------
 
-function fail(action: string, summary: string): NovelToolResult {
-  return { action, ok: false, summary };
+function fail(
+  action: string,
+  summary: string,
+  params?: Record<string, unknown>,
+  usage?: string,
+): NovelToolResult {
+  // Self-correction contract: every failure echoes WHAT it received and HOW
+  // to call the action correctly, so the model's next round can fix itself
+  // without guessing.
+  const received =
+    params && Object.keys(params).length > 0
+      ? ` Received: ${JSON.stringify(params).slice(0, 200)}.`
+      : "";
+  const hint = usage ? ` Usage: ${usage}` : "";
+  return { action, ok: false, summary: `${summary}${received}${hint}` };
+}
+
+/**
+ * Resolve a novel by explicit id (with common key aliases) or by title
+ * (exact match first, then a unique contains-match).
+ */
+async function resolveNovel(p: Record<string, unknown>, withVolumes = false) {
+  const include = withVolumes
+    ? ({ volumes: { orderBy: { index: "asc" } } } as const)
+    : undefined;
+  const novelId = str(p.novelId) || str(p.novel) || str(p.bookId);
+  if (novelId) {
+    return db.novel.findUnique({ where: { id: novelId }, include });
+  }
+  const novelTitle = str(p.novelTitle) || str(p.title) || str(p.bookTitle);
+  if (!novelTitle) return null;
+  const candidates = await db.novel.findMany({
+    where: { OR: [{ title: novelTitle }, { title: { contains: novelTitle } }] },
+    include,
+    take: 5,
+  });
+  return (
+    candidates.find((candidate) => candidate.title === novelTitle) ??
+    (candidates.length === 1 ? candidates[0] : null)
+  );
 }
 
 /**
