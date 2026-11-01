@@ -18,12 +18,14 @@ import type { Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
 import { capForGlm, extractJson, withTimeout } from "@/lib/ai-heuristics";
 import {
+  buildDelegationRepairMessages,
   buildLeaderSystemPrompt,
   buildMemberChatPrompt,
   buildTaskExecutionMessages,
 } from "@/lib/ai-team/prompts";
 import { buildNovelToolPrompt } from "@/lib/ai-team/novel-tools";
 import {
+  collectWriteEvidence,
   executeNovelToolCalls,
   executeNovelWrites,
   formatToolResults,
@@ -330,6 +332,8 @@ export interface AgentTurnResult {
   text: string | null;
   /** Formatted tool activity (also the data payload), null when no tools used. */
   toolLog: string | null;
+  /** Receipts of SUCCESSFUL novel-library writes performed during the turn. */
+  writes: string[];
 }
 
 const MAX_TOOL_ROUNDS = 3; // 1 initial call + up to 2 tool-execution rounds
@@ -352,6 +356,7 @@ export async function glmAgentTurn(
   let lastRaw = "";
   let glmDied = false;
   let lastRoundHadTools = false;
+  const writes: string[] = [];
 
   const cleanAll = (raw: string): string => {
     // Strip JSON tool blocks first, then plain-text write blocks.
@@ -380,13 +385,14 @@ export async function glmAgentTurn(
     if (calls.length === 0) {
       // No usable blocks — return the text with any stray fences stripped
       // so protocol fragments never leak into the visible reply.
-      return { text: cleanAll(raw), toolLog };
+      return { text: cleanAll(raw), toolLog, writes };
     }
 
     const results = [
       ...(await executeNovelToolCalls(toolParsed.calls)),
       ...(await executeNovelWrites(writeParsed.writes)),
     ];
+    writes.push(...collectWriteEvidence(results));
     const roundLog = formatToolResults(results);
     toolLog = toolLog === null
       ? roundLog
@@ -407,7 +413,7 @@ export async function glmAgentTurn(
   // answer — report failure so tasks fail honestly and the leader
   // follow-up can recover the chain.
   if (glmDied) {
-    return { text: null, toolLog };
+    return { text: null, toolLog, writes };
   }
 
   // Loop exhausted while GLM was alive — strip any trailing tool blocks.
@@ -424,7 +430,7 @@ export async function glmAgentTurn(
         : clean.length > 0
           ? clean
           : "";
-  return { text: text.length > 0 ? text : null, toolLog };
+  return { text: text.length > 0 ? text : null, toolLog, writes };
 }
 
 /** Recent history (oldest → newest) mapped into GLM messages. */
@@ -557,6 +563,29 @@ async function addTaskLog(taskId: string, message: string, progress: number): Pr
 }
 
 /**
+ * Does this task intend to PERSIST novel-library content? (Write intent
+ * verb + novel context — research/chat tasks like "查找最新小说" must not
+ * match.)
+ */
+const NOVEL_WRITE_INTENT_RE =
+  /(创作|撰写|写作|写入|保存|续写|转化|补全|完善|新建|创建|更新|write|save|persist|draft)/i;
+const NOVEL_CONTEXT_RE = /(章节|正文|大纲|伏笔|小说|novel|chapter|outline|foreshadow)/i;
+
+function isNovelWriteTask(task: { title: string; description: string }): boolean {
+  const text = `${task.title}\n${task.description}`;
+  return NOVEL_WRITE_INTENT_RE.test(text) && NOVEL_CONTEXT_RE.test(text);
+}
+
+/** Repair nudge when a write-task finished without any database write. */
+const WRITE_REPAIR_INSTRUCTION = [
+  "⚠️ DATABASE CHECK FAILED: your reply above claims the work is done, but this task executed ZERO successful write actions to the novel library.",
+  "Text that is not persisted is FAILED work. Now do ONE of the following:",
+  "1. Emit the correct novel-tool block(s)/novel-write block(s) to persist the content (use ids from the read results above), or",
+  "2. If the content was never actually produced, produce it now AND persist it, or",
+  "3. If persistence is genuinely not applicable to this task, reply with exactly: NO_WRITE_NEEDED",
+].join("\n");
+
+/**
  * Execute one task: atomic claim (prevents double runs from concurrent
  * pollers) → progress logs → GLM deliverable → persist result → append the
  * exchange to the assignee's conversation → forward a report to the
@@ -615,26 +644,63 @@ export async function runTask(taskId: string): Promise<void> {
 
     // Task executors get the same novel-library read/write powers as chats.
     const novelToolPrompt = await buildNovelToolPrompt();
-    const turn = await glmAgentTurn(
-      buildTaskExecutionMessages(
-        task.assignee,
-        task.creatorIsUser ? "the user" : task.creator.name,
-        task.title,
-        task.description,
-        recentChat,
-      ).map((message) =>
-        message.role === "system"
-          ? { ...message, content: `${message.content}\n\n${novelToolPrompt}` }
-          : message,
-      ),
-      "task",
+    const execMessages = buildTaskExecutionMessages(
+      task.assignee,
+      task.creatorIsUser ? "the user" : task.creator.name,
+      task.title,
+      task.description,
+      recentChat,
+    ).map((message) =>
+      message.role === "system"
+        ? { ...message, content: `${message.content}\n\n${novelToolPrompt}` }
+        : message,
     );
+    const turn = await glmAgentTurn(execMessages, "task");
     // Task results must never contain delegate blocks.
-    const result = turn.text === null ? null : parseDelegations(turn.text).clean;
+    let result = turn.text === null ? null : parseDelegations(turn.text).clean;
+    let toolLog = turn.toolLog;
+    let writes = turn.writes;
+
+    // Write-verification: a novel-persistence task whose reply CLAIMS
+    // success but performed zero database writes is the sneakiest failure
+    // mode ("已完成" with nothing saved). Give the assignee one repair
+    // round to actually persist; fail honestly if it still writes nothing.
+    if (
+      result !== null &&
+      result.length > 0 &&
+      isNovelWriteTask(task) &&
+      writes.length === 0
+    ) {
+      await addTaskLog(taskId, "No database write detected — requesting persistence repair…", 60);
+      const repair = await glmAgentTurn(
+        [
+          ...execMessages,
+          { role: "assistant", content: turn.text ?? "" },
+          { role: "user", content: WRITE_REPAIR_INSTRUCTION },
+        ],
+        "task-write-repair",
+      );
+      const repairedClean =
+        repair.text === null ? "" : parseDelegations(repair.text).clean;
+      if (!/^NO_WRITE_NEEDED$/i.test(repairedClean.trim())) {
+        if (repairedClean.length > 0) result = repairedClean;
+      }
+      if (repair.toolLog) {
+        toolLog = toolLog
+          ? `${toolLog}\n${repair.toolLog.split("\n").slice(1).join("\n")}`
+          : repair.toolLog;
+      }
+      writes = [...writes, ...repair.writes];
+      if (writes.length === 0) {
+        throw new Error(
+          '任务答复声称完成，但小说库中没有任何成功写入 (claimed completion, but zero write actions reached the database).',
+        );
+      }
+    }
+
     if (result === null || result.length === 0) {
       throw new Error("GLM did not return a usable result in time.");
     }
-    const toolLog = turn.toolLog;
 
     await setTask({ progress: 90 });
     await addTaskLog(taskId, "Finalizing result…", 90);
@@ -684,11 +750,15 @@ export async function runTask(taskId: string): Promise<void> {
       const reportConversation = await getOrCreateConversation(reportAgentId, task.sessionKey);
       if (reportConversation) {
         const capped = result.length > 1500 ? `${result.slice(0, 1500)} …(truncated)` : result;
+        const evidence =
+          writes.length > 0
+            ? `\n\n✍️ 写入凭证: ${writes.slice(0, 3).join(" | ")}`
+            : "";
         await db.teamMessage.create({
           data: {
             conversationId: reportConversation.id,
             role: "system",
-            content: `📦 Task report — ${task.assignee.name} completed "${task.title}":\n${capped}`,
+            content: `📦 Task report — ${task.assignee.name} completed "${task.title}":\n${capped}${evidence}`,
           },
         });
         await db.teamConversation.update({
@@ -816,14 +886,12 @@ export async function runLeaderFollowUp(
       "Never reply with a bare acknowledgment like “Understood” or “好的”。",
     ].join("\n");
 
-    const turn = await glmAgentTurn(
-      [
-        { role: "system", content: systemPrompt },
-        ...history,
-        { role: "user", content: instruction },
-      ],
-      "leader-followup",
-    );
+    const followUpMessages: GlmMessage[] = [
+      { role: "system", content: systemPrompt },
+      ...history,
+      { role: "user", content: instruction },
+    ];
+    const turn = await glmAgentTurn(followUpMessages, "leader-followup");
     if (turn.text === null) {
       // Never die silently: the user just saw a task report land with no
       // reaction. Leave a visible recovery hint instead.
@@ -843,7 +911,38 @@ export async function runLeaderFollowUp(
       return;
     }
 
-    const { clean, delegations } = parseDelegations(turn.text);
+    const firstParsed = parseDelegations(turn.text);
+    let clean = firstParsed.clean;
+    let delegations = firstParsed.delegations;
+
+    // Repair pass (same as the chat route): the follow-up announced work
+    // ("我会重新安排Sage…") but skipped the protocol block, so nothing
+    // would be tracked. One bounded round converts the announcement into
+    // real tasks.
+    if (delegations.length === 0) {
+      const mentioned = members.filter((member) =>
+        clean.toLowerCase().includes(member.name.toLowerCase()),
+      );
+      if (mentioned.length > 0) {
+        const repairRaw = await glmText(
+          [
+            ...followUpMessages,
+            { role: "assistant", content: turn.text },
+            ...buildDelegationRepairMessages(mentioned.map((member) => member.name)),
+          ],
+          "leader-followup-repair",
+          25_000,
+        );
+        if (repairRaw !== null && !/^NO_BLOCK$/i.test(repairRaw.trim())) {
+          const repaired = parseDelegations(repairRaw);
+          if (repaired.delegations.length > 0) {
+            delegations = repaired.delegations;
+            clean = repaired.clean.length > 0 ? repaired.clean : clean;
+          }
+        }
+      }
+    }
+
     const tasks =
       delegations.length > 0
         ? await createTasksFromDelegations(delegations, leader, false, sessionKey, depth)

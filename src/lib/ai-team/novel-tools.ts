@@ -641,6 +641,36 @@ export function formatToolResults(results: NovelToolResult[]): string {
 }
 
 // ---------------------------------------------------------------------------
+// Write evidence
+// ---------------------------------------------------------------------------
+
+/** Tool actions that mutate the novel library (persistence receipts). */
+const WRITE_TOOL_ACTIONS: ReadonlySet<string> = new Set([
+  "novel-write",
+  "create_novel",
+  "create_chapter",
+  "update_novel",
+  "update_chapter_content",
+  "update_chapter_outline",
+  "create_foreshadow",
+  "update_foreshadow",
+]);
+
+export function isWriteAction(action: string): boolean {
+  return WRITE_TOOL_ACTIONS.has(action);
+}
+
+/**
+ * Human-readable receipts of SUCCESSFUL database writes — the ground truth
+ * behind any "已完成" claim (chapter ids, char counts, targets).
+ */
+export function collectWriteEvidence(results: NovelToolResult[]): string[] {
+  return results
+    .filter((result) => result.ok && isWriteAction(result.action))
+    .map((result) => `${result.action} → ${result.summary}`);
+}
+
+// ---------------------------------------------------------------------------
 // Param helpers
 // ---------------------------------------------------------------------------
 
