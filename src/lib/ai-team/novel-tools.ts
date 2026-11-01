@@ -38,7 +38,7 @@ const MAX_CONTENT_WRITE = 20_000;
 const ACTION_CATALOG = [
   "- list_novels {}",
   "- read_novel {novelId}",
-  "- read_chapter {chapterId} or {novelId, number}",
+  "- read_chapter {chapterId} or {novelId, number} or {novelTitle, number}",
   "- read_foreshadows {novelId}",
   "- create_novel {title, genre, logline, targetChapters?}",
   "- create_chapter {novelId, number, title, goal?, timeAnchor?, endHook?, content?}  // optional content creates it already drafted",
@@ -72,7 +72,7 @@ export async function buildNovelToolPrompt(options?: {
       "```novel-tool",
       '{"actions":[{"action":"read_novel","params":{"novelId":"<id>"}}]}',
       "```",
-      "Available actions: list_novels, read_novel {novelId}, read_chapter {chapterId | novelId+number}, read_foreshadows {novelId}.",
+      "Available actions: list_novels, read_novel {novelId}, read_chapter {chapterId | novelId+number | novelTitle+number}, read_foreshadows {novelId}.",
       "You have NO write access: DELEGATE all writes (chapter prose, outlines, foreshadows) to members via the team-delegate block, and remind them in the description to persist the work with their novel tools.",
       "After your block you will receive the tool results — then answer the user directly WITHOUT another tool block.",
     ].join("\n");
@@ -441,7 +441,13 @@ async function executeOne(call: NovelToolCall): Promise<NovelToolResult> {
 
     case "read_chapter": {
       const chapter = await resolveChapter(p);
-      if (!chapter) return fail(call.action, "Chapter not found (need chapterId, or novelId+number).");
+      if (!chapter) {
+        const got = Object.keys(p).length > 0 ? JSON.stringify(p).slice(0, 160) : "(no params)";
+        return fail(
+          call.action,
+          `Chapter not found with params ${got}. Pass {"chapterId":"<id>"} OR {"novelId":"<id>","number":<n>} (novel ids and per-chapter ids are in the library snapshot above; title-based lookup also works via {"novelTitle":"<title>","number":<n>}).`,
+        );
+      }
       const parts = [
         `《${chapter.novel.title}》 chapter ${chapter.number}: ${chapter.title} [${chapter.id}]`,
         `Status: ${chapter.status} · wordCount: ${chapter.wordCount} · revision: ${chapter.revision}`,
@@ -758,18 +764,37 @@ function fail(action: string, summary: string): NovelToolResult {
  * refer to chapters as "第3章", so number-based access avoids id guessing).
  */
 async function resolveChapter(p: Record<string, unknown>) {
-  const chapterId = str(p.chapterId);
+  const chapterId = str(p.chapterId) || str(p.id);
   if (chapterId) {
     return db.novelChapter.findUnique({
       where: { id: chapterId },
       include: { novel: { select: { title: true } } },
     });
   }
-  const novelId = str(p.novelId);
-  const number = int(p.number);
-  if (!novelId || number < 1) return null;
+  // Models frequently use key aliases (chapterNumber/num/no) — accept them.
+  const number = int(p.number ?? p.chapterNumber ?? p.num ?? p.no);
+  if (number < 1) return null;
+  const novelId = str(p.novelId) || str(p.novel) || str(p.bookId);
+  if (novelId) {
+    return db.novelChapter.findUnique({
+      where: { novelId_number: { novelId, number } },
+      include: { novel: { select: { title: true } } },
+    });
+  }
+  // Fallback: resolve the novel by title (exact first, then unique contains).
+  const novelTitle = str(p.novelTitle) || str(p.title) || str(p.bookTitle);
+  if (!novelTitle) return null;
+  const candidates = await db.novel.findMany({
+    where: { OR: [{ title: novelTitle }, { title: { contains: novelTitle } }] },
+    select: { id: true, title: true },
+    take: 5,
+  });
+  const novel =
+    candidates.find((c) => c.title === novelTitle) ??
+    (candidates.length === 1 ? candidates[0] : null);
+  if (!novel) return null;
   return db.novelChapter.findUnique({
-    where: { novelId_number: { novelId, number } },
+    where: { novelId_number: { novelId: novel.id, number } },
     include: { novel: { select: { title: true } } },
   });
 }

@@ -146,7 +146,12 @@ export async function POST(req: Request) {
     // Safety net: the agent announced work but skipped the protocol block,
     // so nothing would be tracked. One bounded repair round-trip converts
     // the announcement into real tasks.
-    if (delegations.length === 0) {
+    //
+    // GATE: never repair while the reply asks the user a question — a
+    // clarifying question (“你想创作什么类型呢？我可以安排Sage…”) is a
+    // conditional offer, not an assignment; auto-dispatching here would run
+    // tasks the user has not confirmed yet.
+    if (delegations.length === 0 && !/[？?]/.test(clean)) {
       const candidates = agent.isLeader
         ? await db.teamAgent.findMany({ where: { isLeader: false } })
         : [agent];

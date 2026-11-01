@@ -614,6 +614,7 @@ export async function verifyCompletionClaims(options: {
     "- Claim a chapter/novel 完成 ONLY if the ground truth above shows it written.",
     "- NEVER invent or sum word counts; NEVER summarize chapters that no real report covers.",
     "- If unwritten chapters remain and the user expects the job to continue: state the true status in one line, then delegate the NEXT single chapter with the team-delegate block now.",
+    "- If your reply above was asking the user a clarifying question or making a conditional offer, do NOT delegate — restate the question and wait for the user's answer.",
     "- Plain text and/or the team-delegate block only — NO novel-tool/novel-write blocks in this reply.",
     "- If your reply above was already fully accurate, restate it (possibly trimmed).",
   ].join("\n");
