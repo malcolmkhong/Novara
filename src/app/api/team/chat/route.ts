@@ -9,6 +9,7 @@ import {
   ensureSeed,
   getOrCreateConversation,
   glmAgentTurn,
+  glmText,
   parseDelegations,
   runTasksSequentially,
   toAgentDto,
