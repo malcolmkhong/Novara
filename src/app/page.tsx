@@ -2,6 +2,7 @@ import { BookPlus, FileSearch, ScanSearch, Zap } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { AiTeamWidget } from "@/components/ai-team/ai-team-widget";
 import { AiDetectorPanel } from "@/components/detector/ai-detector-panel";
 import { FadeIn } from "@/components/detector/fade-in";
 import { HallucinationPanel } from "@/components/detector/hallucination-panel";
@@ -70,6 +71,9 @@ export default function Home() {
           </Tabs>
         </div>
       </main>
+
+      {/* Floating multi-agent AI chat workspace (team leader + specialists). */}
+      <AiTeamWidget />
 
       {/* Sticky footer: mt-auto keeps it at the viewport bottom on short
           pages and pushes it down naturally when content overflows. */}
