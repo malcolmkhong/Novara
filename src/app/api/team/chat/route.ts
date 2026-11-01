@@ -12,6 +12,7 @@ import {
   glmText,
   parseDelegations,
   runTasksSequentially,
+  synthesizeAssignmentReply,
   toAgentDto,
   toMessageDto,
   toTaskDto,
@@ -115,8 +116,9 @@ export async function POST(req: Request) {
       const leader = await db.teamAgent.findFirst({ where: { isLeader: true } });
       systemPrompt = buildMemberChatPrompt(agent, leader?.name ?? "the team leader");
     }
-    // Every agent can read/write the novel creator's database via tools.
-    systemPrompt += `\n\n${await buildNovelToolPrompt()}`;
+    // Leaders coordinate: read-only novel access (writes are delegated).
+    // Members get full read/write tools.
+    systemPrompt += `\n\n${await buildNovelToolPrompt({ readonly: agent.isLeader })}`;
 
     const glmMessages: { role: "system" | "user" | "assistant"; content: string }[] = [
       { role: "system", content: systemPrompt },
@@ -167,13 +169,6 @@ export async function POST(req: Request) {
       }
     }
 
-    const reply =
-      clean.length > 0
-        ? clean
-        : turn.toolLog
-          ? "Done — the tool results above show what I read/wrote."
-          : "Understood — noted.";
-
     const userMessage = await db.teamMessage.create({
       data: { conversationId: conversation.id, role: "user", content },
     });
@@ -181,6 +176,15 @@ export async function POST(req: Request) {
     const tasks = delegations.length > 0
       ? await createTasksFromDelegations(delegations, agent, false, sessionKey)
       : [];
+
+    const reply =
+      clean.length > 0
+        ? clean
+        : tasks.length > 0
+          ? synthesizeAssignmentReply(tasks)
+          : turn.toolLog
+            ? "Done — the tool results above show what I read/wrote."
+            : "Understood — noted.";
 
     // Persist tool activity first (transparent, ordered before the reply).
     const replyTime = new Date();

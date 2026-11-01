@@ -203,6 +203,10 @@ model TeamTask {
   assigneeId    String
   creatorId     String
   creatorIsUser Boolean  @default(false)
+  // How many automatic leader follow-up rounds produced this task.
+  // User-initiated tasks are 0; each auto-continued delegation +1.
+  // The leader stops auto-continuing beyond MAX_AUTO_DEPTH.
+  autoDepth     Int      @default(0)
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 

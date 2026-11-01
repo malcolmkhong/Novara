@@ -25,8 +25,10 @@ import {
 import { buildNovelToolPrompt } from "@/lib/ai-team/novel-tools";
 import {
   executeNovelToolCalls,
+  executeNovelWrites,
   formatToolResults,
   parseNovelToolCalls,
+  parseNovelWriteBlocks,
 } from "@/lib/ai-team/novel-tools";
 import type {
   AgentDto,
@@ -308,11 +310,12 @@ export interface AgentTurnResult {
 const MAX_TOOL_ROUNDS = 3; // 1 initial call + up to 2 tool-execution rounds
 
 /**
- * One full agent turn with a bounded novel-tool loop:
- *   call → tool block? → execute → call with results → … (max 3 calls)
- * Multi-round lets chained writes work (create_novel → create_chapter with
- * the new id). Every request's GLM usage stays bounded; each round gets its
- * own timeout so a single exchange never hangs.
+ * One full agent turn with a bounded tool loop (JSON ```novel-tool actions
+ * + plain-text ```novel-write chapter blocks):
+ *   call → blocks? → execute → call with results → … (max 3 calls)
+ * Multi-round lets chained writes work (read ids → write chapters). Every
+ * request's GLM usage stays bounded; each round gets its own timeout so a
+ * single exchange never hangs.
  */
 export async function glmAgentTurn(
   messages: GlmMessage[],
@@ -323,6 +326,11 @@ export async function glmAgentTurn(
   let current: GlmMessage[] = messages;
   let lastRaw = "";
 
+  const cleanAll = (raw: string): string => {
+    // Strip JSON tool blocks first, then plain-text write blocks.
+    return parseNovelWriteBlocks(parseNovelToolCalls(raw).clean).clean;
+  };
+
   for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
     const raw = await glmText(
       current,
@@ -332,12 +340,22 @@ export async function glmAgentTurn(
     if (raw === null) break;
     lastRaw = raw;
 
-    const { clean, calls } = parseNovelToolCalls(raw);
+    const toolParsed = parseNovelToolCalls(raw);
+    const writeParsed = parseNovelWriteBlocks(toolParsed.clean);
+    const calls = [...toolParsed.calls, ...writeParsed.writes].slice(
+      0,
+      MAX_TOOL_ROUNDS * 3,
+    );
     if (calls.length === 0) {
-      return { text: raw, toolLog };
+      // No usable blocks — return the text with any stray fences stripped
+      // so protocol fragments never leak into the visible reply.
+      return { text: cleanAll(raw), toolLog };
     }
 
-    const results = await executeNovelToolCalls(calls);
+    const results = [
+      ...(await executeNovelToolCalls(toolParsed.calls)),
+      ...(await executeNovelWrites(writeParsed.writes)),
+    ];
     const roundLog = formatToolResults(results);
     toolLog = toolLog === null
       ? roundLog
@@ -353,9 +371,18 @@ export async function glmAgentTurn(
     ];
   }
 
-  // Loop exhausted (or GLM died mid-loop) — strip any trailing tool block.
-  const { clean } = parseNovelToolCalls(lastRaw);
-  const text = clean.length > 0 ? clean : toolLog ? "Done — see the tool results above." : "";
+  // Loop exhausted (or GLM died mid-loop) — strip any trailing tool blocks.
+  const clean = cleanAll(lastRaw);
+  // A very short leftover after writes (e.g. "现在创建第二章：") is a
+  // truncated mid-sentence fragment — replace it with a proper closing.
+  const text =
+    clean.length >= 40
+      ? clean
+      : toolLog
+        ? "Done — see the tool results above."
+        : clean.length > 0
+          ? clean
+          : "";
   return { text: text.length > 0 ? text : null, toolLog };
 }
 
@@ -434,6 +461,7 @@ export async function createTasksFromDelegations(
   creator: AgentRow,
   creatorIsUser: boolean,
   sessionKey: string,
+  autoDepth = 0,
 ): Promise<TaskRow[]> {
   const members = await db.teamAgent.findMany();
   const byKey = new Map(members.map((member) => [member.key.toLowerCase(), member]));
@@ -454,12 +482,23 @@ export async function createTasksFromDelegations(
         assigneeId: assignee.id,
         creatorId: creator.id,
         creatorIsUser,
+        autoDepth,
       },
       include: { assignee: true, creator: true, logs: true },
     });
     created.push(task);
   }
   return created;
+}
+
+/**
+ * Meaningful visible text for a reply whose content was ONLY a delegate
+ * block (clean text empty). Replaces the useless "Understood — noted.".
+ */
+export function synthesizeAssignmentReply(tasks: TaskRow[]): string {
+  if (tasks.length === 0) return "Understood — noted.";
+  const lines = tasks.map((task) => `• ${task.assignee.name}：${task.title}`);
+  return `已安排执行：\n${lines.join("\n")}\n\n进度可在任务列表实时查看，完成后我会汇报结果并推进下一步。`;
 }
 
 // ---------------------------------------------------------------------------
@@ -596,7 +635,8 @@ export async function runTask(taskId: string): Promise<void> {
 
     // Forward the report: to the creator, or to the leader when the user
     // assigned the task directly (keeps the leader in the loop).
-    const reportAgentId = task.creatorIsUser ? (await getLeader())?.id ?? null : task.creatorId;
+    const leader = await getLeader();
+    const reportAgentId = task.creatorIsUser ? leader?.id ?? null : task.creatorId;
     if (reportAgentId) {
       const reportConversation = await getOrCreateConversation(reportAgentId, task.sessionKey);
       if (reportConversation) {
@@ -612,6 +652,12 @@ export async function runTask(taskId: string): Promise<void> {
           where: { id: reportConversation.id },
           data: { updatedAt: new Date() },
         });
+      }
+
+      // Auto-continue: the report wakes the leader for one bounded turn so
+      // multi-step jobs keep moving without the user nudging every time.
+      if (leader && reportAgentId === leader.id && task.autoDepth < MAX_AUTO_DEPTH) {
+        await runLeaderFollowUp(task.sessionKey, result, task.autoDepth + 1);
       }
     }
   } catch (error) {
@@ -629,6 +675,121 @@ export async function runTasksSequentially(taskIds: string[]): Promise<void> {
     } catch (error) {
       console.error("[team] background task run failed:", error);
     }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Leader auto-continue (task reports wake the leader)
+// ---------------------------------------------------------------------------
+
+/** Max leader follow-up rounds per user-initiated job (runaway guard). */
+const MAX_AUTO_DEPTH = 3;
+
+/**
+ * After a task report lands in the LEADER's conversation, give the leader
+ * one autonomous turn: it either delegates the next concrete step (the
+ * chain continues, depth + 1) or closes the job with a status summary.
+ * Depth is persisted on tasks (autoDepth) so chains stay bounded across
+ * server restarts.
+ */
+export async function runLeaderFollowUp(
+  sessionKey: string,
+  reportContent: string,
+  depth: number,
+): Promise<void> {
+  try {
+    const leader = await getLeader();
+    if (!leader) return;
+    const conversation = await getOrCreateConversation(leader.id, sessionKey);
+    const members = await db.teamAgent.findMany({
+      where: { isLeader: false },
+      orderBy: { sortOrder: "asc" },
+    });
+    const systemPrompt = `${buildLeaderSystemPrompt(leader, members)}\n\n${await buildNovelToolPrompt({ readonly: true })}`;
+    const history = await buildHistoryMessages(conversation.id);
+    const cappedReport =
+      reportContent.length > 4500 ? `${reportContent.slice(0, 4500)} …(truncated)` : reportContent;
+    // Show what is already queued so the leader never re-delegates work
+    // that is pending or in progress for this session.
+    const openTasks = await db.teamTask.findMany({
+      where: { sessionKey, status: { in: ["pending", "in_progress"] } },
+      include: { assignee: { select: { name: true } } },
+      orderBy: { createdAt: "asc" },
+      take: 6,
+    });
+    const openTasksNote =
+      openTasks.length > 0
+        ? `Already queued/in progress for this session (do NOT re-delegate these):\n${openTasks
+            .map((t) => `- [${t.status}] "${t.title}" → ${t.assignee.name}`)
+            .join("\n")}`
+        : "No other tasks are queued for this session.";
+    const instruction = [
+      "⏰ AUTONOMOUS FOLLOW-UP — a task report just arrived (repeated below). The user is waiting on this job.",
+      "",
+      cappedReport,
+      "",
+      openTasksNote,
+      "",
+      "Decide the next move NOW:",
+      "- If the overall job is DONE: write a short closing summary for the user — what was accomplished, what was persisted (chapters/word counts), and 1-2 suggested next steps.",
+      "- If it is NOT done: delegate the next concrete step with the team-delegate block (split big jobs chapter-by-chapter), or reply with the precise status plus your recommended next step.",
+      "Never reply with a bare acknowledgment like “Understood” or “好的”。",
+    ].join("\n");
+
+    const turn = await glmAgentTurn(
+      [
+        { role: "system", content: systemPrompt },
+        ...history,
+        { role: "user", content: instruction },
+      ],
+      "leader-followup",
+    );
+    if (turn.text === null) return;
+
+    const { clean, delegations } = parseDelegations(turn.text);
+    const tasks =
+      delegations.length > 0
+        ? await createTasksFromDelegations(delegations, leader, false, sessionKey, depth)
+        : [];
+
+    const replyTime = new Date();
+    if (turn.toolLog) {
+      await db.teamMessage.create({
+        data: {
+          conversationId: conversation.id,
+          role: "system",
+          content: turn.toolLog,
+          createdAt: replyTime,
+        },
+      });
+    }
+    const reply =
+      clean.length > 0
+        ? clean
+        : tasks.length > 0
+          ? synthesizeAssignmentReply(tasks)
+          : null;
+    if (reply !== null) {
+      await db.teamMessage.create({
+        data: {
+          conversationId: conversation.id,
+          role: "assistant",
+          content: reply,
+          taskIds: tasks.length > 0 ? JSON.stringify(tasks.map((task) => task.id)) : null,
+          createdAt: new Date(replyTime.getTime() + 2),
+        },
+      });
+      await db.teamConversation.update({
+        where: { id: conversation.id },
+        data: { updatedAt: new Date() },
+      });
+    }
+
+    if (tasks.length > 0) {
+      await runTasksSequentially(tasks.map((task) => task.id));
+    }
+  } catch (error) {
+    console.error("[team] leader follow-up failed:", error);
   }
 }
 

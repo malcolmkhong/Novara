@@ -43,19 +43,40 @@ const ACTION_CATALOG = [
   "- create_novel {title, genre, logline, targetChapters?}",
   "- create_chapter {novelId, number, title, goal?, timeAnchor?, endHook?, content?}  // optional content creates it already drafted",
   "- update_novel {novelId, title?, genre?, logline?, coreConflict?, bible?, characters?, villain?, masterOutline?}  // bible/characters/villain/masterOutline must be JSON objects",
-  "- update_chapter_content {chapterId | novelId+number, content}  // FULL replacement text of the chapter prose",
   "- update_chapter_outline {chapterId | novelId+number, goal?, timeAnchor?, mustCover?[], endHook?}",
   "- create_foreshadow {novelId, title, description, plantedAt}",
   "- update_foreshadow {foreshadowId, status?: open|advanced|paid, paidAt?, lastTouched?}",
+  "- update_chapter_content — DO NOT use JSON for chapter prose; use the plain-text ```novel-write block below instead",
 ].join("\n");
 
 /**
  * The novel-tool protocol section appended to agent system prompts.
  * Includes a compact snapshot of the current library so the model can
  * discover ids without a round-trip for trivial questions.
+ *
+ * `readonly` (leaders/coordinators): read tools only — chapter prose and
+ * other writes are delegated to members so every write gets a full
+ * dedicated execution budget.
  */
-export async function buildNovelToolPrompt(): Promise<string> {
+export async function buildNovelToolPrompt(options?: {
+  readonly?: boolean;
+}): Promise<string> {
   const snapshot = await buildNovelLibraryContext();
+  if (options?.readonly === true) {
+    return [
+      "NOVEL LIBRARY ACCESS (READ-ONLY) — you are connected to the novel creator's database and can READ it to check status, ids and content.",
+      "Current library snapshot:",
+      snapshot,
+      "",
+      "To read, append this block at the VERY END of your reply (it is removed from the visible text):",
+      "```novel-tool",
+      '{"actions":[{"action":"read_novel","params":{"novelId":"<id>"}}]}',
+      "```",
+      "Available actions: list_novels, read_novel {novelId}, read_chapter {chapterId | novelId+number}, read_foreshadows {novelId}.",
+      "You have NO write access: DELEGATE all writes (chapter prose, outlines, foreshadows) to members via the team-delegate block, and remind them in the description to persist the work with their novel tools.",
+      "After your block you will receive the tool results — then answer the user directly WITHOUT another tool block.",
+    ].join("\n");
+  }
   return [
     "NOVEL LIBRARY ACCESS — you are connected to the novel creator's database and can READ and WRITE it.",
     "Current library snapshot:",
@@ -67,8 +88,17 @@ export async function buildNovelToolPrompt(): Promise<string> {
     "```",
     "Available actions:",
     ACTION_CATALOG,
+    "",
+    "WRITING CHAPTER PROSE — use this plain-text block (NO JSON, NO escaping — the raw chapter text goes below the --- line):",
+    "```novel-write",
+    "chapterId: <id>",
+    "---",
+    "<full chapter text, plain prose>",
+    "```",
+    "(`novelId: <id>` + `number: <n>` may replace chapterId. This REPLACES the whole chapter content. Max 3 blocks per reply; combine with JSON actions in the same reply when useful.)",
+    "",
     "Rules: max 3 actions per reply; all writes are REAL and permanent — for large rewrites confirm scope with the user first; never invent ids, take them from the snapshot or from read results; do not use tools for pure conversation.",
-    "After your block you will receive the tool results — then answer the user directly WITHOUT another tool block.",
+    "After your block(s) you will receive the tool results — then answer the user directly WITHOUT another tool block.",
   ].join("\n");
 }
 
@@ -153,6 +183,116 @@ function harvestCalls(body: string, out: NovelToolCall[]): void {
     delete flat.params;
     out.push({ action: action.toLowerCase(), params: { ...flat, ...nested } });
   }
+}
+
+// ---------------------------------------------------------------------------
+// Plain-text chapter-write protocol (```novel-write)
+// ---------------------------------------------------------------------------
+
+export interface NovelWriteCall {
+  chapterId: string;
+  novelId: string;
+  number: number;
+  content: string;
+}
+
+/**
+ * Extract ```novel-write blocks — the plain-text protocol for chapter
+ * prose. Prose contains quotes and newlines that break JSON escaping, so
+ * writes of full chapters use this zero-escaping format instead:
+ *
+ *   ```novel-write
+ *   chapterId: <id>          (or novelId: <id> + number: <n>)
+ *   ---
+ *   <raw chapter text>
+ *   ```
+ */
+export function parseNovelWriteBlocks(raw: string): {
+  clean: string;
+  writes: NovelWriteCall[];
+} {
+  const writes: NovelWriteCall[] = [];
+  let clean = raw.replace(
+    /```novel-write\s*([\s\S]*?)```/gi,
+    (_match, body: string) => {
+      harvestWriteBlock(body, writes);
+      return "";
+    },
+  );
+  const unterminated = clean.match(/```novel-write\s*([\s\S]*)$/i);
+  if (unterminated !== null) {
+    harvestWriteBlock(unterminated[1] ?? "", writes);
+    clean = clean.replace(/```novel-write\s*[\s\S]*$/i, "");
+  }
+  return { clean: clean.trim(), writes };
+}
+
+function harvestWriteBlock(body: string, out: NovelWriteCall[]): void {
+  if (out.length >= MAX_TOOL_CALLS) return;
+  // Split the machine header from the prose body on the first --- line.
+  const separator = body.match(/^---\s*$/m);
+  if (!separator || separator.index === undefined) return;
+  const header = body.slice(0, separator.index);
+  const content = body.slice(separator.index + separator[0].length).trim();
+  if (!content) return;
+
+  let chapterId = "";
+  let novelId = "";
+  let number = -1;
+  for (const line of header.split(/\r?\n/)) {
+    const match = line.match(/^\s*([A-Za-z]+)\s*:\s*(.+?)\s*$/);
+    if (!match) continue;
+    const key = match[1]?.toLowerCase() ?? "";
+    const value = match[2]?.trim() ?? "";
+    if (key === "chapterid") chapterId = value;
+    else if (key === "novelid") novelId = value;
+    else if (key === "number") number = Number.parseInt(value, 10);
+  }
+  if (out.length < MAX_TOOL_CALLS) {
+    out.push({ chapterId, novelId, number: Number.isFinite(number) ? number : -1, content });
+  }
+}
+
+/** Execute parsed novel-write blocks against the database. */
+export async function executeNovelWrites(
+  writes: NovelWriteCall[],
+): Promise<NovelToolResult[]> {
+  const results: NovelToolResult[] = [];
+  for (const write of writes) {
+    try {
+      results.push(await executeOneWrite(write));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown error.";
+      results.push({ action: "novel-write", ok: false, summary: message });
+    }
+  }
+  return results;
+}
+
+async function executeOneWrite(write: NovelWriteCall): Promise<NovelToolResult> {
+  const action = "novel-write";
+  const chapter = await resolveChapter(write);
+  if (!chapter) {
+    return fail(action, "Chapter not found (need chapterId, or novelId+number).");
+  }
+  const content = write.content.trim();
+  if (!content) return fail(action, "content is empty.");
+  if (content.length > MAX_CONTENT_WRITE) {
+    return fail(action, `content too long (${content.length} > ${MAX_CONTENT_WRITE}).`);
+  }
+  await db.novelChapter.update({
+    where: { id: chapter.id },
+    data: {
+      content,
+      wordCount: chineseWordCount(content),
+      status: chapter.status === "outlined" ? "drafted" : chapter.status,
+    },
+  });
+  return {
+    action,
+    ok: true,
+    summary: `Wrote ${chineseWordCount(content)} chars into chapter ${chapter.number} 《${chapter.title}》 of 《${chapter.novel.title}》 [${chapter.id}].`,
+  };
 }
 
 // ---------------------------------------------------------------------------
