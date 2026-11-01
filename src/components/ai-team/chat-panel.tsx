@@ -18,6 +18,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 import type { AgentDto, MessageDto, TaskDto } from "@/lib/ai-team/types";
+import { useTeamUi } from "./store";
 import { useConversation, useSendMessage, useTasks } from "./use-team";
 
 // ---------------------------------------------------------------------------
@@ -166,15 +167,41 @@ interface ChatPanelProps {
   onGoToTasks?: () => void;
   /** Pop-out mode: tighter spacing, no header/switcher chrome. */
   compact?: boolean;
+  /** Main panel only: receive references injected by the side-panel tree. */
+  acceptComposerDrafts?: boolean;
 }
 
 const WELCOME_TEXT =
   "👋 I'm Atlas, your AI team leader. Tell me what you need — I'll break it down, delegate to the right specialist, track their progress and report the results back here. You can also open any specialist's own chat window from the Team tab.";
 
-export function ChatPanel({ agents, agentKey, onSelectAgent, onGoToTasks, compact = false }: ChatPanelProps) {
+export function ChatPanel({ agents, agentKey, onSelectAgent, onGoToTasks, compact = false, acceptComposerDrafts = false }: ChatPanelProps) {
   const { toast } = useToast();
   const [input, setInput] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // Side-panel tree clicks land here as a draft reference (《书》第N章「题」).
+  // The effect intentionally depends ONLY on the nonce: clearing the draft in
+  // the store re-renders this component, and a draft-dependent dep would
+  // cancel the pending rAF before it applies the text.
+  const composerNonce = useTeamUi((state) => state.composerNonce);
+  const lastNonceRef = useRef(0);
+
+  useEffect(() => {
+    if (!acceptComposerDrafts) return;
+    const { composerDraft: draft, composerNonce: nonce, clearComposerDraft: clear } = useTeamUi.getState();
+    if (nonce === lastNonceRef.current) return;
+    lastNonceRef.current = nonce;
+    if (!draft) return;
+    clear();
+    // Apply on the next frame so the composer update happens outside the
+    // effect body (no cascading render) and the textarea is mounted.
+    const frame = requestAnimationFrame(() => {
+      setInput((prev) => (prev.trim() ? `${prev.replace(/\s+$/, "")}\n${draft}` : draft));
+      textareaRef.current?.focus();
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [acceptComposerDrafts, composerNonce]);
 
   const current = useMemo(
     () => agents.find((agent) => agent.key === agentKey) ?? agents.find((agent) => agent.isLeader) ?? agents[0],
@@ -360,6 +387,7 @@ export function ChatPanel({ agents, agentKey, onSelectAgent, onGoToTasks, compac
       <div className="border-t p-2">
         <div className="flex items-end gap-2">
           <Textarea
+            ref={textareaRef}
             value={input}
             onChange={(event) => setInput(event.target.value)}
             onKeyDown={(event) => {

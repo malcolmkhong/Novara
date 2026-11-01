@@ -1,9 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { AnimatePresence, motion } from "framer-motion";
-import { Bot, ListTodo, MessagesSquare, Minimize2, Users } from "lucide-react";
+import { Bot, ListTodo, MessagesSquare, Minimize2, PanelLeftClose, PanelLeftOpen, Users } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -11,9 +11,14 @@ import { cn } from "@/lib/utils";
 import { AgentsTab } from "./agents-tab";
 import { ChatPanel } from "./chat-panel";
 import { PopoutChat } from "./popout-chat";
+import { SidePanel } from "./side-panel";
 import { useTeamUi, type TeamTab } from "./store";
 import { TasksTab } from "./tasks-tab";
 import { useAgents, useTasks } from "./use-team";
+
+function isDesktopViewport(): boolean {
+  return typeof window !== "undefined" && window.matchMedia("(min-width: 640px)").matches;
+}
 
 function AiTeamInner() {
   const {
@@ -21,11 +26,13 @@ function AiTeamInner() {
     tab,
     chatAgentKey,
     popouts,
+    sidePanelOpen,
     toggleOpen,
     setTab,
     setChatAgent,
     openPopout,
     closePopout,
+    setSidePanelOpen,
   } = useTeamUi();
 
   const agentsQuery = useAgents();
@@ -35,6 +42,17 @@ function AiTeamInner() {
   const activeCount = tasks.filter(
     (task) => task.status === "pending" || task.status === "in_progress",
   ).length;
+
+  // The side panel is a desktop affordance — auto-open it there, keep the
+  // floating chat clean on phones (it becomes an overlay, opened manually).
+  useEffect(() => {
+    if (isDesktopViewport()) setSidePanelOpen(true);
+  }, [setSidePanelOpen]);
+
+  /** After side-panel navigation: keep it open on desktop, close on phones. */
+  const handleSideNavigate = () => {
+    if (!isDesktopViewport()) setSidePanelOpen(false);
+  };
 
   return (
     <>
@@ -68,7 +86,10 @@ function AiTeamInner() {
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: 16, scale: 0.97 }}
             transition={{ duration: 0.18, ease: "easeOut" }}
-            className="fixed bottom-24 right-4 z-50 flex h-[min(620px,calc(100dvh-8.5rem))] w-[min(26rem,calc(100vw-2rem))] flex-col overflow-hidden rounded-2xl border bg-background shadow-2xl sm:right-6"
+            className={cn(
+              "fixed bottom-24 right-4 z-50 flex h-[min(620px,calc(100dvh-8.5rem))] flex-col overflow-hidden rounded-2xl border bg-background shadow-2xl transition-[width] duration-200 sm:right-6",
+              sidePanelOpen ? "w-[min(46rem,calc(100vw-2rem))]" : "w-[min(26rem,calc(100vw-2rem))]",
+            )}
             role="dialog"
             aria-label="AI team workspace"
           >
@@ -87,6 +108,20 @@ function AiTeamInner() {
                 size="icon"
                 variant="ghost"
                 className="size-8"
+                onClick={() => setSidePanelOpen(!sidePanelOpen)}
+                aria-label={sidePanelOpen ? "Hide side panel" : "Show side panel"}
+                aria-pressed={sidePanelOpen}
+              >
+                {sidePanelOpen ? (
+                  <PanelLeftClose className="size-4" aria-hidden="true" />
+                ) : (
+                  <PanelLeftOpen className="size-4" aria-hidden="true" />
+                )}
+              </Button>
+              <Button
+                size="icon"
+                variant="ghost"
+                className="size-8"
                 onClick={toggleOpen}
                 aria-label="Minimize panel"
               >
@@ -94,71 +129,91 @@ function AiTeamInner() {
               </Button>
             </div>
 
-            <Tabs
-              value={tab}
-              onValueChange={(value) => setTab(value as TeamTab)}
-              className="flex min-h-0 flex-1 flex-col"
-            >
-              <TabsList className="mx-3 mt-2 grid shrink-0 grid-cols-3">
-                <TabsTrigger value="chat" className="gap-1.5 px-2 text-xs">
-                  <MessagesSquare className="size-3.5" aria-hidden="true" />
-                  Chat
-                </TabsTrigger>
-                <TabsTrigger value="team" className="gap-1.5 px-2 text-xs">
-                  <Users className="size-3.5" aria-hidden="true" />
-                  Team
-                </TabsTrigger>
-                <TabsTrigger value="tasks" className="gap-1.5 px-2 text-xs">
-                  <ListTodo className="size-3.5" aria-hidden="true" />
-                  Tasks
-                  {activeCount > 0 && (
-                    <span
-                      className={cn(
-                        "ml-0.5 inline-flex size-4 items-center justify-center rounded-full bg-amber-500 text-[9px] font-bold text-white",
-                      )}
-                    >
-                      {activeCount}
-                    </span>
-                  )}
-                </TabsTrigger>
-              </TabsList>
+            {/* Body: side panel + main tabs area */}
+            <div className="relative flex min-h-0 flex-1">
+              {sidePanelOpen && (
+                <aside
+                  className="absolute inset-0 z-10 border-r sm:static sm:z-auto sm:w-64 sm:shrink-0"
+                  aria-label="工作区侧边栏"
+                >
+                  <SidePanel
+                    agents={agents}
+                    tasks={tasks}
+                    onClose={() => setSidePanelOpen(false)}
+                    onNavigate={handleSideNavigate}
+                    onGoToTab={(nextTab: TeamTab) => setTab(nextTab)}
+                    onChatWith={() => setTab("chat")}
+                  />
+                </aside>
+              )}
 
-              <TabsContent
-                value="chat"
-                className="flex min-h-0 flex-1 flex-col outline-none data-[state=inactive]:hidden"
+              <Tabs
+                value={tab}
+                onValueChange={(value) => setTab(value as TeamTab)}
+                className="flex min-h-0 flex-1 flex-col outline-none"
               >
-                <ChatPanel
-                  agents={agents}
-                  agentKey={chatAgentKey}
-                  onSelectAgent={setChatAgent}
-                  onGoToTasks={() => setTab("tasks")}
-                />
-              </TabsContent>
+                <TabsList className="mx-3 mt-2 grid shrink-0 grid-cols-3">
+                  <TabsTrigger value="chat" className="gap-1.5 px-2 text-xs">
+                    <MessagesSquare className="size-3.5" aria-hidden="true" />
+                    Chat
+                  </TabsTrigger>
+                  <TabsTrigger value="team" className="gap-1.5 px-2 text-xs">
+                    <Users className="size-3.5" aria-hidden="true" />
+                    Team
+                  </TabsTrigger>
+                  <TabsTrigger value="tasks" className="gap-1.5 px-2 text-xs">
+                    <ListTodo className="size-3.5" aria-hidden="true" />
+                    Tasks
+                    {activeCount > 0 && (
+                      <span
+                        className={cn(
+                          "ml-0.5 inline-flex size-4 items-center justify-center rounded-full bg-amber-500 text-[9px] font-bold text-white",
+                        )}
+                      >
+                        {activeCount}
+                      </span>
+                    )}
+                  </TabsTrigger>
+                </TabsList>
 
-              <TabsContent
-                value="team"
-                className="flex min-h-0 flex-1 flex-col outline-none data-[state=inactive]:hidden"
-              >
-                <AgentsTab
-                  agents={agents}
-                  tasks={tasks}
-                  isLoading={agentsQuery.isLoading}
-                  onChat={(key) => {
-                    setChatAgent(key);
-                    setTab("chat");
-                  }}
-                  onPopOut={openPopout}
-                  onGoToTasks={() => setTab("tasks")}
-                />
-              </TabsContent>
+                <TabsContent
+                  value="chat"
+                  className="flex min-h-0 flex-1 flex-col outline-none data-[state=inactive]:hidden"
+                >
+                  <ChatPanel
+                    agents={agents}
+                    agentKey={chatAgentKey}
+                    onSelectAgent={setChatAgent}
+                    onGoToTasks={() => setTab("tasks")}
+                    acceptComposerDrafts
+                  />
+                </TabsContent>
 
-              <TabsContent
-                value="tasks"
-                className="flex min-h-0 flex-1 flex-col outline-none data-[state=inactive]:hidden"
-              >
-                <TasksTab tasks={tasks} isLoading={tasksQuery.isLoading} />
-              </TabsContent>
-            </Tabs>
+                <TabsContent
+                  value="team"
+                  className="flex min-h-0 flex-1 flex-col outline-none data-[state=inactive]:hidden"
+                >
+                  <AgentsTab
+                    agents={agents}
+                    tasks={tasks}
+                    isLoading={agentsQuery.isLoading}
+                    onChat={(key) => {
+                      setChatAgent(key);
+                      setTab("chat");
+                    }}
+                    onPopOut={openPopout}
+                    onGoToTasks={() => setTab("tasks")}
+                  />
+                </TabsContent>
+
+                <TabsContent
+                  value="tasks"
+                  className="flex min-h-0 flex-1 flex-col outline-none data-[state=inactive]:hidden"
+                >
+                  <TasksTab tasks={tasks} isLoading={tasksQuery.isLoading} />
+                </TabsContent>
+              </Tabs>
+            </div>
           </motion.div>
         )}
       </AnimatePresence>
@@ -181,7 +236,9 @@ function AiTeamInner() {
 /**
  * Floating multi-agent chat workspace: one team leader the user talks to for
  * everything, plus specialist sub-agents with their own chat windows,
- * separate histories and live-tracked delegated tasks.
+ * separate histories and live-tracked delegated tasks. A DeepSeek-Harness
+ * style side panel exposes the novel library (书房) and the team overview
+ * (工作区); tree rows inject references straight into the chat composer.
  */
 export function AiTeamWidget() {
   const [queryClient] = useState(

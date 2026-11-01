@@ -52,6 +52,26 @@ function getServerSnapshot(): string {
 }
 
 /**
+ * Start a fresh session: generate a new session key and persist it.
+ * Existing conversations stay in the database under the old key; every
+ * conversation query re-keyed by the new value starts clean.
+ */
+export function resetSessionKey(): void {
+  if (typeof window === "undefined") return;
+  const fresh =
+    typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+      ? crypto.randomUUID()
+      : `s-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  cachedSessionKey = fresh;
+  try {
+    window.localStorage.setItem(SESSION_STORAGE_KEY, fresh);
+  } catch {
+    // Private mode without storage — the in-memory value still works.
+  }
+  emitChange();
+}
+
+/**
  * Stable per-browser session key (localStorage) keeping each agent's
  * conversation history separate and persistent across reloads.
  *

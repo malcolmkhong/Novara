@@ -3,6 +3,7 @@
  */
 
 import type { AgentDto, ChatSendResponse, MessageDto, TaskDto } from "@/lib/ai-team/types";
+import type { NovelDetail, NovelListItem } from "@/lib/novel/types";
 
 async function readJson<T>(res: Response): Promise<T> {
   const data = (await res.json()) as T & { success?: boolean; error?: string };
@@ -71,4 +72,22 @@ export async function createTask(
 
 export async function retryTask(taskId: string): Promise<void> {
   await readJson(await fetch(`/api/team/tasks/${taskId}/run`, { method: "POST" }));
+}
+
+// ---------------------------------------------------------------------------
+// Novel library (side-panel book tree)
+// ---------------------------------------------------------------------------
+
+export async function fetchNovelList(): Promise<NovelListItem[]> {
+  const data = await readJson<{ novels: NovelListItem[] }>(
+    await fetch("/api/novel", { cache: "no-store" }),
+  );
+  return data.novels;
+}
+
+export async function fetchNovelDetail(novelId: string): Promise<NovelDetail> {
+  const data = await readJson<{ novel: NovelDetail }>(
+    await fetch(`/api/novel/${novelId}`, { cache: "no-store" }),
+  );
+  return data.novel;
 }

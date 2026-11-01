@@ -2,7 +2,7 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { createTask, fetchAgents, fetchConversation, fetchTasks, retryTask, sendChatMessage } from "./api";
+import { createTask, fetchAgents, fetchConversation, fetchNovelDetail, fetchNovelList, fetchTasks, retryTask, sendChatMessage } from "./api";
 import { useSessionKey } from "./use-session";
 
 /** The fixed roster — seeds itself on first fetch, rarely changes. */
@@ -68,5 +68,24 @@ export function useRetryTask() {
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["team", "tasks"] });
     },
+  });
+}
+
+/** Bookshelf for the side panel (书房 tab). */
+export function useNovelList() {
+  return useQuery({
+    queryKey: ["novel", "list"],
+    queryFn: fetchNovelList,
+    staleTime: 20_000,
+  });
+}
+
+/** Full book payload (volumes / chapters / foreshadows), lazy per expanded novel. */
+export function useNovelDetail(novelId: string | null) {
+  return useQuery({
+    queryKey: ["novel", "detail", novelId],
+    queryFn: () => fetchNovelDetail(novelId as string),
+    enabled: Boolean(novelId),
+    staleTime: 10_000,
   });
 }
