@@ -22,6 +22,12 @@ import {
   buildMemberChatPrompt,
   buildTaskExecutionMessages,
 } from "@/lib/ai-team/prompts";
+import { buildNovelToolPrompt } from "@/lib/ai-team/novel-tools";
+import {
+  executeNovelToolCalls,
+  formatToolResults,
+  parseNovelToolCalls,
+} from "@/lib/ai-team/novel-tools";
 import type {
   AgentDto,
   MessageDto,
@@ -35,6 +41,8 @@ import type {
 // ---------------------------------------------------------------------------
 
 const GLM_TIMEOUT_MS = 55_000;
+/** Budget for the post-tool follow-up call of an agent turn. */
+const TOOL_FOLLOWUP_TIMEOUT_MS = 35_000;
 /** Per-message cap when replaying conversation history to GLM. */
 const HISTORY_MESSAGE_CAP = 1200;
 /** How much of the conversation history (messages) is replayed. */
@@ -73,7 +81,9 @@ export async function glmText(
       zai.chat.completions.create({
         messages: messages.map((message) => ({
           ...message,
-          content: capForGlm(message.content, message.role === "system" ? 4000 : 6000),
+          // System prompts now carry persona + team/novel-tool protocol +
+          // library snapshot, so they get the same budget as user turns.
+          content: capForGlm(message.content, message.role === "system" ? 6500 : 6000),
         })),
         thinking: { type: "disabled" },
       }),
@@ -284,6 +294,71 @@ export async function getOrCreateConversation(agentId: string, sessionKey: strin
   });
 }
 
+// ---------------------------------------------------------------------------
+// Agent turn with novel-tool loop
+// ---------------------------------------------------------------------------
+
+export interface AgentTurnResult {
+  /** Final visible reply (novel-tool blocks stripped), or null on GLM failure. */
+  text: string | null;
+  /** Formatted tool activity (also the data payload), null when no tools used. */
+  toolLog: string | null;
+}
+
+const MAX_TOOL_ROUNDS = 3; // 1 initial call + up to 2 tool-execution rounds
+
+/**
+ * One full agent turn with a bounded novel-tool loop:
+ *   call → tool block? → execute → call with results → … (max 3 calls)
+ * Multi-round lets chained writes work (create_novel → create_chapter with
+ * the new id). Every request's GLM usage stays bounded; each round gets its
+ * own timeout so a single exchange never hangs.
+ */
+export async function glmAgentTurn(
+  messages: GlmMessage[],
+  label: string,
+  timeoutMs: number = GLM_TIMEOUT_MS,
+): Promise<AgentTurnResult> {
+  let toolLog: string | null = null;
+  let current: GlmMessage[] = messages;
+  let lastRaw = "";
+
+  for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
+    const raw = await glmText(
+      current,
+      label,
+      round === 0 ? timeoutMs : TOOL_FOLLOWUP_TIMEOUT_MS,
+    );
+    if (raw === null) break;
+    lastRaw = raw;
+
+    const { clean, calls } = parseNovelToolCalls(raw);
+    if (calls.length === 0) {
+      return { text: raw, toolLog };
+    }
+
+    const results = await executeNovelToolCalls(calls);
+    const roundLog = formatToolResults(results);
+    toolLog = toolLog === null
+      ? roundLog
+      : `${toolLog}\n${roundLog.split("\n").slice(1).join("\n")}`;
+
+    current = [
+      ...current,
+      { role: "assistant", content: raw },
+      {
+        role: "user",
+        content: `${roundLog}\n\nContinue: if the goal is achieved, write your final answer to the user now WITHOUT a tool block; if you still need tools (e.g. an id returned above), emit exactly one more tool block.`,
+      },
+    ];
+  }
+
+  // Loop exhausted (or GLM died mid-loop) — strip any trailing tool block.
+  const { clean } = parseNovelToolCalls(lastRaw);
+  const text = clean.length > 0 ? clean : toolLog ? "Done — see the tool results above." : "";
+  return { text: text.length > 0 ? text : null, toolLog };
+}
+
 /** Recent history (oldest → newest) mapped into GLM messages. */
 export async function buildHistoryMessages(
   conversationId: string,
@@ -456,21 +531,28 @@ export async function runTask(taskId: string): Promise<void> {
     await setTask({ progress: 30 });
     await addTaskLog(taskId, "Working on the deliverable…", 35);
 
-    const raw = await glmText(
+    // Task executors get the same novel-library read/write powers as chats.
+    const novelToolPrompt = await buildNovelToolPrompt();
+    const turn = await glmAgentTurn(
       buildTaskExecutionMessages(
         task.assignee,
         task.creatorIsUser ? "the user" : task.creator.name,
         task.title,
         task.description,
         recentChat,
+      ).map((message) =>
+        message.role === "system"
+          ? { ...message, content: `${message.content}\n\n${novelToolPrompt}` }
+          : message,
       ),
       "task",
     );
     // Task results must never contain delegate blocks.
-    const result = raw === null ? null : parseDelegations(raw).clean;
+    const result = turn.text === null ? null : parseDelegations(turn.text).clean;
     if (result === null || result.length === 0) {
       throw new Error("GLM did not return a usable result in time.");
     }
+    const toolLog = turn.toolLog;
 
     await setTask({ progress: 90 });
     await addTaskLog(taskId, "Finalizing result…", 90);
@@ -478,16 +560,32 @@ export async function runTask(taskId: string): Promise<void> {
     await setTask({ status: "completed", progress: 100, result });
     await addTaskLog(taskId, "Task completed ✓", 100);
 
-    // Keep the assignee's own conversation history complete (task in → result out).
+    // Keep the assignee's own conversation history complete (task in →
+    // tool activity → result out).
     if (assigneeConversation) {
+      const baseTime = new Date();
       await db.teamMessage.createMany({
         data: [
           {
             conversationId: assigneeConversation.id,
             role: "user",
             content: `🎯 Task from ${task.creatorIsUser ? "the user" : task.creator.name} — "${task.title}":\n${task.description}`,
+            createdAt: baseTime,
           },
-          { conversationId: assigneeConversation.id, role: "assistant", content: result },
+          ...(toolLog
+            ? [{
+                conversationId: assigneeConversation.id,
+                role: "system",
+                content: toolLog,
+                createdAt: new Date(baseTime.getTime() + 1),
+              }]
+            : []),
+          {
+            conversationId: assigneeConversation.id,
+            role: "assistant",
+            content: result,
+            createdAt: new Date(baseTime.getTime() + 2),
+          },
         ],
       });
       await db.teamConversation.update({

@@ -9,6 +9,7 @@ import {
   Loader2,
   Package,
   SendHorizontal,
+  Wrench,
   XCircle,
 } from "lucide-react";
 
@@ -84,17 +85,32 @@ export function TaskChip({ task, onClick }: { task: TaskDto; onClick?: () => voi
   );
 }
 
-/** Centered notice for task reports / system events in the chat stream. */
+/** Centered notice for task reports / tool activity in the chat stream. */
 function ReportCard({ message }: { message: MessageDto }) {
+  const isTool = message.content.startsWith("🔧");
+  const body = isTool
+    ? message.content.replace(/^🔧\s*Novel tools used:\s*/, "")
+    : message.content.replace(/^📦\s*Task report\s*—\s*/, "");
   return (
     <div className="flex justify-center px-1">
-      <div className="max-w-full rounded-lg border border-dashed border-amber-400/70 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:border-amber-500/50 dark:bg-amber-950/40 dark:text-amber-100">
+      <div
+        className={cn(
+          "max-w-full rounded-lg border border-dashed px-3 py-2 text-xs",
+          isTool
+            ? "border-emerald-400/70 bg-emerald-50 text-emerald-900 dark:border-emerald-500/50 dark:bg-emerald-950/40 dark:text-emerald-100"
+            : "border-amber-400/70 bg-amber-50 text-amber-900 dark:border-amber-500/50 dark:bg-amber-950/40 dark:text-amber-100",
+        )}
+      >
         <div className="mb-1 flex items-center gap-1.5 font-semibold">
-          <Package className="size-3.5 shrink-0" aria-hidden="true" />
-          Task report
+          {isTool ? (
+            <Wrench className="size-3.5 shrink-0" aria-hidden="true" />
+          ) : (
+            <Package className="size-3.5 shrink-0" aria-hidden="true" />
+          )}
+          {isTool ? "Novel activity" : "Task report"}
         </div>
         <div className="max-h-44 overflow-y-auto text-xs leading-relaxed [scrollbar-width:thin]">
-          <AssistantMarkdown content={message.content.replace(/^📦\s*Task report\s*—\s*/, "")} />
+          <AssistantMarkdown content={body} />
         </div>
       </div>
     </div>

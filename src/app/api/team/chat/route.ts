@@ -8,7 +8,7 @@ import {
   createTasksFromDelegations,
   ensureSeed,
   getOrCreateConversation,
-  glmText,
+  glmAgentTurn,
   parseDelegations,
   runTasksSequentially,
   toAgentDto,
@@ -16,6 +16,7 @@ import {
   toTaskDto,
 } from "@/lib/ai-team/server";
 import { buildDelegationRepairMessages, buildLeaderSystemPrompt, buildMemberChatPrompt } from "@/lib/ai-team/prompts";
+import { buildNovelToolPrompt } from "@/lib/ai-team/novel-tools";
 import type { ChatSendResponse } from "@/lib/ai-team/types";
 
 export const dynamic = "force-dynamic";
@@ -113,6 +114,8 @@ export async function POST(req: Request) {
       const leader = await db.teamAgent.findFirst({ where: { isLeader: true } });
       systemPrompt = buildMemberChatPrompt(agent, leader?.name ?? "the team leader");
     }
+    // Every agent can read/write the novel creator's database via tools.
+    systemPrompt += `\n\n${await buildNovelToolPrompt()}`;
 
     const glmMessages: { role: "system" | "user" | "assistant"; content: string }[] = [
       { role: "system", content: systemPrompt },
@@ -120,8 +123,8 @@ export async function POST(req: Request) {
       { role: "user", content },
     ];
 
-    const raw = await glmText(glmMessages, agent.key);
-    if (raw === null) {
+    const turn = await glmAgentTurn(glmMessages, agent.key);
+    if (turn.text === null) {
       return NextResponse.json(
         {
           success: false,
@@ -131,7 +134,7 @@ export async function POST(req: Request) {
       );
     }
 
-    const { clean, delegations: parsedDelegations } = parseDelegations(raw);
+    const { clean, delegations: parsedDelegations } = parseDelegations(turn.text);
     let delegations = parsedDelegations;
 
     // Safety net: the agent announced work but skipped the protocol block,
@@ -148,7 +151,7 @@ export async function POST(req: Request) {
         const repairRaw = await glmText(
           [
             ...glmMessages,
-            { role: "assistant", content: raw },
+            { role: "assistant", content: turn.text },
             ...buildDelegationRepairMessages(mentioned.map((candidate) => candidate.name)),
           ],
           `${agent.key}-repair`,
@@ -163,7 +166,12 @@ export async function POST(req: Request) {
       }
     }
 
-    const reply = clean.length > 0 ? clean : "Understood — noted.";
+    const reply =
+      clean.length > 0
+        ? clean
+        : turn.toolLog
+          ? "Done — the tool results above show what I read/wrote."
+          : "Understood — noted.";
 
     const userMessage = await db.teamMessage.create({
       data: { conversationId: conversation.id, role: "user", content },
@@ -173,12 +181,26 @@ export async function POST(req: Request) {
       ? await createTasksFromDelegations(delegations, agent, false, sessionKey)
       : [];
 
+    // Persist tool activity first (transparent, ordered before the reply).
+    const replyTime = new Date();
+    if (turn.toolLog) {
+      await db.teamMessage.create({
+        data: {
+          conversationId: conversation.id,
+          role: "system",
+          content: turn.toolLog,
+          createdAt: replyTime,
+        },
+      });
+    }
+
     const assistantMessage = await db.teamMessage.create({
       data: {
         conversationId: conversation.id,
         role: "assistant",
         content: reply,
         taskIds: tasks.length > 0 ? JSON.stringify(tasks.map((task) => task.id)) : null,
+        createdAt: new Date(replyTime.getTime() + 2),
       },
     });
     await db.teamConversation.update({
