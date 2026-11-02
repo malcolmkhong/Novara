@@ -28,6 +28,7 @@ import { chatJson } from "@/lib/novara/ai-json";
 import { withTimeout } from "@/lib/novara/api-helpers";
 import { countWords } from "@/lib/novara/words";
 import { assessOverwrite } from "@/lib/novara/write-gate";
+import { buildMemoryView, formatMemoryLines, queryMemory } from "@/lib/novara/memory";
 import type {
   AgentEvent,
   AgentEventKind,
@@ -948,6 +949,35 @@ async function executeTool(params: ExecuteToolParams): Promise<ToolResult & { st
       return {
         ok: true,
         feed: `read_foreshadows → ok (${ledger.length} entries)\n${ledger.map((f) => `- [${f.id}] ${f.status}, planted ch${f.plantChapter}: ${f.content}`).join("\n") || "(empty)"}`,
+      };
+    }
+    case "memory_query": {
+      // Phase 4: scored lookup over the story bible (deterministic, no AI cost).
+      const items = await queryMemory({
+        novelId: params.novelId,
+        query: action.query,
+        category: action.category,
+      });
+      if (items.length === 0) {
+        return {
+          ok: true,
+          feed: `memory_query("${truncate(action.query, 60)}") → 0 hits — nothing in the settled story bible matches. Do NOT invent canon to fill the gap.`,
+        };
+      }
+      return {
+        ok: true,
+        feed: `memory_query("${truncate(action.query, 60)}") → ok (${items.length} items)\n${formatMemoryLines(items).join("\n")}`,
+      };
+    }
+    case "doctor_scan": {
+      // Deterministic consistency checks (bible/ledger/coverage/cast).
+      const view = await buildMemoryView(params.novelId);
+      const lines = view.doctor.map(
+        (d) => `- [${d.status.toUpperCase()}] ${d.name}: ${d.detail}`
+      );
+      return {
+        ok: true,
+        feed: `doctor_scan → ok (${view.doctor.filter((d) => d.status !== "pass").length} finding(s))\n${lines.join("\n")}`,
       };
     }
 

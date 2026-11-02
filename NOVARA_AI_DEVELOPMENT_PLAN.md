@@ -1,10 +1,11 @@
 # NOVARA AI — Development Plan (AI Novel Writer)
 
-> Status: PLAN v1.3（Phase 3 Agent Runtime 已实装并 E2E 实测 · Atlas 规划 + Sage 工具循环 + 审批门 + 终报核验全链路真实运行） · Date: 2026-11
+> Status: PLAN v1.4（Phase 4 RAG & Memory v1 实装并 E2E 实测 · memory_query/doctor_scan 已工具化进 agent 工具循环） · Date: 2026-11
 > 核心原则: 先简化架构，再逐步扩展 · MVP 优先 · 每个技术选择附理由 · 过程透明（§4.1）
 > v1.0→v1.1: 现状基线刷新（官网/Writer/API 已建成并 E2E 实测）+ 新增 §4.1 Agent-Driven Task Board（D1/D2）+ §11 Phase 重校准（含官网承诺映射）
 > v1.1→v1.2: Writer 壳重组为三栏 Agent Workbench（对话第一界面；内联审批卡；左树实时徽章；工件层警示条）——§4.1 UI 规格已按实施更新
 > v1.2→v1.3: **Phase 3 核心落地**——AgentRun/AgentTask/AgentEvent 三表 + agent/ 内容层（budgets.yaml 收编魔法数）+ 工具循环（novel-tool/novel-write 行协议）+ 四防线 + SSE 推流 + 双执行模式；mock 网关已切换为 live API（agent-client 单点换线）。E2E 实测：审批链路/拒绝→paused/Full Access 连续执行/虚报被核验标红 全部真实发生
+> v1.3→v1.4: **Phase 4 收尾——memory 工具化**——memory_query（打分查询故事记忆，零命中反幻觉引导）+ doctor_scan（一致性体检）进入 Sage 工具循环（tool-protocol/runtime/sage.md 同步）；E2E 实测：dev.log MAX(index) 指纹证明模型真实调用 memory_query ×3，Task 1 依据记忆审读 → Task 2 写 Chapter 3 落库，写入核验修复轮照常触发
 
 ---
 
@@ -259,9 +260,9 @@ pending → in_progress → needs_approval → done
 ## 7. Tools & Skills
 
 ### 7.1 工具清单（协议: ```novel-tool JSON 块 + ```novel-write 正文块，代码解析执行）
-- **已实装（Phase 3）** — Atlas: 目标→任务板规划（chatJson，非工具协议）；Sage 执行器: read_novel / read_chapter / read_outline / read_foreshadows + create_chapter / update_chapter / update_outline_beat / finish；防覆盖闸=write-gate.ts 代码强制（runtime 永不自确认）
+- **已实装（Phase 3+4）** — Atlas: 目标→任务板规划（chatJson，非工具协议）；Sage 执行器: read_novel / read_chapter / read_outline / read_foreshadows + **memory_query（打分查记忆，零命中反幻觉引导）/ doctor_scan（一致性体检）**（P4 已接入）+ create_chapter / update_chapter / update_outline_beat / finish；防覆盖闸=write-gate.ts 代码强制（runtime 永不自确认）
 - **v1.3 偏差记录**：create_foreshadow / update_foreshadow **不开放给 agent**——§5.3 单一真相源优先：沉淀管线是 Foreshadow/StoryFact/CharacterState/ChapterDigest 的唯一写入方，agent 只读台账；此为对旧引擎工具面的有意收窄
-- Phase 5 新增: team-delegate（Leader）+ mission-lock 信封 + skills 注入；P4 新增: memory_query / reference_search / doctor_scan
+- Phase 5 新增: team-delegate（Leader）+ mission-lock 信封 + skills 注入；P4 新增: ~~memory_query / doctor_scan~~（已接入，v1.4）；reference_search 顺延 Phase 5（依赖 references 表）
 - 规则: 每轮 ≤3 动作（budgets.yaml）；所有写入真实且永久；id 只能来自快照/读取结果
 
 ### 7.2 Skills（agent/ 目录, YAML frontmatter, 按 appliesTo 注入）
@@ -368,8 +369,9 @@ pending → in_progress → needs_approval → done
 - ✅ **Memory 视图 API**：GET /api/novels/[id]/memory（items 全量 contract 形 + digests + stats + doctor）；FACT 行产出的 open_loop 类事实（无台账 status）单独计 loopFacts，对账不隐藏
 - ✅ **doctor 体检（确定性，零 AI 成本）**：bible-integrity（幽灵章引用）· foreshadow-ledger（≥N 章未推进 warn）· memory-coverage（未沉淀章 warn / 空记忆 fail）· cast-recognition（state 名不在 cast warn）——实测抓出真实数据质量信号（cast-recognition warn）
 - ✅ **Memory 面板接真数据**：计数徽章/分类 chips/搜索/循环状态徽章（open·advanced·paid）/Story so far/doctor 卡/空状态指引；mock 移除；Agent Browser E2E：有数据书 25 items 全交互（搜索 25→11、筛选 6/6）✓ 空书 empty state ✓ 移动端 sheet ✓
-- ⬜ 顺延：memory_query / reference_search 工具化（进 agent 工具循环）· StateChange「最近变化」通道 · 冲突检测 · ChapterChunk FTS5（规模到几千条前不需要）
-- **验收（v1）**: ✅ 沉淀书面板全真数据可检索可过滤；✅ draft 提示词自动携带该章相关记忆+前情 digest；✅ doctor 报真实完整性；向量 go/no-go 已留档
+- ✅ **memory 工具化（v1.4 收尾，2026-11 E2E 实测）**：`memory_query`（queryMemory 自由打分查询：CJK bigram + latin 词元，锚定最新章=叙事现在时；零命中 feed 反幻觉引导「Do NOT invent canon」）+ `doctor_scan`（复用 buildMemoryView 四项检查）进入 Sage 工具循环；sage.md 加 MEMORY DISCIPLINE 段（先查后写、事实即正典、零命中不得虚构记忆）。实测证据：写章 run（The Lifespan Exchange）dev.log 出现 queryMemory 特有 MAX(index) 指纹 ×3（模型真实调用）；Task 1 审读记忆→Task 2 写 Chapter 3 落库；写入核验修复轮照常工作
+- ⬜ 顺延：reference_search（依赖 references 表，Phase 5）· StateChange「最近变化」通道 · 冲突检测 · ChapterChunk FTS5（规模到几千条前不需要）
+- **验收（v1）**: ✅ 沉淀书面板全真数据可检索可过滤；✅ draft 提示词自动携带该章相关记忆+前情 digest；✅ doctor 报真实完整性；✅ agent 工具循环内可查记忆+体检（E2E 指纹验证）；向量 go/no-go 已留档
 
 ### Phase 5 — Multi-Agent System
 - 全员就位 + 专属 skills 充实 + delegate `skills` 字段 + mission-lock

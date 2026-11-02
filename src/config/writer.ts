@@ -128,8 +128,8 @@ export const ARTIFACT_TABS: ArtifactTabDef[] = [
   { id: "draft", label: "Draft" },
   { id: "outline", label: "Outline" },
   { id: "bible", label: "Bible" },
-  { id: "review", label: "Review", phaseTag: "Phase 2" },
-  { id: "memory", label: "Memory", phaseTag: "Phase 4" },
+  { id: "review", label: "Review" },
+  { id: "memory", label: "Memory" },
 ];
 
 // ---------------------------------------------------------------------------

@@ -357,6 +357,54 @@ export async function retrieveMemory(
 }
 
 // ---------------------------------------------------------------------------
+// Free-form agent query (Phase 4: the memory_query tool inside the agent
+// tool loop — plan §7.1). Unlike retrieveMemory (which scores for ONE
+// drafting moment), queryMemory scores an arbitrary question the agent asks
+// mid-run, anchored on the novel's latest chapter (the agent lives in the
+// narrative present).
+// ---------------------------------------------------------------------------
+
+export interface QueryMemoryInput {
+  novelId: string;
+  query: string;
+  /** Optional category filter — e.g. only open_loop when checking promises. */
+  category?: MemoryCategory;
+}
+
+/**
+ * Score the sediment layer against a free-form query. Returns items sorted
+ * by score (no prompt block — the caller renders via formatMemoryLines).
+ */
+export async function queryMemory(
+  input: QueryMemoryInput
+): Promise<ScoredMemoryItem[]> {
+  const budgets = getBudgets().memory;
+
+  const [rawItems, maxAgg] = await Promise.all([
+    collectSedimentItems(input.novelId),
+    db.chapter.aggregate({
+      where: { novelId: input.novelId },
+      _max: { index: true },
+    }),
+  ]);
+
+  const nowIndex = maxAgg._max.index ?? 1;
+  const filtered = input.category
+    ? rawItems.filter((i) => i.category === input.category)
+    : rawItems;
+
+  // scoreItems needs a chapterIndex anchor — the story's present tense.
+  const { scored } = scoreItems(filtered, nowIndex, input.query);
+  return scored.slice(0, budgets.topK);
+}
+
+/** Render items as deterministic feed lines (shared with the prompt block). */
+export function formatMemoryLines(items: ScoredMemoryItem[]): string[] {
+  const budgets = getBudgets().memory;
+  return items.map((i) => renderLine(i, budgets.itemContentChars));
+}
+
+// ---------------------------------------------------------------------------
 // Memory view (Memory tab + deterministic doctor)
 // ---------------------------------------------------------------------------
 

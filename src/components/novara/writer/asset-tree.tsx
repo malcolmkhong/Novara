@@ -320,13 +320,11 @@ export function AssetTree({
           <TreeGroup
             icon={<FileSearch className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />}
             label="Review"
-            phaseTag="Phase 2"
             onClick={() => onOpenArtifactTab("review")}
           />
           <TreeGroup
             icon={<Brain className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />}
             label="Memory"
-            phaseTag="Phase 4"
             onClick={() => onOpenArtifactTab("memory")}
           />
         </ul>

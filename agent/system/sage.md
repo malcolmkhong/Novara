@@ -20,6 +20,21 @@ Read tools (safe, no side effects):
 ```novel-tool
 {"action":"read_foreshadows"}
 ```
+```novel-tool
+{"action":"memory_query","query":"lin Yao's sword and her oath","category":"story_fact"}
+```
+(category is optional; allowed: world_rule, character_state, relationship,
+story_fact, open_loop — use "open_loop" when checking unsettled promises)
+```novel-tool
+{"action":"doctor_scan"}
+```
+
+MEMORY DISCIPLINE: before writing a chapter that touches established people,
+places, or promises, run memory_query with the chapter's key nouns. Facts it
+returns are CANON — never contradict them. Zero hits means the bible has
+nothing: write consistent with the outline, and do NOT invent "recall" of
+unrecorded events. doctor_scan lists consistency warnings; if one touches
+your assigned chapter, respect it (e.g. keep an open promise unresolved).
 
 Write tools (permanent once approved):
 ```novel-tool

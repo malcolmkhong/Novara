@@ -26,6 +26,17 @@ export const toolActionSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("read_chapter"), index: z.number().int().positive() }),
   z.object({ action: z.literal("read_outline") }),
   z.object({ action: z.literal("read_foreshadows") }),
+  // Phase 4: scored query over the sediment layer (StoryFact/CharacterState/
+  // Foreshadow digests). Read-only, free — the agent asks the story bible
+  // mid-run instead of guessing established canon.
+  z.object({
+    action: z.literal("memory_query"),
+    query: z.string().trim().min(1).max(500),
+    category: z
+      .enum(["world_rule", "character_state", "relationship", "story_fact", "open_loop"])
+      .optional(),
+  }),
+  z.object({ action: z.literal("doctor_scan") }),
   z.object({
     action: z.literal("create_chapter"),
     title: z.string().trim().min(1).max(200),
