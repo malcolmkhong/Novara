@@ -1,9 +1,10 @@
 # NOVARA AI — Development Plan (AI Novel Writer)
 
-> Status: PLAN v1.2（三栏 Agent Workbench 壳已实施 · Agent Task Board UI 地基就绪） · Date: 2026-11
+> Status: PLAN v1.3（Phase 3 Agent Runtime 已实装并 E2E 实测 · Atlas 规划 + Sage 工具循环 + 审批门 + 终报核验全链路真实运行） · Date: 2026-11
 > 核心原则: 先简化架构，再逐步扩展 · MVP 优先 · 每个技术选择附理由 · 过程透明（§4.1）
 > v1.0→v1.1: 现状基线刷新（官网/Writer/API 已建成并 E2E 实测）+ 新增 §4.1 Agent-Driven Task Board（D1/D2）+ §11 Phase 重校准（含官网承诺映射）
 > v1.1→v1.2: Writer 壳重组为三栏 Agent Workbench（对话第一界面；内联审批卡；左树实时徽章；工件层警示条）——§4.1 UI 规格已按实施更新
+> v1.2→v1.3: **Phase 3 核心落地**——AgentRun/AgentTask/AgentEvent 三表 + agent/ 内容层（budgets.yaml 收编魔法数）+ 工具循环（novel-tool/novel-write 行协议）+ 四防线 + SSE 推流 + 双执行模式；mock 网关已切换为 live API（agent-client 单点换线）。E2E 实测：审批链路/拒绝→paused/Full Access 连续执行/虚报被核验标红 全部真实发生
 
 ---
 
@@ -14,7 +15,8 @@
 - **官网已建成并通过 Agent Browser E2E 实测**（v1.0 时为计划项）：五页面（Home 11 Sections / Product / Plans / About / AI Writer）+ Terms/Privacy 法务页；hash 路由；Login 直通 Writer（无认证，guest session）；移动端响应式与 Footer 贴底验证通过
 - **AI Writer 已建成**：novel dashboard / workspace（Chapters·Characters·World·Outline·AI Team 五标签）/ chapter editor / 版本化 JSON 导入导出（`format: novara-novel-backup, version: 1` + integrity 计数校验块，E2E 实测可用）
 - **API 已建成**：novels / chapters / characters / world-entries / outline-beats CRUD + import + ai/draft（实验）
-- 当前 schema 6 models：`User`（NextAuth 预留，未使用）· `Novel` · `Chapter`（wordCount 服务端重算）· `Character` · `WorldEntry` · `OutlineBeat`；v1.0 所述 12 models 旧命名已随 Atlas 清理废弃
+- **Agent Runtime 已实装（Phase 3 · 2026-11 E2E 实测）**：`POST /api/agent/runs` + `GET …/[id]` + `…/approve|cancel|mode` + SSE `…/events`；Atlas 规划（chatJson）→ Sage 顺序执行（bounded 工具循环 ≤3 轮）→ 写入核验（修复轮）→ 审批门（写入暂停待批准，批准由代码提交）→ 终报核验（claimed vs verified 对照）。实测证据：废土书全链路（规划 1 任务→起草 539 词→审批→入档→completed，模型虚报 666 词被标注）；abc 书诚实 BLOCKED（第1章为空时拒绝幻觉）；Full Access 直写 375 词无闸口，虚报 chaptersWritten=3/words=1194 被双条核验注记戳穿；Reject→paused 零写入
+- 当前 schema 13 models：`User`（预留）· `Novel` · `Chapter` · `Character` · `WorldEntry` · `OutlineBeat` + 沉淀四表 `ChapterDigest/StoryFact/CharacterState/Foreshadow` + Agent 三表 `AgentRun/AgentTask/AgentEvent`
 - ~~已知缺陷：`POST /api/ai/draft` 运行时 401~~ → **已修复（2026-11 实测）**：GLM 凭据注入恢复正常，POST /api/ai/draft 返回 200 + 真实 prose（append/fill 双模式 E2E 实测通过）
 - v1.0 引用的旧引擎参考件（server.ts 1396 行 / novel-tools.ts / prompts.ts）**现已不在磁盘**；其机制设计已收录本计划 §4/§7/§8，作为重建蓝本
 - DB 数据完好（真实样例书可读写）；平台自带 `/skills/` 目录为 Z.ai 资产，不计入本项目、不依赖、不修改
@@ -246,21 +248,21 @@ pending → in_progress → needs_approval → done
 - v1.0 所述 Team*/Foreshadow 旧命名已随 Atlas 清理废弃；以下新增清单即本计划完整演进路径（沉淀类列随 Phase 2 引入时细化）
 
 ### 新增（按阶段）
-- **P3（Agent Runtime + Task Board · §4.1 配套）**:
-  - `AgentRun` — novelId / goal / mode: approval|full_access / status: running|awaiting_approval|paused|completed|failed|cancelled / finalReport?
-  - `AgentTask` — runId / key（如 Task 3-a）/ parallelGroup? / title / detail / status: pending|in_progress|needs_approval|blocked|failed|done / artifactType? / artifactId? / order
-  - `AgentEvent` — runId / taskId? / kind: task_update|tool_call|write|message|error|approval / summary / payload? / createdAt（活动流即 SSE 负载）
-  - `AgentConversation` / `AgentMessage` — leader 会话持久化（聊天与任务信封分层，沿 v1.0 §4 能力 6 设计）
+- **P3（已落地 · 2026-11）**:
+  - `AgentRun` — novelId / goal / mode: approval|full_access / status: running|awaiting_approval|paused|completed|failed|cancelled / finalReport(JSON) / error
+  - `AgentTask` — runId / key（Task N）/ parallelGroup(现固定 null) / title / detail / status: pending|in_progress|needs_approval|blocked|failed|done / artifactType/artifactId/artifactLabel / order
+  - `AgentEvent` — runId / taskId? / kind: task_update|tool_call|write|message|error|approval / summary / payload(JSON，**审批挂起的写入也存于此**)/ createdAt
+  - ⬜ `AgentConversation` / `AgentMessage` — 顺延 Phase 5（见 Phase 3 诚实标注）
 - P4: `MemoryItem`（novelId/category/status: active|resolved/confidence/content/sourceChapter/firstSeen/lastSeen）· `ChapterChunk`（novelId/chapterId/seq/text + FTS5 虚表 raw migration）· `StateChange`（实体/章/旧值/新值，供"最近变化"召回）
 - P5: `SkillInvocation`（taskId/skillId/verdict，追溯用）
 
 ## 7. Tools & Skills
 
 ### 7.1 工具清单（协议: ```novel-tool JSON 块 + ```novel-write 正文块，代码解析执行）
-- Leader（只读+派单）: list_novels / read_novel / read_chapter / read_foreshadows / team-delegate — 逐字 TOOL INVENTORY 锚定
-- Member（读写）: 4 读 + create_novel / create_chapter / update_novel / update_chapter_content / update_chapter_outline / create_foreshadow / update_foreshadow + novel-write 块；防覆盖闸=代码强制
-- P4 新增工具: memory_query(category/query) / reference_search(table/query) / doctor_scan
-- 规则: 每轮 ≤3 动作；所有写入真实且永久；id 只能来自快照/读取结果
+- **已实装（Phase 3）** — Atlas: 目标→任务板规划（chatJson，非工具协议）；Sage 执行器: read_novel / read_chapter / read_outline / read_foreshadows + create_chapter / update_chapter / update_outline_beat / finish；防覆盖闸=write-gate.ts 代码强制（runtime 永不自确认）
+- **v1.3 偏差记录**：create_foreshadow / update_foreshadow **不开放给 agent**——§5.3 单一真相源优先：沉淀管线是 Foreshadow/StoryFact/CharacterState/ChapterDigest 的唯一写入方，agent 只读台账；此为对旧引擎工具面的有意收窄
+- Phase 5 新增: team-delegate（Leader）+ mission-lock 信封 + skills 注入；P4 新增: memory_query / reference_search / doctor_scan
+- 规则: 每轮 ≤3 动作（budgets.yaml）；所有写入真实且永久；id 只能来自快照/读取结果
 
 ### 7.2 Skills（agent/ 目录, YAML frontmatter, 按 appliesTo 注入）
 
@@ -324,12 +326,12 @@ pending → in_progress → needs_approval → done
 
 > **官网公开路线图 ↔ 本计划映射**：Site P1 Core foundation = Phase 1 · Site P2 Novel creation system = Phase 2 · Site P3 Agent runtime = Phase 3 · Site P4 RAG & story memory = Phase 4 · Site Full AI team = Phase 5 · Site Quality & optimization = Phase 6。官网进度标注与本计划状态同步更新，不虚构。
 
-### Phase 1 — Core Foundation（MVP 地基）— 大部分已建成 ✅
-- ✅ Novara schema 定稿 + db:push（6 models；旧 Atlas 脚手架已清理，User 保留为认证预留）
+### Phase 1 — Core Foundation（MVP 地基）— 已建成 ✅
+- ✅ Novara schema 定稿 + db:push（10 models 含沉淀四表；旧 Atlas 脚手架已清理，User 保留为认证预留）
 - ✅ 书籍/章节/角色/世界观/大纲 CRUD API + AI Writer UI（dashboard/workspace/editor）+ 版本化导入导出 + 官网五页（E2E 实测通过）
-- ⬜ `agent/` 目录骨架 + content.ts 加载器（zod fail-fast）+ budgets.yaml 收编全部魔法数
-- ⬜ SSE 总线重建（第一类负载 = Agent Task Board 状态流，§4.1）
-- **验收（剩余项）**: 内容文件缺失→启动报错; SSE 断线重连全量对账正确
+- ✅ `agent/` 目录骨架 + content.ts 加载器（zod fail-fast + 缓存）+ **budgets.yaml 收编魔法数**（2026-11：QUOTA 300/4000、GLM 超时、回合/动作预算、上下文裁剪、SSE 间隔等全部入库；ai-json/draft 共享同一真相源）
+- ✅ SSE 实现落地（Phase 3 交付：`/api/agent/runs/[id]/events` 全量快照推流 + 变更签名去重 + 心跳；断线重连天然对账）
+- **验收**: 已达成（内容层文件缺失会 fail-fast；SSE 断线重连全量对账由全量快照机制保证）
 
 ### Phase 2 — Novel Creation System — 部分建成
 - ✅ 章节编辑器 + AI 起草（实验性 /api/ai/draft，内容经用户编辑回环才落库）
@@ -345,14 +347,19 @@ pending → in_progress → needs_approval → done
 - ✅ **markdown 整书导出（2026-11 实测）**：`GET /api/novels/[id]/export/markdown`（meta+cast+world+outline+全部章节单文件 .md，Content-Disposition 附件）；Export 对话框新增 Markdown 按钮（JSON 备份用于重导入，MD 用于阅读）——**Phase 2 验收链路「建书→规划→写1章→审查→沉淀→导出」全环闭合**
 - **验收**: 建书→规划→写1章（AI 起草落库）→审查→沉淀→导出 全流程走通
 
-### Phase 3 — Agent Runtime & Task Board（MVP 完成线 · D1/D2 核心交付）
-- 工具循环硬化 + run/任务队列（认领/进度/日志/收尾自愈/断点续跑/paused）
-- 防线重建: 写入核验/目标章核验/数字审计/幽灵id清洗/WRITE_CLAIM_RE(含"同步")/防覆盖闸
-- 后台执行 + heal 轮询 + leader followup 链
-- **Agent Task Board 全量落地（§4.1 · D1）**：AgentRun/AgentTask/AgentEvent 落库 + Todos 卡片 UI（计数徽章/Task ID/并行组/状态图标）+ SSE 实时推送 + 断线对账 + 活动流（工具调用/写入/错误如实展示）
-- **双执行模式（§4.1 · D2）**：Approval 默认（首批闸口：章节入档 final / 批量改写 / 删除性操作）+ Full Access 开关（不可逆操作仍停）+ 审批对话框（写入摘要预览，拒绝→paused 不改库）+ run 取消
-- AI Team 标签页升级：静态介绍 → 运行视图（当前 run 绑定实时状态，7 Agent 角色卡保留）
-- **验收（MVP Gate）**: 派单写章 → Todos 面板实时可见每一步 → 后台完成 → DB 有货 → 报告数字=DB 实测 → Approval 模式未批准不入库（拒绝→paused 实测）→ Full Access 连续完成且闸口跳过留痕 → 虚报被核验戳打脸（人为注入一次虚假声明做红队测试）
+### Phase 3 — Agent Runtime & Task Board（MVP 完成线 · D1/D2 核心交付）— 核心已实装 ✅（2026-11 E2E 实测）
+- ✅ **Schema + API**：AgentRun/AgentTask/AgentEvent 三表落库；`POST /api/agent/runs`（after() 后台执行）、`GET …/[id]`、`…/approve`（approve/reject）、`…/cancel`、`…/mode`、`…/events` SSE（变更签名去重 + 心跳 + 终态自动关流）
+- ✅ **内容层**：agent/config/budgets.yaml + team.yaml + skills.yaml；agent/system/atlas.md + sage.md；agent/skills/*（decomposition/ground-truth/chapter-writing/novel-write-contract/output-contract）；content.ts 加载器（zod + cache + fail-fast，budgets 降级到默认值）
+- ✅ **工具循环（bounded）**：novel-tool JSON 块 + novel-write 正文块 + run-report 块 + BLOCKED 拒绝行；每轮 ≤3 动作、每任务 ≤3 轮；jsonrepair 抢救畸形 JSON；围栏容错（空格/换行语言标记/未闭合围栏，4 例单测通过）；写评分离（读免费/写永久）
+- ✅ **四防线**：①写入核验（章节任务零落库→修复轮 ≤2→failed，实测触发）；②目标章核验（正文必经服务端 wordCount 重算）；③E2 审查门（沉淀入口已在 Phase 2 落地；agent 产物的审查门随修订回路在 Phase 6 定稿）；④数字审计（run-report claimed vs DB verified，**实测两次虚报被标红**：666vs539 词、3章1194词 vs 1章375词）
+- ✅ **防覆盖闸复用**：write-gate.ts 单实现双调用方（HTTP PATCH + runtime）；runtime 永不自确认 overwrite，非空章替换无论何种模式一律进审批门（不可逆操作白名单）
+- ✅ **Agent Task Board（D1）**：任务由 Atlas 自主拆解（chatJson + zod），Todos 看板实时反映（SSE 推流）；任务 done 只在真实写入验证后由代码翻转
+- ✅ **双执行模式（D2）**：Approval 默认（章节内容写入全部进闸）；Full Access 直写但不可逆操作仍停；审批期模式开关禁用；拒绝→paused 零写入（实测）；运行中切模式即时生效（下一闸口起）
+- ✅ **诚实 BLOCKED**：上下文不足时模型拒绝幻觉（abc 书实测：第1章为空→BLOCKED→任务 blocked）
+- ✅ **韧性**：healStaleRuns（15 分钟无事件→failed）；执行器轮询 run.status 等待审批（无状态跨热重载）；取消→abort + 任务 blocked
+- ⬜ **Phase 5 顺延**：delegate 多智能体派单（parallelGroup 现固定 null，顺序执行）；nova/prism/forge 角色卡；skills 注入协议
+- ⬜ **明确顺延（诚实标注）**：AgentConversation/AgentMessage 会话持久化（run 事件流已覆盖任务历史；无 run 的纯聊天持久化随 Phase 5 会话 UI 一起做）；clarify-before-act 的 ASK 回问协议（当前任务不可行→BLOCKED→blocked，无交互回问）；大纲→章节工作流（随 run 系统现已部分打通：Atlas 可规划写章任务）
+- **验收（MVP Gate）**: ✅ 派单写章→Todos 实时可见→后台完成→DB 有货→报告数字=DB 实测（虚报被标红×2）→Approval 未批准不入库（拒绝→paused 实测）→Full Access 连续完成且闸口跳过留痕（approval events=0）
 
 ### Phase 4 — RAG & Memory System
 - MemoryItem/ChapterChunk/StateChange 落地 + FTS5 验证

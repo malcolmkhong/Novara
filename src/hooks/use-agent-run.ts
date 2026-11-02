@@ -4,8 +4,8 @@
 // Novara AI — React binding for the Agent Task Board (plan §4.1).
 // One hook per workspace: it restores an active run (survives tab switches
 // within the session) and keeps the UI in sync via the gateway's subscribe.
-// The mock gateway pushes on timers; the live gateway will push via SSE with
-// the same callback shape, so this hook survives the swap unchanged.
+// The live gateway pushes via SSE (full snapshots) with polling fallback;
+// all mutations are async REST calls — the hook awaits and re-sets state.
 // ---------------------------------------------------------------------------
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -33,52 +33,88 @@ export function useAgentRun(novelId: string): UseAgentRunResult {
   const [loading, setLoading] = useState(true);
   const novelRef = useRef(novelId);
   novelRef.current = novelId;
+  const detailRef = useRef<AgentRunDetail | null>(null);
+  detailRef.current = detail;
+  const unsubRef = useRef<(() => void) | undefined>(undefined);
 
   // Restore an active run for this novel (if any), then subscribe.
   useEffect(() => {
-    let unsub: (() => void) | undefined;
     let alive = true;
     setLoading(true);
-    try {
-      const existing = agentGateway.activeRunFor(novelId);
-      setDetail(existing);
-      if (existing) {
-        unsub = agentGateway.subscribe(existing.run.id, (next) => {
-          if (alive) setDetail(next);
-        });
+    (async () => {
+      try {
+        const existing = await agentGateway.activeRunFor(novelId);
+        if (!alive) return;
+        setDetail(existing);
+        if (existing) {
+          unsubRef.current?.();
+          unsubRef.current = agentGateway.subscribe(existing.run.id, (next) => {
+            if (novelRef.current === next.run.novelId) setDetail(next);
+          });
+        }
+      } catch (error) {
+        console.error("[use-agent-run] restore failed", error);
+        if (alive) setDetail(null);
+      } finally {
+        if (alive) setLoading(false);
       }
-    } finally {
-      if (alive) setLoading(false);
-    }
+    })();
     return () => {
       alive = false;
-      unsub?.();
+      unsubRef.current?.();
+      unsubRef.current = undefined;
     };
   }, [novelId]);
 
   const start = useCallback(async (options: MockStartOptions) => {
-    const started = agentGateway.start(options);
+    const started = await agentGateway.start(options);
+    if (novelRef.current !== started.run.novelId) return started;
     setDetail(started);
-    agentGateway.subscribe(started.run.id, (next) => {
+    unsubRef.current?.();
+    unsubRef.current = agentGateway.subscribe(started.run.id, (next) => {
       if (novelRef.current === next.run.novelId) setDetail(next);
     });
     return started;
   }, []);
 
   const approve = useCallback(async (taskId: string) => {
-    setDetail((d) => (d ? agentGateway.approve(d.run.id, taskId) : d));
+    const current = detailRef.current;
+    if (!current) return;
+    try {
+      setDetail(await agentGateway.approve(current.run.id, taskId));
+    } catch (error) {
+      console.error("[use-agent-run] approve failed", error);
+    }
   }, []);
 
   const reject = useCallback(async (taskId: string) => {
-    setDetail((d) => (d ? agentGateway.reject(d.run.id, taskId) : d));
+    const current = detailRef.current;
+    if (!current) return;
+    try {
+      setDetail(await agentGateway.reject(current.run.id, taskId));
+    } catch (error) {
+      console.error("[use-agent-run] reject failed", error);
+    }
   }, []);
 
   const cancel = useCallback(async () => {
-    setDetail((d) => (d ? agentGateway.cancel(d.run.id) : d));
+    const current = detailRef.current;
+    if (!current) return;
+    try {
+      setDetail(await agentGateway.cancel(current.run.id));
+    } catch (error) {
+      console.error("[use-agent-run] cancel failed", error);
+    }
   }, []);
 
   const setMode = useCallback(async (mode: AgentRunMode) => {
-    setDetail((d) => (d ? agentGateway.setMode(d.run.id, mode) : d));
+    const current = detailRef.current;
+    if (!current) return;
+    try {
+      setDetail(await agentGateway.setMode(current.run.id, mode));
+    } catch (error) {
+      console.error("[use-agent-run] setMode failed", error);
+    }
   }, []);
 
   const approval = detail?.pendingApproval ?? null;

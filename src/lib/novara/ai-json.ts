@@ -1,8 +1,10 @@
 import ZAI from "z-ai-web-dev-sdk";
 import { jsonrepair } from "jsonrepair";
 import { withTimeout } from "@/lib/novara/api-helpers";
+import { getBudgets } from "@/lib/novara/content";
 
-const GLM_TIMEOUT_MS = 60_000;
+// Budget single-source: timeout lives in agent/config/budgets.yaml (glm.timeoutMs).
+const glmTimeoutMs = () => getBudgets().glm.timeoutMs;
 
 /**
  * GLM JSON helper: asks the model for a strict JSON object, then parses and
@@ -34,7 +36,7 @@ export async function chatJson<T>(opts: {
           ],
           thinking: { type: "disabled" },
         }),
-        GLM_TIMEOUT_MS,
+        glmTimeoutMs(),
         opts.tag
       );
       const raw = completion.choices[0]?.message?.content?.trim() ?? "";

@@ -16,7 +16,7 @@
 // flows down to the panes; the agent run instance is owned once, here.
 // ---------------------------------------------------------------------------
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   FolderTree,
   Loader2,
@@ -100,6 +100,21 @@ export function WorkbenchShell({
   const { toast } = useToast();
   const { novel } = detail;
   const run = useAgentRun(novel.id);
+
+  // A run settles domain data behind our backs (chapters created/updated in
+  // the DB by the executor or the approval commit). When the run reaches a
+  // resting state, refetch the novel so asset counts and drafts stay honest.
+  const runStatus = run.detail?.run.status;
+  const runId = run.detail?.run.id ?? null;
+  const settledRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!runStatus || !runId) return;
+    if (!["completed", "failed", "paused", "cancelled"].includes(runStatus)) return;
+    const marker = `${runId}:${runStatus}`;
+    if (settledRef.current === marker) return;
+    settledRef.current = marker;
+    void refresh();
+  }, [runStatus, runId, refresh]);
 
   const selectedChapterId = useWriterStore(
     (s) => s.selectedChapterByNovel[novel.id] ?? detail.chapters[0]?.id ?? null

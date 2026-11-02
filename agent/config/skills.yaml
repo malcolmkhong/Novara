@@ -1,0 +1,31 @@
+# ---------------------------------------------------------------------------
+# Novara AI — skills.yaml
+# Skill registry. Files live under agent/ (path relative to agent/).
+# appliesTo: atlas | member | all — injection filter for system prompts.
+# ---------------------------------------------------------------------------
+
+skills:
+  - id: atlas/task-decomposition
+    appliesTo: atlas
+    path: skills/atlas/task-decomposition.md
+    description: Split a goal into an executable, self-contained task board
+
+  - id: atlas/ground-truth-reporting
+    appliesTo: atlas
+    path: skills/atlas/ground-truth-reporting.md
+    description: Plan only against measurable story state; never invent facts
+
+  - id: sage/chapter-writing
+    appliesTo: member
+    path: skills/sage/chapter-writing.md
+    description: Chapter drafting pipeline — context, quota, hook, report
+
+  - id: shared/novel-write-contract
+    appliesTo: all
+    path: skills/shared/novel-write-contract.md
+    description: Code-enforced write protocol (novel-write blocks, gates)
+
+  - id: shared/output-contract
+    appliesTo: all
+    path: skills/shared/output-contract.md
+    description: Narration discipline + run-report verification block

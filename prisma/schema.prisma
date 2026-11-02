@@ -46,6 +46,7 @@ model Novel {
   storyFacts    StoryFact[]
   characterStates CharacterState[]
   foreshadows   Foreshadow[]
+  agentRuns     AgentRun[]
 
   @@index([updatedAt])
 }
@@ -198,4 +199,72 @@ model Foreshadow {
   novel Novel @relation(fields: [novelId], references: [id], onDelete: Cascade)
 
   @@index([novelId, status])
+}
+
+// ---------------------------------------------------------------------------
+// Agent runtime (Phase 3) — the Agent Task Board's source of truth (§4.1).
+// A run decomposes a goal into tasks, streams events, and pauses at gates.
+// Honesty rule: task `done` flips are written by the runtime AFTER a verified
+// DB write — never by model self-report. finalReport/payload hold JSON strings
+// (SQLite + Prisma: no JSON columns), serialized into the frozen DTO shapes
+// in lib/novara/agent-types.ts.
+// ---------------------------------------------------------------------------
+
+model AgentRun {
+  id       String   @id @default(cuid())
+  novelId  String
+  novel    Novel    @relation(fields: [novelId], references: [id], onDelete: Cascade)
+  goal     String
+  // approval | full_access
+  mode     String   @default("approval")
+  // running | awaiting_approval | paused | completed | failed | cancelled
+  status   String   @default("running")
+  // RunFinalReport JSON (reported vs verified numbers) — null until finished
+  finalReport String?
+  error    String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tasks  AgentTask[]
+  events AgentEvent[]
+
+  @@index([novelId, status])
+  @@index([updatedAt])
+}
+
+model AgentTask {
+  id     String   @id @default(cuid())
+  runId  String
+  run    AgentRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  // Display key: "Task 1", "Task 3-a" (letter = parallel group member)
+  key    String
+  parallelGroup String?
+  title  String
+  detail String   @default("")
+  // pending | in_progress | needs_approval | blocked | failed | done
+  status String   @default("pending")
+  // chapter | character | world_entry | outline_beat — binds to asset tree
+  artifactType  String?
+  artifactId    String?
+  artifactLabel String?
+  order  Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([runId, order])
+}
+
+model AgentEvent {
+  id     String   @id @default(cuid())
+  runId  String
+  run    AgentRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  taskId String?
+  // task_update | tool_call | write | message | error | approval
+  kind   String
+  summary String
+  // JSON payload string (write events carry the pending draft for the gate)
+  payload String?
+  createdAt DateTime @default(now())
+
+  @@index([runId, createdAt])
 }

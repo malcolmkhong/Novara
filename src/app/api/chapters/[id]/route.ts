@@ -2,6 +2,7 @@ import { db } from "@/lib/db";
 import { updateChapterSchema } from "@/lib/novara/schemas";
 import { jsonError, parseBody, validationError } from "@/lib/novara/api-helpers";
 import { countWords } from "@/lib/novara/words";
+import { assessOverwrite } from "@/lib/novara/write-gate";
 
 export const dynamic = "force-dynamic";
 
@@ -12,6 +13,8 @@ type Params = { params: Promise<{ id: string }> };
 // Anti-overwrite gate: replacing non-empty content requires `overwrite:
 // true` (explicit client confirmation) — otherwise 409 with
 // requiresOverwrite so the UI can ask. Title/status-only updates pass.
+// The gate logic lives in lib/novara/write-gate.ts and is shared with the
+// agent runtime write path (one rule, two callers).
 export async function PATCH(req: Request, { params }: Params) {
   const { id } = await params;
   const parsed = await parseBody(req);
@@ -23,21 +26,24 @@ export async function PATCH(req: Request, { params }: Params) {
   const existing = await db.chapter.findUnique({ where: { id } });
   if (!existing) return jsonError("Chapter not found", 404);
 
-  const contentChange =
-    schema.data.content !== undefined &&
-    schema.data.content !== existing.content;
-  const overwritesText = contentChange && existing.content.trim().length > 0;
-  if (overwritesText && schema.data.overwrite !== true) {
-    return Response.json(
-      {
-        error:
-          "This chapter already has content — confirm the overwrite to replace it.",
-        requiresOverwrite: true,
-        existingWords: existing.wordCount,
-        incomingWords: countWords(schema.data.content ?? ""),
-      },
-      { status: 409 }
-    );
+  if (schema.data.content !== undefined && schema.data.content !== existing.content) {
+    const verdict = assessOverwrite({
+      existingContent: existing.content,
+      incomingContent: schema.data.content,
+      overwrite: schema.data.overwrite,
+    });
+    if (verdict.blocked) {
+      return Response.json(
+        {
+          error:
+            "This chapter already has content — confirm the overwrite to replace it.",
+          requiresOverwrite: true,
+          existingWords: verdict.existingWords,
+          incomingWords: verdict.incomingWords,
+        },
+        { status: 409 }
+      );
+    }
   }
 
   const data: {

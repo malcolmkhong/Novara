@@ -1,0 +1,39 @@
+# ---------------------------------------------------------------------------
+# Novara AI — budgets.yaml
+# Single source of truth for every runtime magic number (development plan
+# §2.10, Phase 1 leftover: QUOTA 300/4000, GLM 60s, context caps… collected).
+# Loaded by src/lib/novara/content.ts with hard-coded defaults as fallback;
+# team.yaml / skills.yaml are fail-fast (required), budgets degrade gracefully.
+# ---------------------------------------------------------------------------
+
+glm:
+  timeoutMs: 60000            # per-call GLM timeout (matches withTimeout usage)
+  routeMaxDuration: 90        # export const maxDuration on AI route handlers
+  maxTurns: 3                 # bounded tool loop per task (Think→Tool→Observe ≤3)
+  maxActionsPerTurn: 3        # novel-tool blocks per turn (plan §7.1)
+  planMaxTasks: 8             # Atlas may not plan more than this
+  chapterContextChars: 24000  # max chapter text fed to GLM (review/sediment)
+  chapterTailChars: 6000      # previous-chapter tail inside write context
+  snapshotCastLimit: 12       # characters in the story snapshot
+  snapshotOutlineLimit: 40    # outline beats in the story snapshot
+  snapshotFactsLimit: 20      # story facts in the story snapshot
+  repairRounds: 2             # write-verification repair rounds per task
+
+draft:
+  quotaMinWords: 300          # QUOTA_MIN — chapter quota clamp floor
+  quotaMaxWords: 4000         # QUOTA_MAX — chapter quota clamp ceiling
+  avgChapterWordsSignal: 200  # min avg chapter length to trust as quota signal
+  fallbackChapterWords: [500, 800]  # EN fallback range without signals
+  appendFloorWords: 200       # append mode: minimum additional words
+
+sse:
+  snapshotIntervalMs: 1200    # server: DB poll interval while streaming
+  heartbeatMs: 15000          # server: SSE comment keepalive
+  staleRunMs: 900000          # 15 min without events → heal marks failed
+
+client:
+  fallbackPollMs: 2000        # browser polling fallback when SSE dies
+
+prompt:
+  systemPromptCapChars: 6000  # role card + skills concatenation cap
+  taskBriefCapChars: 1800     # task envelope detail cap
