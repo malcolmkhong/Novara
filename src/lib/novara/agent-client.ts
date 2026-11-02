@@ -24,6 +24,8 @@ export type StartOptions = MockStartOptions;
 export interface AgentGateway {
   start(options: StartOptions): Promise<AgentRunDetail>;
   activeRunFor(novelId: string): Promise<AgentRunDetail | null>;
+  /** Latest run of any status — history fallback for the conversation pane. */
+  latestRunFor(novelId: string): Promise<AgentRunDetail | null>;
   get(runId: string): Promise<AgentRunDetail | null>;
   subscribe(runId: string, cb: (detail: AgentRunDetail) => void): () => void;
   approve(runId: string, taskId: string): Promise<AgentRunDetail>;
@@ -43,6 +45,11 @@ const mockGateway: AgentGateway = {
     return mockAgentRuntime.start(options);
   },
   async activeRunFor(novelId) {
+    return mockAgentRuntime.activeRunFor(novelId);
+  },
+  async latestRunFor(novelId) {
+    // The mock runtime is in-memory and session-scoped — its latest run is
+    // whatever is active right now.
     return mockAgentRuntime.activeRunFor(novelId);
   },
   async get(runId) {
@@ -102,6 +109,13 @@ export const liveAgentGateway: AgentGateway = {
   async activeRunFor(novelId) {
     const res = await jsonFetch<{ detail: AgentRunDetail | null }>(
       `/api/agent/runs?novelId=${encodeURIComponent(novelId)}&active=1`
+    );
+    return res.detail;
+  },
+
+  async latestRunFor(novelId) {
+    const res = await jsonFetch<{ detail: AgentRunDetail | null }>(
+      `/api/agent/runs?novelId=${encodeURIComponent(novelId)}&latest=1`
     );
     return res.detail;
   },

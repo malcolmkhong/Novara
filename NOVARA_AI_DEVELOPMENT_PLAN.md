@@ -385,7 +385,7 @@ pending → in_progress → needs_approval → done
 - ✅ **遥测**：AgentEvent.actor（事件流角色归属，实测正确）+ SkillInvocation（skill 注入逐任务留痕）
 - ✅ **E2E 实测（The Lifespan Exchange）**：写章 run = Atlas 派 5 单（sage×2+prism×3）→ Chapter 4 落库 212 词 → 3 次审查 0 blocking → 虚报 3 处标红；nova+forge run = 伏笔研究 done + 导出构建 done + exportsRun 虚报标红；429 限流 run = 任务诚实 failed 零虚构
 - ✅ **UI**：对话流角色化气泡（头像+名字标签，Agent Browser 截图实证）+ 活动流 actor 前缀 + Task Board assignee 徽章 + Final report 文案更新（Mock→DB 验证）
-- ⬜ 顺延（诚实标注）：parallelGroup 并行执行（仍顺序，任务板已有并行组 UI）· AgentConversation/AgentMessage 纯聊天持久化 · clarify-before-act ASK 回问协议（BLOCKED→blocked 已覆盖不可行路径）· 题材参考库 references（reference_search 工具随之）· **blocking→定点修完整触发**（本轮审查 0 blocking 未实测修复单路径；代码路径+skill 纪律+终报核验已就位）
+- ⬜ 顺延（诚实标注）：parallelGroup 并行执行（仍顺序，任务板已有并行组 UI）· AgentConversation/AgentMessage 纯聊天持久化（**run 轨迹持久化+回看已闭合，Phase 6 追加**：刷新后自动恢复最近 run 轨迹 + 头部历史切换器可回看任意 run；仅"无 run 纯聊天"仍顺延）· clarify-before-act ASK 回问协议（BLOCKED→blocked 已覆盖不可行路径）· 题材参考库 references（reference_search 工具随之）· **blocking→定点修完整触发**（本轮审查 0 blocking 未实测修复单路径；代码路径+skill 纪律+终报核验已就位）
 - **验收**: ✅ 一句话→Atlas 拆单→Sage 写→Prism 审→leader 汇报全程无人工干预（修复单路径就位待真 blocking 触发）
 
 ### Phase 6 — Quality Control & Optimization — 核心已实装 ✅（2026-11 E2E 实测）
@@ -395,6 +395,7 @@ pending → in_progress → needs_approval → done
 - ✅ **性能韧性**：glm.ts ①瞬态错误重试（429/5xx/timeout 指数退避+抖动，retryAttempts=2）②全局在飞信号量（budgets.glm.maxConcurrent=2，防并行 run/特性踩踏供应商限流）；实测 429 穿透重试后 run 诚实 failed、任务标 failed 零虚构（15:40 run），冷却后续跑 run 恢复推进
 - ✅ **A/B 草稿**：`POST /api/ai/draft` `variants: 1-2` 参数，多变体生成返回（types.DraftResult.variants），主内容取首个变体
 - ✅ **导出打磨**：export.ts 单实现双调用方（作者下载 + Forge 工具循环）已随 Phase 5 落地；Phase 6 复核无回归
+- ✅ **会话历史回看（Phase 6 追加，作者反馈驱动）**：对话面板原本只恢复 active run（`active=1`），run 结束后刷新即丢轨迹（DB 事件完好但 UI 不读）；现新增 `latestRunFor`（任意状态最近 run 全量详情）+ `GET …/runs?latest=1` + hook 恢复回退（active 优先，否则取最近 run 终态快照，不订 SSE）+ 面板头部 **Run history 切换器**（状态·时间·目标预览，viewRun 按需加载任意历史 run 轨迹，active run 自动重订 SSE）——Agent Browser 实测：刷新后轨迹恢复 + 5 条历史切换 + 63 事件完整渲染 ✓
 - ✅ **E2E 实测（The Cartographer of Ashfall 10 beats 验收，分 3 段连续写作）**：ch1（写入核验修复轮 1/2、2/2 真实触发→第3次成功 398 词）→ prism 审查 3 issues 0 blocking → **E2 gate 放行 marked FINAL** → settle（5 facts/1 states/1 plants）；ch2 → 非空重写触发审批门（**full_access 下不可逆操作仍停**）→ 批准 385 词 → 0 blocking → FINAL → settled；ch3-5 逐章 draft→review→finalize→（补）settle 闭环；ch6-8 随后两段续跑补齐；收官 housekeeping run 3/3 settle 完成且**终报虚报×3（reviewsRun 6vs2/chaptersFinalized 6vs2/settlesRun 8vs3）被数字审计全部标红**——最终 DB：**8/8 章 final · 2,903 词 · 11 次审查全 0 blocking · 沉淀 8 digests/40 facts/16 states/8 foreshadows**；4 个中间 run 被 GLM 429 打断均诚实 failed 零虚构（韧性按设计工作，断点续跑恢复）——**0 虚报穿透 · 0 覆盖事故 · 审查闭环全链路真实**
 - ⬜ 顺延（诚实标注）：连续 10 章一次跑完受 GLM 供应商分钟级限流约束（韧性已按设计诚实失败+断点续跑；实际分 3 段达成 8 章——第 9/10 章未写，验收口径=连续自动写作机制成立）；AI 味检测（远期 P3）；blocking→定点修完整触发仍待真 blocking 实测（11 次审查全 0 blocking——门逻辑已由 evals 覆盖）；ch9/ch10 随需续写（runs 历史含 4 个 429-failed + 1 个 completed）
 - **验收**: ✅ E2 门定稿（final/settle 双闸 + evals 同源验证）· ✅ 修订回路 ≤2 轮 · ✅ 行为 evals 24/24 · ✅ 并发限流 + 429 韧性（4 次诚实失败实证）· ✅ A/B 草稿 · ✅ 连续自动写作 8 章（分 3 段）0 虚报穿透 0 覆盖事故 · ✅ 审查 11 次全 0 blocking 闭环 + 沉淀全量落库

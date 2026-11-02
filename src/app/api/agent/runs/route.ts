@@ -3,6 +3,7 @@
 //
 // GET  /api/agent/runs?novelId=…            → recent runs (summaries)
 // GET  /api/agent/runs?novelId=…&active=1   → active run DETAIL or null
+// GET  /api/agent/runs?novelId=…&latest=1   → latest run DETAIL (any status)
 // POST /api/agent/runs {novelId, goal, mode} → create + kick the executor
 //                                              via after() (response is fast;
 //                                              planning streams via SSE)
@@ -17,6 +18,7 @@ import {
   errorStatus,
   executeRun,
   healStaleRuns,
+  latestRunFor,
   listRuns,
 } from "@/lib/agent/runtime";
 
@@ -33,6 +35,11 @@ export async function GET(req: Request) {
 
   if (url.searchParams.get("active") === "1") {
     const detail = await activeRunFor(novelId);
+    return Response.json({ detail });
+  }
+
+  if (url.searchParams.get("latest") === "1") {
+    const detail = await latestRunFor(novelId);
     return Response.json({ detail });
   }
 

@@ -26,7 +26,11 @@ export interface UseAgentRunResult {
   reject: (taskId: string) => Promise<void>;
   cancel: () => Promise<void>;
   setMode: (mode: AgentRunMode) => Promise<void>;
+  /** Point the pane at a past run's transcript (history browsing). */
+  viewRun: (runId: string) => Promise<void>;
 }
+
+const VIEWABLE_STATUSES: readonly AgentRunStatus[] = ["running", "awaiting_approval"];
 
 export function useAgentRun(novelId: string): UseAgentRunResult {
   const [detail, setDetail] = useState<AgentRunDetail | null>(null);
@@ -37,7 +41,11 @@ export function useAgentRun(novelId: string): UseAgentRunResult {
   detailRef.current = detail;
   const unsubRef = useRef<(() => void) | undefined>(undefined);
 
-  // Restore an active run for this novel (if any), then subscribe.
+  // Restore an active run for this novel (if any), then subscribe. With no
+  // active run, fall back to the latest run of ANY status so the transcript
+  // survives reloads — history lives in AgentEvent, the pane just had to
+  // load it. Terminal runs get a one-shot snapshot (no subscription: their
+  // event stream is complete).
   useEffect(() => {
     let alive = true;
     setLoading(true);
@@ -45,13 +53,17 @@ export function useAgentRun(novelId: string): UseAgentRunResult {
       try {
         const existing = await agentGateway.activeRunFor(novelId);
         if (!alive) return;
-        setDetail(existing);
         if (existing) {
+          setDetail(existing);
           unsubRef.current?.();
           unsubRef.current = agentGateway.subscribe(existing.run.id, (next) => {
             if (novelRef.current === next.run.novelId) setDetail(next);
           });
+          return;
         }
+        const latest = await agentGateway.latestRunFor(novelId);
+        if (!alive) return;
+        setDetail(latest);
       } catch (error) {
         console.error("[use-agent-run] restore failed", error);
         if (alive) setDetail(null);
@@ -117,7 +129,26 @@ export function useAgentRun(novelId: string): UseAgentRunResult {
     }
   }, []);
 
+  // History browsing: swap the pane to another run's transcript. Active runs
+  // (re)subscribe via SSE; finished runs render their final snapshot as-is.
+  const viewRun = useCallback(async (runId: string) => {
+    try {
+      const target = await agentGateway.get(runId);
+      if (!target) return;
+      unsubRef.current?.();
+      unsubRef.current = undefined;
+      setDetail(target);
+      if (VIEWABLE_STATUSES.includes(target.run.status)) {
+        unsubRef.current = agentGateway.subscribe(target.run.id, (next) => {
+          if (novelRef.current === next.run.novelId) setDetail(next);
+        });
+      }
+    } catch (error) {
+      console.error("[use-agent-run] viewRun failed", error);
+    }
+  }, []);
+
   const approval = detail?.pendingApproval ?? null;
 
-  return { detail, loading, approval, start, approve, reject, cancel, setMode };
+  return { detail, loading, approval, start, approve, reject, cancel, setMode, viewRun };
 }

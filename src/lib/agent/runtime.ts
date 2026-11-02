@@ -261,6 +261,20 @@ export async function activeRunFor(novelId: string): Promise<AgentRunDetail | nu
   return run ? getRunDetail(run.id) : null;
 }
 
+/**
+ * Latest run of ANY status for the novel — the conversation pane's history
+ * fallback so finished transcripts survive a reload (plan §4.1: the pane is
+ * the author's window into the team; history lives in AgentEvent, the pane
+ * just never loaded it before Phase 6).
+ */
+export async function latestRunFor(novelId: string): Promise<AgentRunDetail | null> {
+  const run = await db.agentRun.findFirst({
+    where: { novelId },
+    orderBy: { createdAt: "desc" },
+  });
+  return run ? getRunDetail(run.id) : null;
+}
+
 export async function listRuns(novelId: string, take = 20): Promise<AgentRun[]> {
   const runs = await db.agentRun.findMany({
     where: { novelId },

@@ -50,6 +50,7 @@ import { useWriterStore } from "@/hooks/use-writer-store";
 import { AGENT_BACKEND } from "@/lib/novara/agent-client";
 import type {
   AgentEvent,
+  AgentRun,
   AgentRunMode,
   AgentRunStatus,
   RunFinalReport,
@@ -411,6 +412,8 @@ export function ConversationPane({
   const [mode, setMode] = useState<AgentRunMode>(lastMode);
   const [submitting, setSubmitting] = useState(false);
   const [approving, setApproving] = useState(false);
+  /** Recent run summaries for the history switcher (latest first). */
+  const [history, setHistory] = useState<AgentRun[]>([]);
 
   const detail = run.detail;
   const runStatus = detail?.run.status ?? null;
@@ -434,6 +437,26 @@ export function ConversationPane({
   useEffect(() => {
     bottomAnchorRef.current?.scrollIntoView({ block: "nearest" });
   }, [detail?.events.length, approval]);
+
+  // Refresh the history list when the displayed run changes (covers new runs
+  // started from the composer and manual switches via the switcher itself).
+  const displayedRunId = detail?.run.id ?? null;
+  useEffect(() => {
+    let alive = true;
+    fetch(`/api/agent/runs?novelId=${encodeURIComponent(novel.id)}`, {
+      cache: "no-store",
+    })
+      .then((res) => res.json())
+      .then((body: { runs?: AgentRun[] }) => {
+        if (alive && Array.isArray(body.runs)) setHistory(body.runs);
+      })
+      .catch(() => {
+        // history switcher is best-effort — the pane works without it
+      });
+    return () => {
+      alive = false;
+    };
+  }, [novel.id, displayedRunId]);
 
   // ---- handlers ----
 
@@ -537,6 +560,31 @@ export function ConversationPane({
           </Badge>
         )}
         <div className="ml-auto flex items-center gap-1">
+          {history.length > 0 && (
+            <select
+              aria-label="Run history"
+              title="Browse past run transcripts"
+              className="hidden h-7 max-w-44 cursor-pointer truncate rounded-md border bg-background px-1.5 text-xs text-foreground md:block"
+              value={detail?.run.id ?? ""}
+              onChange={(e) => {
+                if (e.target.value) void run.viewRun(e.target.value);
+              }}
+            >
+              {history.map((r) => {
+                const when = new Date(r.createdAt).toLocaleString(undefined, {
+                  month: "short",
+                  day: "numeric",
+                  hour: "2-digit",
+                  minute: "2-digit",
+                });
+                return (
+                  <option key={r.id} value={r.id}>
+                    {RUN_STATUS_META[r.status]?.label ?? r.status} · {when} · {r.goal.slice(0, 48)}
+                  </option>
+                );
+              })}
+            </select>
+          )}
           {onOpenPreview && (
             <Button
               type="button"
