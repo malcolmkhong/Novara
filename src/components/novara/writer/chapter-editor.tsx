@@ -1,8 +1,16 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Loader2, Plus, Sparkles, Trash2 } from "lucide-react";
+import { Loader2, Plus, Sparkles, SplitSquareHorizontal, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import {
   Select,
   SelectContent,
@@ -28,7 +36,10 @@ interface ChapterEditorProps {
     id: string,
     patch: { title?: string; content?: string; status?: ChapterStatus }
   ) => Promise<ChapterDTO | null>;
-  onAiDraft: (chapter: ChapterDTO) => Promise<AiDraftResult | null>;
+  onAiDraft: (
+    chapter: ChapterDTO,
+    opts?: { variants?: number }
+  ) => Promise<AiDraftResult | null>;
   /**
    * Workbench mode: hide the built-in chapter list (the left asset tree
    * provides navigation) and render the editor full width.
@@ -55,8 +66,11 @@ export function ChapterEditor({
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
   const [drafting, setDrafting] = useState(false);
+  const [abDrafting, setAbDrafting] = useState(false);
+  const [abResult, setAbResult] = useState<AiDraftResult | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [confirmDraft, setConfirmDraft] = useState(false);
+  const [confirmAbDraft, setConfirmAbDraft] = useState(false);
   const [adding, setAdding] = useState(false);
 
   // Sync local editor state when a different chapter is selected.
@@ -102,28 +116,33 @@ export function ChapterEditor({
     }
   };
 
+  /** Applies a draft (single or A/B-picked) into the editor and saves it. */
+  const applyDraftContent = async (draftText: string, wordCount: number, mode: "fill" | "append") => {
+    const nextContent =
+      mode === "append" && content.trim()
+        ? `${content.replace(/\s+$/, "")}\n\n${draftText}`
+        : draftText;
+    setContent(nextContent);
+    setDirty(true);
+    const saved = await save({ content: nextContent });
+    if (saved) {
+      toast({
+        title: `AI draft added (+${formatWordCount(wordCount)} words)`,
+        description:
+          mode === "append"
+            ? "Continuation appended after your existing text."
+            : "Chapter draft written. Edit freely — it's yours now.",
+      });
+    }
+  };
+
   const runAiDraft = async () => {
     if (!selected) return;
     setDrafting(true);
     try {
       const result = await onAiDraft(selected);
       if (result) {
-        const nextContent =
-          result.mode === "append" && content.trim()
-            ? `${content.replace(/\s+$/, "")}\n\n${result.content}`
-            : result.content;
-        setContent(nextContent);
-        setDirty(true);
-        const saved = await save({ content: nextContent });
-        if (saved) {
-          toast({
-            title: `AI draft added (+${formatWordCount(result.wordCount)} words)`,
-            description:
-              result.mode === "append"
-                ? "Continuation appended after your existing text."
-                : "Chapter draft written. Edit freely — it's yours now.",
-          });
-        }
+        await applyDraftContent(result.content, result.wordCount, result.mode);
       }
     } catch (e) {
       toast({
@@ -134,6 +153,48 @@ export function ChapterEditor({
     } finally {
       setDrafting(false);
       setConfirmDraft(false);
+    }
+  };
+
+  const runAbDraft = async () => {
+    if (!selected) return;
+    setAbDrafting(true);
+    try {
+      const result = await onAiDraft(selected, { variants: 2 });
+      if (result) {
+        if (result.variants && result.variants.length >= 2) {
+          setAbResult(result);
+          setConfirmAbDraft(false);
+        } else {
+          // Backend returned a single draft — fall through with it.
+          await applyDraftContent(result.content, result.wordCount, result.mode);
+          setConfirmAbDraft(false);
+        }
+      }
+    } catch (e) {
+      toast({
+        title: "A/B draft failed",
+        description: e instanceof Error ? e.message : "Unknown error",
+        variant: "destructive",
+      });
+    } finally {
+      setAbDrafting(false);
+    }
+  };
+
+  const pickVariant = async (index: 0 | 1) => {
+    const result = abResult;
+    setAbResult(null);
+    if (!result?.variants?.[index]) return;
+    const variant = result.variants[index];
+    try {
+      await applyDraftContent(variant.content, variant.wordCount, result.mode);
+    } catch (e) {
+      toast({
+        title: "AI draft failed",
+        description: e instanceof Error ? e.message : "Unknown error",
+        variant: "destructive",
+      });
     }
   };
 
@@ -181,6 +242,67 @@ export function ChapterEditor({
           busy={drafting}
           onConfirm={runAiDraft}
         />
+        <ConfirmDialog
+          open={confirmAbDraft}
+          onOpenChange={setConfirmAbDraft}
+          title="Generate two A/B drafts?"
+          description={
+            selected && selected.content.trim()
+              ? `The Novel Writer agent will write two alternative continuations of “${selected.title}”. Your text stays untouched — you pick one.`
+              : `The Novel Writer agent will write two alternative opening drafts for “${selected?.title ?? ""}” — you pick the one to insert.`
+          }
+          confirmLabel="Write A/B drafts"
+          busy={abDrafting}
+          onConfirm={runAbDraft}
+        />
+        <Dialog
+          open={abResult !== null}
+          onOpenChange={(v) => {
+            if (!v) setAbResult(null);
+          }}
+        >
+          <DialogContent className="max-w-3xl">
+            <DialogHeader>
+              <DialogTitle>Pick a draft</DialogTitle>
+              <DialogDescription>
+                Two grounded alternatives for “{selected?.title ?? ""}”. The one
+                you pick is inserted into the editor; the other is discarded.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="grid gap-3 sm:grid-cols-2">
+              {abResult?.variants?.slice(0, 2).map((variant, i) => (
+                <div
+                  key={i}
+                  className="flex min-h-0 flex-col rounded-lg border bg-muted/20"
+                >
+                  <div className="flex items-center justify-between border-b px-3 py-2">
+                    <span className="text-sm font-medium">Draft {String.fromCharCode(65 + i)}</span>
+                    <span className="text-xs text-muted-foreground">
+                      {formatWordCount(variant.wordCount)} words
+                    </span>
+                  </div>
+                  <p className="nice-scroll max-h-56 overflow-y-auto whitespace-pre-wrap px-3 py-2 font-serif text-[13px] leading-6 text-foreground/85">
+                    {variant.content}
+                  </p>
+                  <div className="border-t px-3 py-2">
+                    <Button
+                      size="sm"
+                      className="w-full"
+                      onClick={() => void pickVariant(i as 0 | 1)}
+                    >
+                      Use Draft {String.fromCharCode(65 + i)}
+                    </Button>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <DialogFooter>
+              <Button variant="ghost" onClick={() => setAbResult(null)}>
+                Discard both
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       </>
     );
   }
@@ -304,6 +426,70 @@ export function ChapterEditor({
         busy={drafting}
         onConfirm={runAiDraft}
       />
+
+      <ConfirmDialog
+        open={confirmAbDraft}
+        onOpenChange={setConfirmAbDraft}
+        title="Generate two A/B drafts?"
+        description={
+          selected && selected.content.trim()
+            ? `The Novel Writer agent will write two alternative continuations of “${selected.title}”. Your text stays untouched — you pick one.`
+            : `The Novel Writer agent will write two alternative opening drafts for “${selected?.title ?? ""}” — you pick the one to insert.`
+        }
+        confirmLabel="Write A/B drafts"
+        busy={abDrafting}
+        onConfirm={runAbDraft}
+      />
+
+      {/* A/B pick dialog — nothing touches the chapter until you choose */}
+      <Dialog
+        open={abResult !== null}
+        onOpenChange={(v) => {
+          if (!v) setAbResult(null);
+        }}
+      >
+        <DialogContent className="max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>Pick a draft</DialogTitle>
+            <DialogDescription>
+              Two grounded alternatives for “{selected?.title ?? ""}”. The one
+              you pick is inserted into the editor; the other is discarded.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-3 sm:grid-cols-2">
+            {abResult?.variants?.slice(0, 2).map((variant, i) => (
+              <div
+                key={i}
+                className="flex min-h-0 flex-col rounded-lg border bg-muted/20"
+              >
+                <div className="flex items-center justify-between border-b px-3 py-2">
+                  <span className="text-sm font-medium">Draft {String.fromCharCode(65 + i)}</span>
+                  <span className="text-xs text-muted-foreground">
+                    {formatWordCount(variant.wordCount)} words
+                  </span>
+                </div>
+                <p className="nice-scroll max-h-56 overflow-y-auto whitespace-pre-wrap px-3 py-2 font-serif text-[13px] leading-6 text-foreground/85">
+                  {variant.content}
+                </p>
+                <div className="border-t px-3 py-2">
+                  <Button
+                    size="sm"
+                    className="w-full"
+                    onClick={() => void pickVariant(i as 0 | 1)}
+                  >
+                    Use Draft {String.fromCharCode(65 + i)}
+                  </Button>
+                </div>
+              </div>
+            ))}
+          </div>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setAbResult(null)}>
+              Discard both
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 
@@ -356,8 +542,22 @@ export function ChapterEditor({
                 <Button
                   size="sm"
                   variant="outline"
+                  onClick={() => setConfirmAbDraft(true)}
+                  disabled={drafting || abDrafting || saving}
+                  aria-label="Generate two AI draft alternatives"
+                >
+                  {abDrafting ? (
+                    <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+                  ) : (
+                    <SplitSquareHorizontal className="h-4 w-4" aria-hidden="true" />
+                  )}
+                  A/B Draft
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
                   onClick={() => setConfirmDraft(true)}
-                  disabled={drafting || saving}
+                  disabled={drafting || abDrafting || saving}
                 >
                   {drafting ? (
                     <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />

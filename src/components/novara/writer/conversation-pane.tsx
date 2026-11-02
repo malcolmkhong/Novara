@@ -66,6 +66,23 @@ const ACTIVE_STATUSES: readonly AgentRunStatus[] = [
   "running",
   "awaiting_approval",
 ];
+
+// Phase 5: per-member avatar + name accents in the conversation stream.
+const ACTOR_AVATAR: Record<string, string> = {
+  atlas: "bg-violet-100 text-violet-700 dark:bg-violet-950 dark:text-violet-300",
+  sage: "bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300",
+  nova: "bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300",
+  prism: "bg-rose-100 text-rose-700 dark:bg-rose-950 dark:text-rose-300",
+  forge: "bg-teal-100 text-teal-700 dark:bg-teal-950 dark:text-teal-300",
+  author: "bg-primary/10 text-primary",
+};
+const ACTOR_NAME: Record<string, string> = {
+  atlas: "text-violet-700 dark:text-violet-400",
+  sage: "text-emerald-700 dark:text-emerald-400",
+  nova: "text-amber-700 dark:text-amber-400",
+  prism: "text-rose-700 dark:text-rose-400",
+  forge: "text-teal-700 dark:text-teal-400",
+};
 const FINISHED_STATUSES: readonly AgentRunStatus[] = [
   "completed",
   "failed",
@@ -150,7 +167,7 @@ function FinalReportCard({ report }: { report: RunFinalReport }) {
         )}
 
         <p className="text-[11px] text-muted-foreground">
-          Mock report — the real runtime verifies against the database.
+          Verified against the database — reported (model) vs measured (DB) per line.
         </p>
       </CardContent>
     </Card>
@@ -255,12 +272,28 @@ function ConversationStream({ events }: { events: AgentEvent[] }) {
         }
         const { event } = block;
         if (block.kind === "agent") {
+          // Phase 5: the bubble belongs to a specific member of the team.
+          const actor = event.actor;
           return (
             <div key={event.id} className="flex items-start gap-2">
-              <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary/10">
-                <Sparkles className="h-3.5 w-3.5 text-primary" aria-hidden="true" />
+              <span
+                className={cn(
+                  "flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[10px] font-bold uppercase",
+                  ACTOR_AVATAR[actor] ?? "bg-primary/10 text-primary"
+                )}
+                aria-hidden="true"
+              >
+                {actor.charAt(0)}
               </span>
               <div className="max-w-[85%] rounded-lg rounded-tl-sm border bg-card px-3 py-2 text-sm leading-6">
+                <span
+                  className={cn(
+                    "mb-0.5 block text-[10px] font-semibold uppercase tracking-wide",
+                    ACTOR_NAME[actor] ?? "text-muted-foreground"
+                  )}
+                >
+                  {actor}
+                </span>
                 {event.summary}
               </div>
             </div>

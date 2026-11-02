@@ -15,10 +15,30 @@ skills:
     path: skills/atlas/ground-truth-reporting.md
     description: Plan only against measurable story state; never invent facts
 
+  - id: atlas/novel-orchestration
+    appliesTo: atlas
+    path: skills/atlas/novel-orchestration.md
+    description: Lead the member loop — dispatch, verify, repair, close
+
   - id: sage/chapter-writing
     appliesTo: member
     path: skills/sage/chapter-writing.md
     description: Chapter drafting pipeline — context, quota, hook, report
+
+  - id: nova/project-query
+    appliesTo: member
+    path: skills/nova/project-query.md
+    description: Read-only story-bible research with evidence, zero invention
+
+  - id: prism/reviewing
+    appliesTo: member
+    path: skills/prism/reviewing.md
+    description: Structured issue-list review; numbers are audited
+
+  - id: forge/library-hygiene
+    appliesTo: member
+    path: skills/forge/library-hygiene.md
+    description: Manuscript builds + hygiene checks, measured numbers only
 
   - id: shared/novel-write-contract
     appliesTo: all

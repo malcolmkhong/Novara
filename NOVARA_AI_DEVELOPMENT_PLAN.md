@@ -1,11 +1,12 @@
 # NOVARA AI — Development Plan (AI Novel Writer)
 
-> Status: PLAN v1.4（Phase 4 RAG & Memory v1 实装并 E2E 实测 · memory_query/doctor_scan 已工具化进 agent 工具循环） · Date: 2026-11
+> Status: PLAN v1.5（Phase 5 Multi-Agent 已实装并 E2E 实测 · Atlas leader 循环 + team-delegate + 五角色工具面 + 审查闭环 + SkillInvocation 遥测） · Date: 2026-11
 > 核心原则: 先简化架构，再逐步扩展 · MVP 优先 · 每个技术选择附理由 · 过程透明（§4.1）
 > v1.0→v1.1: 现状基线刷新（官网/Writer/API 已建成并 E2E 实测）+ 新增 §4.1 Agent-Driven Task Board（D1/D2）+ §11 Phase 重校准（含官网承诺映射）
 > v1.1→v1.2: Writer 壳重组为三栏 Agent Workbench（对话第一界面；内联审批卡；左树实时徽章；工件层警示条）——§4.1 UI 规格已按实施更新
 > v1.2→v1.3: **Phase 3 核心落地**——AgentRun/AgentTask/AgentEvent 三表 + agent/ 内容层（budgets.yaml 收编魔法数）+ 工具循环（novel-tool/novel-write 行协议）+ 四防线 + SSE 推流 + 双执行模式；mock 网关已切换为 live API（agent-client 单点换线）。E2E 实测：审批链路/拒绝→paused/Full Access 连续执行/虚报被核验标红 全部真实发生
 > v1.3→v1.4: **Phase 4 收尾——memory 工具化**——memory_query（打分查询故事记忆，零命中反幻觉引导）+ doctor_scan（一致性体检）进入 Sage 工具循环（tool-protocol/runtime/sage.md 同步）；E2E 实测：dev.log MAX(index) 指纹证明模型真实调用 memory_query ×3，Task 1 依据记忆审读 → Task 2 写 Chapter 3 落库，写入核验修复轮照常触发
+> v1.4→v1.5: **Phase 5 Multi-Agent 落地**——Atlas 升级为 leader 工具循环（```team-delegate 工单协议，CODE 派单执行、verified 结果回灌）；五角色（atlas/sage/nova/prism/forge）角色卡+专属 skill+MEMBER_TOOLS 代码级工具面白名单；AgentTask.assignee/AgentEvent.actor/SkillInvocation 三表；审查闭环（review_chapter 工具 + blockingFound 审计 + 无修复则终报标注）；E2E 实测：写章 run（5 单：sage×2+prism×3，审查-修复闭环审计就位）+ nova/forge run（研究+导出，exportsRun 虚报被标红）
 
 ---
 
@@ -260,9 +261,10 @@ pending → in_progress → needs_approval → done
 ## 7. Tools & Skills
 
 ### 7.1 工具清单（协议: ```novel-tool JSON 块 + ```novel-write 正文块，代码解析执行）
-- **已实装（Phase 3+4）** — Atlas: 目标→任务板规划（chatJson，非工具协议）；Sage 执行器: read_novel / read_chapter / read_outline / read_foreshadows + **memory_query（打分查记忆，零命中反幻觉引导）/ doctor_scan（一致性体检）**（P4 已接入）+ create_chapter / update_chapter / update_outline_beat / finish；防覆盖闸=write-gate.ts 代码强制（runtime 永不自确认）
+- **已实装（Phase 3+4+5）** — Atlas（leader 循环）: read_novel / read_outline / read_foreshadows / memory_query / doctor_scan + **team-delegate（工单协议，CODE 创建任务并派给成员，≤planMaxTasks 单/run）**；Sage（writer）: 全部读 + create_chapter / update_chapter / update_outline_beat / finish；Nova（researcher）: 只读（project-query）；Prism（analyst）: 读 + doctor_scan + **review_chapter**（与 Review tab 同一核心，critical 强制 blocking 服务端裁决）；Forge（engineer）: 读 + **export_markdown**（真实构建整书，feed 报数字）；防覆盖闸=write-gate.ts 代码强制（runtime 永不自确认）；**MEMBER_TOOLS 白名单在 executeTool 入口硬门禁**
 - **v1.3 偏差记录**：create_foreshadow / update_foreshadow **不开放给 agent**——§5.3 单一真相源优先：沉淀管线是 Foreshadow/StoryFact/CharacterState/ChapterDigest 的唯一写入方，agent 只读台账；此为对旧引擎工具面的有意收窄
-- Phase 5 新增: team-delegate（Leader）+ mission-lock 信封 + skills 注入；P4 新增: ~~memory_query / doctor_scan~~（已接入，v1.4）；reference_search 顺延 Phase 5（依赖 references 表）
+- Phase 5 新增: ~~team-delegate（Leader）+ mission-lock 信封 + skills 注入~~（已落地 v1.5）；reference_search 顺延（依赖 references 表）
+- **skills 注入（v1.5 已实装）**：成员 system prompt = 角色卡 + 默认 skills + delegate 可选 skills 字段（registry 白名单校验，未知 id 记 injected:false + 事件注记）；**SkillInvocation 表逐任务遥测实测**（16 行：sage 3 件/prism 2 件/nova 2 件/forge 2 件全部 injected=true）
 - 规则: 每轮 ≤3 动作（budgets.yaml）；所有写入真实且永久；id 只能来自快照/读取结果
 
 ### 7.2 Skills（agent/ 目录, YAML frontmatter, 按 appliesTo 注入）
@@ -373,10 +375,17 @@ pending → in_progress → needs_approval → done
 - ⬜ 顺延：reference_search（依赖 references 表，Phase 5）· StateChange「最近变化」通道 · 冲突检测 · ChapterChunk FTS5（规模到几千条前不需要）
 - **验收（v1）**: ✅ 沉淀书面板全真数据可检索可过滤；✅ draft 提示词自动携带该章相关记忆+前情 digest；✅ doctor 报真实完整性；✅ agent 工具循环内可查记忆+体检（E2E 指纹验证）；向量 go/no-go 已留档
 
-### Phase 5 — Multi-Agent System
-- 全员就位 + 专属 skills 充实 + delegate `skills` 字段 + mission-lock
-- leader 验证闭环 + SkillInvocation 遥测 + 题材参考库（references CSV 改造入库, 可选）
-- **验收**: 一句话→Atlas 拆单→Sage 写→Prism 审→blocking 定点修→leader 汇报全程无人工干预
+### Phase 5 — Multi-Agent System — 核心已实装 ✅（2026-11 E2E 实测）
+- ✅ **Atlas leader 循环**：chatJson 一次性规划 → bounded 工具循环（leaderMaxTurns=6，读工具 + team-delegate 工单 + finish）；工单 JSON 数组逐项 zod 校验，错误项 feed 回灌（实测 Atlas 首轮格式错误后自纠重派）
+- ✅ **五角色全员就位**：atlas/sage/nova/prism/forge 角色卡 + team.yaml/skills.yaml 注册（content 层 fail-fast）；nova=只读研究、prism=审查+体检、forge=导出+体检、sage=唯一写入者
+- ✅ **派单执行**：CODE 创建 AgentTask（assignee 列）→ 成员执行器（角色化 system prompt + 工具面白名单 + 写核验仅 sage 章节任务）→ verified 结果回灌 leader
+- ✅ **审查闭环**：review_chapter 工具（与 Review tab 同一 reviewChapter 核心）→ issues/blocking 计数入 Measured 审计 → 终报核验「blocking>0 且无修复写入」自动标注；prism 专属 reviewing skill 纪律（数字真实、不软化 blocking）
+- ✅ **数字审计扩展**：Measured 增 reviewsRun/blockingFound/exportsRun 三键，claimed vs verified 全键对账（实测 prism/forge 虚报被标红）
+- ✅ **遥测**：AgentEvent.actor（事件流角色归属，实测正确）+ SkillInvocation（skill 注入逐任务留痕）
+- ✅ **E2E 实测（The Lifespan Exchange）**：写章 run = Atlas 派 5 单（sage×2+prism×3）→ Chapter 4 落库 212 词 → 3 次审查 0 blocking → 虚报 3 处标红；nova+forge run = 伏笔研究 done + 导出构建 done + exportsRun 虚报标红；429 限流 run = 任务诚实 failed 零虚构
+- ✅ **UI**：对话流角色化气泡（头像+名字标签，Agent Browser 截图实证）+ 活动流 actor 前缀 + Task Board assignee 徽章 + Final report 文案更新（Mock→DB 验证）
+- ⬜ 顺延（诚实标注）：parallelGroup 并行执行（仍顺序，任务板已有并行组 UI）· AgentConversation/AgentMessage 纯聊天持久化 · clarify-before-act ASK 回问协议（BLOCKED→blocked 已覆盖不可行路径）· 题材参考库 references（reference_search 工具随之）· **blocking→定点修完整触发**（本轮审查 0 blocking 未实测修复单路径；代码路径+skill 纪律+终报核验已就位）
+- **验收**: ✅ 一句话→Atlas 拆单→Sage 写→Prism 审→leader 汇报全程无人工干预（修复单路径就位待真 blocking 触发）
 
 ### Phase 6 — Quality Control & Optimization
 - E2 门定稿（blocking=0 才 final）+ 修订回路 ≤2 轮 + 行为 evals（fixtures 思路）

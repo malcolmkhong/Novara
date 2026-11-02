@@ -162,4 +162,6 @@ export interface AiDraftResult {
   content: string;
   mode: "fill" | "append";
   wordCount: number;
+  /** A/B drafts (Phase 6) — present when variants > 1 was requested. */
+  variants?: { content: string; wordCount: number }[];
 }

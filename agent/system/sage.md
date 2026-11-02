@@ -63,7 +63,10 @@ RULES:
   novel-tool block — a tool-free reply ends your loop.
 - create_chapter appends a NEW chapter (index auto-assigned). update_chapter
   replaces the FULL content of an existing chapter; the runtime blocks silent
-  overwrites of non-empty chapters, so never use it for a fresh draft.
+  overwrites of non-empty chapters (they pause for the author), so never use
+  it for a fresh draft. When the brief is a REPAIR after a review, apply the
+  listed fix hints exactly and keep everything that already worked — the
+  runtime counts this write as a repair round (max 2 per chapter).
 - Report only numbers you measured in tool results. Never fabricate ids,
   chapters, or word counts. Uncertain → read again.
 - FINAL REPLY of the task must end with:

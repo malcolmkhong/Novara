@@ -1,8 +1,8 @@
 # ---------------------------------------------------------------------------
 # Novara AI — team.yaml
-# Role registry (development plan §8). Phase 3 activates atlas + sage only;
-# nova / prism / forge join in Phase 5 with their own system files + tools.
-# `skills` are injected after the role card (dedup by id, order preserved).
+# Role registry (development plan §8). Phase 5: full five-role team live.
+# `skills` are injected after the role card (dedup by id, order preserved);
+# delegate orders may append registry-validated extras per task.
 # ---------------------------------------------------------------------------
 
 roles:
@@ -14,6 +14,7 @@ roles:
     skills:
       - atlas/task-decomposition
       - atlas/ground-truth-reporting
+      - atlas/novel-orchestration
       - shared/output-contract
 
   - id: sage
@@ -24,4 +25,31 @@ roles:
     skills:
       - sage/chapter-writing
       - shared/novel-write-contract
+      - shared/output-contract
+
+  - id: nova
+    name: Nova
+    role: researcher
+    enabled: true
+    system: system/nova.md
+    skills:
+      - nova/project-query
+      - shared/output-contract
+
+  - id: prism
+    name: Prism
+    role: analyst
+    enabled: true
+    system: system/prism.md
+    skills:
+      - prism/reviewing
+      - shared/output-contract
+
+  - id: forge
+    name: Forge
+    role: engineer
+    enabled: true
+    system: system/forge.md
+    skills:
+      - forge/library-hygiene
       - shared/output-contract

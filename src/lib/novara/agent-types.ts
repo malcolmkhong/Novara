@@ -70,6 +70,9 @@ export type AgentTaskStatus =
   | "failed"
   | "done";
 
+/** Member roles (Phase 5) — registry in agent/config/team.yaml. */
+export type AgentRoleId = "atlas" | "sage" | "nova" | "prism" | "forge";
+
 export interface AgentTask {
   id: string;
   runId: string;
@@ -77,6 +80,8 @@ export interface AgentTask {
   key: string;
   /** Set when this task runs in parallel with siblings, e.g. "Task 3". */
   parallelGroup: string | null;
+  /** Member role executing this task (Phase 5 delegate). */
+  assignee: AgentRoleId;
   title: string;
   detail: string;
   status: AgentTaskStatus;
@@ -102,6 +107,8 @@ export interface AgentEvent {
   id: string;
   runId: string;
   taskId: string | null;
+  /** Member that produced the event (Phase 5 role attribution). */
+  actor: AgentRoleId | "author";
   kind: AgentEventKind;
   summary: string;
   payload: Record<string, unknown> | null;

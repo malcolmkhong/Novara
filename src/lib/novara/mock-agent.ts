@@ -75,6 +75,7 @@ function emit(
     id: uid("evt"),
     runId: run.detail.run.id,
     taskId: partial.taskId ?? null,
+    actor: "sage",
     kind: partial.kind,
     summary: partial.summary,
     payload: partial.payload ?? null,
@@ -115,6 +116,7 @@ function decompose(input: StartRunInput, chapterCount: number): AgentTask[] {
     {
       id: uid("task"),
       runId: "",
+      assignee: "sage",
       key: "Task 1",
       parallelGroup: null,
       title: "Analyze goal & story state",
@@ -128,6 +130,7 @@ function decompose(input: StartRunInput, chapterCount: number): AgentTask[] {
     {
       id: uid("task"),
       runId: "",
+      assignee: "sage",
       key: "Task 2",
       parallelGroup: null,
       title: "Update story bible",
@@ -141,6 +144,7 @@ function decompose(input: StartRunInput, chapterCount: number): AgentTask[] {
     {
       id: uid("task"),
       runId: "",
+      assignee: "sage",
       key: "Task 3-a",
       parallelGroup: "Task 3",
       title: `Draft chapter ${nextChapter}`,
@@ -154,6 +158,7 @@ function decompose(input: StartRunInput, chapterCount: number): AgentTask[] {
     {
       id: uid("task"),
       runId: "",
+      assignee: "sage",
       key: "Task 3-b",
       parallelGroup: "Task 3",
       title: "Sync outline beats",
@@ -167,6 +172,7 @@ function decompose(input: StartRunInput, chapterCount: number): AgentTask[] {
     {
       id: uid("task"),
       runId: "",
+      assignee: "sage",
       key: "Task 4",
       parallelGroup: null,
       title: "Review & settle draft",

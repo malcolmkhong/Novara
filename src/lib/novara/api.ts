@@ -325,12 +325,46 @@ export function importNovelBackup(
 }
 
 // ---------------------------------------------------------------------------
-// AI draft (experimental)
+// AI draft (experimental) — variants > 1 returns A/B alternatives (Phase 6)
 // ---------------------------------------------------------------------------
 
-export function requestAiDraft(chapterId: string): Promise<AiDraftResult> {
+export function requestAiDraft(
+  chapterId: string,
+  opts: { variants?: number } = {}
+): Promise<AiDraftResult> {
   return request("/api/ai/draft", {
     method: "POST",
-    body: JSON.stringify({ chapterId }),
+    body: JSON.stringify({ chapterId, variants: opts.variants ?? 1 }),
   });
+}
+
+// ---------------------------------------------------------------------------
+// QC evals (Phase 6) — behavioral probe console, zero AI cost
+// ---------------------------------------------------------------------------
+
+export interface QcEvalCheck {
+  id: string;
+  group: string;
+  name: string;
+  pass: boolean;
+  expected: string;
+  actual: string;
+  ms: number;
+}
+
+export interface QcEvalReport {
+  checks: QcEvalCheck[];
+  passed: number;
+  failed: number;
+  totalMs: number;
+  runAt: string;
+  budgets: {
+    revisionRounds: number;
+    glmRetries: number;
+    maxConcurrent: number;
+  };
+}
+
+export function runQcEvals(): Promise<QcEvalReport> {
+  return request("/api/agent/qc/evals");
 }

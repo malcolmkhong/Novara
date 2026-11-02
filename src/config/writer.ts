@@ -115,7 +115,7 @@ export const REVIEW_SEVERITY_META: Record<
 export type CenterView = "chat" | "board";
 
 /** Right pane artifact views. */
-export type ArtifactTabId = "draft" | "outline" | "bible" | "review" | "memory";
+export type ArtifactTabId = "draft" | "outline" | "bible" | "review" | "memory" | "qc";
 
 export interface ArtifactTabDef {
   id: ArtifactTabId;
@@ -130,6 +130,7 @@ export const ARTIFACT_TABS: ArtifactTabDef[] = [
   { id: "bible", label: "Bible" },
   { id: "review", label: "Review" },
   { id: "memory", label: "Memory" },
+  { id: "qc", label: "QC" },
 ];
 
 // ---------------------------------------------------------------------------

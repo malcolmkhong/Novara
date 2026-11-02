@@ -247,12 +247,15 @@ export function WorkbenchShell({
     }
   };
 
-  const handleAiDraft = async (chapter: ChapterDTO): Promise<AiDraftResult | null> => {
+  const handleAiDraft = async (
+    chapter: ChapterDTO,
+    opts?: { variants?: number }
+  ): Promise<AiDraftResult | null> => {
     try {
-      return await requestAiDraft(chapter.id);
+      return await requestAiDraft(chapter.id, opts);
     } catch (e) {
       toast({
-        title: "AI draft failed",
+        title: opts?.variants && opts.variants > 1 ? "A/B draft failed" : "AI draft failed",
         description: e instanceof Error ? e.message : "Unknown error",
         variant: "destructive",
       });

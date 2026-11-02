@@ -53,13 +53,24 @@ export const budgetsSchema = z.object({
     routeMaxDuration: z.number().int().positive(),
     maxTurns: z.number().int().min(1).max(8),
     maxActionsPerTurn: z.number().int().min(1).max(8),
-    planMaxTasks: z.number().int().min(1).max(24),
+    planMaxTasks: z.number().int().min(1).max(64),
+    // Phase 5: Atlas leader-loop turn budget (delegate rounds).
+    leaderMaxTurns: z.number().int().min(1).max(32),
     chapterContextChars: z.number().int().min(1000),
     chapterTailChars: z.number().int().min(500),
     snapshotCastLimit: z.number().int().min(1),
     snapshotOutlineLimit: z.number().int().min(1),
     snapshotFactsLimit: z.number().int().min(1),
     repairRounds: z.number().int().min(0).max(4),
+    // Phase 6: transient-error retry + global GLM concurrency semaphore.
+    retryAttempts: z.number().int().min(0).max(5),
+    retryBackoffMs: z.number().int().min(250),
+    maxConcurrent: z.number().int().min(1).max(8),
+  }),
+  qc: z.object({
+    // Phase 6 E2: hard budget of review→repair→re-review cycles per chapter.
+    revisionRounds: z.number().int().min(1).max(6),
+    approvalWaitMs: z.number().int().min(30_000),
   }),
   draft: z.object({
     quotaMinWords: z.number().int().positive(),
@@ -99,13 +110,21 @@ export const DEFAULT_BUDGETS: Budgets = {
     routeMaxDuration: 90,
     maxTurns: 3,
     maxActionsPerTurn: 3,
-    planMaxTasks: 8,
+    planMaxTasks: 44, // multi-chapter QC runs need ~3 orders per chapter
+    leaderMaxTurns: 22, // Phase 5: Atlas delegate rounds per run
     chapterContextChars: 24_000,
     chapterTailChars: 6_000,
     snapshotCastLimit: 12,
     snapshotOutlineLimit: 40,
     snapshotFactsLimit: 20,
     repairRounds: 2,
+    retryAttempts: 2,      // Phase 6: transient-error retries per GLM call
+    retryBackoffMs: 2_500, // exponential backoff base (2.5s → 5s)
+    maxConcurrent: 2,      // global in-flight GLM calls
+  },
+  qc: {
+    revisionRounds: 2,     // Phase 6 E2: repair cycles per chapter (hard budget)
+    approvalWaitMs: 1_800_000, // gate wait ceiling (30 min)
   },
   draft: {
     quotaMinWords: 300,
@@ -235,8 +254,15 @@ export function getAgentFile(relPath: string): string {
 /**
  * Assemble a role's system prompt: role card + skill bodies (dedup by id,
  * order preserved), capped at prompt.systemPromptCapChars.
+ *
+ * extraSkillIds (Phase 5 delegate): additional skills appended after the
+ * role's defaults — used by team-delegate's optional `skills` field. Unknown
+ * ids are skipped here; the caller (runtime) records which were injected.
  */
-export function buildSystemPrompt(roleId: string): string {
+export function buildSystemPrompt(
+  roleId: string,
+  extraSkillIds: string[] = []
+): { prompt: string; injectedSkillIds: string[] } {
   const state = load();
   const role = state.roles.find((r) => r.id === roleId);
   if (!role) throw new Error(`[agent-content] unknown role: ${roleId}`);
@@ -246,9 +272,20 @@ export function buildSystemPrompt(roleId: string): string {
   const parts: string[] = [getAgentFile(role.system).trim()];
   let used = parts[0].length;
 
-  for (const id of role.skills) {
+  const injectedSkillIds: string[] = [];
+  const seen = new Set<string>();
+  const ordered = [
+    ...role.skills,
+    ...extraSkillIds.filter((id) => !role.skills.includes(id)),
+  ];
+  for (const id of ordered) {
+    if (seen.has(id)) continue;
+    seen.add(id);
     const entry = state.skills.find((s) => s.id === id);
     if (!entry) {
+      // Delegate-supplied ids may reference anything — skip unknowns quietly
+      // (the runtime records what was actually injected).
+      if (!role.skills.includes(id)) continue;
       throw new Error(`[agent-content] role ${roleId} references unknown skill: ${id}`);
     }
     const body = getAgentFile(entry.path).trim();
@@ -258,7 +295,8 @@ export function buildSystemPrompt(roleId: string): string {
     }
     parts.push(body);
     used += body.length + 4;
+    injectedSkillIds.push(id);
   }
 
-  return parts.join("\n\n");
+  return { prompt: parts.join("\n\n"), injectedSkillIds };
 }

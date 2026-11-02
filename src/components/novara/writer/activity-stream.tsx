@@ -31,6 +31,16 @@ const EVENT_ICON: Record<AgentEventKind, LucideIcon> = {
   approval: ShieldCheck,
 };
 
+// Phase 5: per-member color accents in the activity stream.
+const ACTOR_STYLE: Record<string, string> = {
+  atlas: "text-violet-700 dark:text-violet-400",
+  sage: "text-emerald-700 dark:text-emerald-400",
+  nova: "text-amber-700 dark:text-amber-400",
+  prism: "text-rose-700 dark:text-rose-400",
+  forge: "text-teal-700 dark:text-teal-400",
+  author: "text-foreground",
+};
+
 function formatTimestamp(iso: string): string {
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return "--:--:--";
@@ -80,6 +90,7 @@ export function ActivityStream({
             >
               {ordered.map((event) => {
                 const Icon = EVENT_ICON[event.kind];
+                const actorStyle = ACTOR_STYLE[event.actor] ?? "text-muted-foreground";
                 return (
                   <div
                     key={event.id}
@@ -95,6 +106,12 @@ export function ActivityStream({
                       aria-hidden="true"
                     />
                     <span className="min-w-0 flex-1 text-xs leading-5">
+                      <span
+                        className={cn("font-semibold uppercase", actorStyle)}
+                      >
+                        {event.actor}
+                      </span>
+                      <span className="mx-1.5 text-muted-foreground">·</span>
                       {event.summary}
                     </span>
                     <time

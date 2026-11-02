@@ -1,15 +1,19 @@
-import ZAI from "z-ai-web-dev-sdk";
 import { db } from "@/lib/db";
 import { getBudgets } from "@/lib/novara/content";
 import { retrieveMemory } from "@/lib/novara/memory";
-import { jsonError, parseBody, validationError, withTimeout } from "@/lib/novara/api-helpers";
+import { jsonError, parseBody, validationError } from "@/lib/novara/api-helpers";
+import { glmChat } from "@/lib/novara/glm";
 import { countWords } from "@/lib/novara/words";
 import { z } from "zod";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 90;
 
-const draftSchema = z.object({ chapterId: z.string().min(1) });
+const draftSchema = z.object({
+  chapterId: z.string().min(1),
+  // Phase 6 A/B drafts: 1 (default) or 2 alternatives in one request.
+  variants: z.number().int().min(1).max(2).optional(),
+});
 
 // POST /api/ai/draft — experimental one-chapter AI drafting.
 // Grounded in the novel's synopsis, characters, world entries, outline and
@@ -229,26 +233,26 @@ export async function POST(req: Request) {
   }
 
   try {
-    const zai = await ZAI.create();
-    const completion = await withTimeout(
-      zai.chat.completions.create({
+    // Phase 6: A/B drafts — the SAME grounded context, two independent
+    // generations (sequential; the global GLM semaphore paces them).
+    const variantCount = schema.data.variants ?? 1;
+    const variants: { content: string; wordCount: number }[] = [];
+    for (let i = 0; i < variantCount; i++) {
+      const content = await glmChat({
         messages: [
           { role: "assistant", content: system },
           { role: "user", content: parts.join("\n\n") },
         ],
-        thinking: { type: "disabled" },
-      }),
-      GLM_TIMEOUT,
-      "AI draft"
-    );
-
-    const content = completion.choices[0]?.message?.content?.trim() ?? "";
-    if (!content) return jsonError("The AI returned an empty draft. Try again.", 502);
+        tag: variantCount > 1 ? `AI draft ${String.fromCharCode(65 + i)}` : "AI draft",
+      });
+      variants.push({ content, wordCount: countWords(content) });
+    }
 
     return Response.json({
-      content,
+      content: variants[0].content,
       mode,
-      wordCount: countWords(content),
+      wordCount: variants[0].wordCount,
+      ...(variantCount > 1 ? { variants } : {}),
     });
   } catch (error) {
     const message =
@@ -262,5 +266,3 @@ function clip(text: string, max: number): string {
   if (trimmed.length <= max) return trimmed;
   return trimmed.slice(-max);
 }
-
-const GLM_TIMEOUT = getBudgets().glm.timeoutMs;

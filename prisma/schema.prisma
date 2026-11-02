@@ -70,8 +70,33 @@ model Chapter {
 
   novel Novel @relation(fields: [novelId], references: [id], onDelete: Cascade)
   digest ChapterDigest?
+  reviews ChapterReview[]
 
   @@unique([novelId, index])
+  @@index([novelId])
+}
+
+// ---------------------------------------------------------------------------
+// ChapterReview (Phase 6) — persisted review verdicts, written ONLY by the
+// review core (lib/novara/review.ts). The E2 gate reads the LATEST row per
+// chapter to decide whether the chapter may be finalized (blocking = 0) —
+// the gate is code-enforced, never model-claimed. issuesJson holds the full
+// issue list (SQLite + Prisma: no JSON columns).
+// ---------------------------------------------------------------------------
+
+model ChapterReview {
+  id            String   @id @default(cuid())
+  novelId       String
+  chapterId     String
+  chapter       Chapter  @relation(fields: [chapterId], references: [id], onDelete: Cascade)
+  issueCount    Int
+  blockingCount Int
+  issuesJson    String
+  // tab (author Review tab) | agent (Prism in the tool loop)
+  source        String   @default("tab")
+  createdAt     DateTime @default(now())
+
+  @@index([chapterId, createdAt])
   @@index([novelId])
 }
 
@@ -243,6 +268,8 @@ model AgentTask {
   // Display key: "Task 1", "Task 3-a" (letter = parallel group member)
   key    String
   parallelGroup String?
+  // Member role executing this task (Phase 5 delegate) — atlas|sage|nova|prism|forge
+  assignee String @default("sage")
   title  String
   detail String   @default("")
   // pending | in_progress | needs_approval | blocked | failed | done
@@ -255,6 +282,8 @@ model AgentTask {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  skills SkillInvocation[]
+
   @@index([runId, order])
 }
 
@@ -263,6 +292,8 @@ model AgentEvent {
   runId  String
   run    AgentRun @relation(fields: [runId], references: [id], onDelete: Cascade)
   taskId String?
+  // Member that produced the event — atlas|sage|nova|prism|forge|author
+  actor  String   @default("atlas")
   // task_update | tool_call | write | message | error | approval
   kind   String
   summary String
@@ -271,4 +302,17 @@ model AgentEvent {
   createdAt DateTime @default(now())
 
   @@index([runId, createdAt])
+}
+
+// Phase 5 telemetry — which skills were injected into which member task.
+model SkillInvocation {
+  id     String    @id @default(cuid())
+  taskId String
+  task   AgentTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  skillId String
+  // true = actually concatenated into the member system prompt
+  injected Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  @@index([taskId])
 }

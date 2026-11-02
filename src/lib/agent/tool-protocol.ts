@@ -16,6 +16,7 @@
 
 import { z } from "zod";
 import { jsonrepair } from "jsonrepair";
+import type { AgentRoleId, ArtifactType } from "@/lib/novara/agent-types";
 
 // ---------------------------------------------------------------------------
 // Actions
@@ -37,6 +38,23 @@ export const toolActionSchema = z.discriminatedUnion("action", [
       .optional(),
   }),
   z.object({ action: z.literal("doctor_scan") }),
+  // Phase 5: Prism's structured review (same core as the Review tab).
+  z.object({
+    action: z.literal("review_chapter"),
+    index: z.number().int().positive(),
+  }),
+  // Phase 6 E2 gate tools — prism-only; CODE decides via the latest persisted
+  // ChapterReview verdict, never via model claims.
+  z.object({
+    action: z.literal("finalize_chapter"),
+    index: z.number().int().positive(),
+  }),
+  z.object({
+    action: z.literal("settle_chapter"),
+    index: z.number().int().positive(),
+  }),
+  // Phase 5: Forge's manuscript build (real generation, feed-reported).
+  z.object({ action: z.literal("export_markdown") }),
   z.object({
     action: z.literal("create_chapter"),
     title: z.string().trim().min(1).max(200),
@@ -51,6 +69,35 @@ export const toolActionSchema = z.discriminatedUnion("action", [
 ]);
 
 export type ToolAction = z.infer<typeof toolActionSchema>;
+
+// ---------------------------------------------------------------------------
+// team-delegate (Phase 5): Atlas dispatches work orders to members.
+// One fenced block per turn, body = JSON array of orders. Code creates the
+// AgentTask rows and executes them; the model never runs members itself.
+// ---------------------------------------------------------------------------
+
+export const delegateOrderSchema = z.object({
+  title: z.string().trim().min(1).max(200),
+  detail: z.string().trim().max(6000).default(""),
+  // atlas may not delegate to itself — members only
+  assignee: z.enum(["sage", "nova", "prism", "forge"]),
+  artifactType: z
+    .enum(["chapter", "outline_beat", "world_entry", "character"])
+    .nullish()
+    .transform((v) => (v ?? null) as ArtifactType | null),
+  artifactLabel: z.string().trim().max(120).nullish().transform((v) => v ?? null),
+  // Optional skill ids injected into the member prompt (registry-validated
+  // by the runtime; unknown ids here are dropped with a feed note).
+  skills: z.array(z.string().trim().min(1).max(80)).max(6).optional(),
+});
+
+export type DelegateOrder = z.infer<typeof delegateOrderSchema>;
+
+export interface ParsedDelegate {
+  position: number;
+  order: DelegateOrder | null;
+  error: string | null;
+}
 
 export interface ParsedToolCall {
   /** Position among the turn's tool blocks (0-based). */
@@ -69,6 +116,8 @@ export interface ParsedTurn {
   extraWriteBlocks: number;
   /** Parsed ```run-report numbers, or null. */
   runReport: Record<string, number> | null;
+  /** Phase 5: parsed ```team-delegate orders (leader loop only). */
+  delegates: ParsedDelegate[];
   /** The model's honest refusal: text after a leading BLOCKED: line. */
   blockedReason: string | null;
   /** True when the turn contains a finish action or no tool calls at all. */
@@ -82,7 +131,7 @@ export interface ParsedTurn {
 const FENCE_RE = /```[ \t]*\r?\n?[ \t]*([a-zA-Z][a-zA-Z0-9_-]*)[ \t]*\r?\n?([\s\S]*?)```/g;
 const BLOCKED_RE = /(^|\n)[ \t]*BLOCKED[:：][ \t]*(.+)/;
 /** GLM sometimes drops the closing fence — salvage a trailing known block. */
-const UNCLOSED_RE = /```[ \t]*\r?\n?[ \t]*(novel-write|run-report|novel-tool)\b[ \t]*\r?\n?([\s\S]*)$/;
+const UNCLOSED_RE = /```[ \t]*\r?\n?[ \t]*(novel-write|run-report|novel-tool|team-delegate)\b[ \t]*\r?\n?([\s\S]*)$/;
 
 function parseJsonObject(raw: string): { ok: true; value: unknown } | { ok: false; error: string } {
   const text = raw.trim();
@@ -114,6 +163,7 @@ function parseRunReport(raw: string): Record<string, number> | null {
 
 export function parseAgentTurn(reply: string): ParsedTurn {
   const toolCalls: ParsedToolCall[] = [];
+  const delegates: ParsedDelegate[] = [];
   let novelWrite: string | null = null;
   let extraWriteBlocks = 0;
   let runReport: Record<string, number> | null = null;
@@ -132,6 +182,27 @@ export function parseAgentTurn(reply: string): ParsedTurn {
         return "";
       }
       toolCalls.push({ position, action: action.data, error: null });
+      return "";
+    }
+    if (lang === "team-delegate") {
+      const parsed = parseJsonObject(body);
+      if (!parsed.ok) {
+        delegates.push({ position: delegates.length, order: null, error: `invalid JSON: ${parsed.error}` });
+        return "";
+      }
+      const list = Array.isArray(parsed.value) ? parsed.value : [parsed.value];
+      for (const raw of list) {
+        const check = delegateOrderSchema.safeParse(raw);
+        if (!check.success) {
+          delegates.push({
+            position: delegates.length,
+            order: null,
+            error: check.error.issues[0]?.message ?? "unknown delegate shape",
+          });
+        } else {
+          delegates.push({ position: delegates.length, order: check.data, error: null });
+        }
+      }
       return "";
     }
     if (lang === "novel-write") {
@@ -181,6 +252,7 @@ export function parseAgentTurn(reply: string): ParsedTurn {
     novelWrite,
     extraWriteBlocks,
     runReport,
+    delegates,
     blockedReason,
     endsLoop,
   };

@@ -46,6 +46,14 @@ const PARALLEL_RAIL_CLASS: Record<AgentTaskStatus, string> = {
   done: "border-l-emerald-400",
 };
 
+// Phase 5: member accent on each task row (matches the conversation bubbles).
+const ASSIGNEE_BADGE: Record<string, string> = {
+  sage: "bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300",
+  nova: "bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300",
+  prism: "bg-rose-100 text-rose-700 dark:bg-rose-950 dark:text-rose-300",
+  forge: "bg-teal-100 text-teal-700 dark:bg-teal-950 dark:text-teal-300",
+};
+
 export function TaskBoard({
   tasks,
   runStatus,
@@ -121,6 +129,17 @@ export function TaskBoard({
                           {task.key}
                         </span>
                         <span className="text-sm font-medium leading-5">{task.title}</span>
+                        {task.assignee !== "atlas" && (
+                          <span
+                            className={cn(
+                              "rounded px-1 py-px text-[10px] font-semibold uppercase tracking-wide",
+                              ASSIGNEE_BADGE[task.assignee] ??
+                                "bg-muted text-muted-foreground"
+                            )}
+                          >
+                            {task.assignee}
+                          </span>
+                        )}
                       </div>
                       {task.detail && (
                         <p className="mt-0.5 line-clamp-2 text-xs text-muted-foreground">

@@ -1,18 +1,23 @@
 // ---------------------------------------------------------------------------
-// Novara AI — agent runtime (Phase 3, development plan §4 / §7.1).
+// Novara AI — agent runtime (Phase 3+5, development plan §4 / §7.1 / §8).
 //
-// Orchestrates one run: Atlas plans a task board from the story snapshot,
-// then tasks execute sequentially through a bounded GLM tool loop. CODE owns
-// every hard edge:
+// Orchestrates one run as a TEAM: Atlas leads a bounded tool loop (read
+// tools + ```team-delegate work orders), CODE executes each order against
+// the assigned member (sage/nova/prism/forge) with its own tool surface,
+// then feeds the member's verified outcome back to Atlas for the next
+// decision. CODE owns every hard edge:
 //   - tool protocol parsing (lib/agent/tool-protocol.ts)
+//   - per-role tool surfaces (MEMBER_TOOLS) — a role asking for a tool it
+//     does not own gets an error feed, never a silent pass
 //   - anti-overwrite gate  (lib/novara/write-gate.ts) — non-empty chapter
 //     replacement ALWAYS pauses for the author, even in full-access mode
 //   - approval gate (D2) — in approval mode every chapter content write
 //     pauses; the pending write lives in a write-event payload (durable)
-//   - write verification — a chapter task without a verified DB write gets
-//     repair rounds, then `failed`. Narration is never a write.
+//   - write verification — a SAGE chapter task without a verified DB write
+//     gets repair rounds, then `failed`. Narration is never a write.
 //   - honesty rule — task `done` flips happen only after verified commits;
-//     finalReport compares claimed (model) vs verified (measured) numbers.
+//     finalReport compares claimed (model) vs verified (measured) numbers;
+//     review-found blocking issues without a repair order are flagged.
 //
 // Resumability: the executor waits at gates by polling run.status (stateless
 // across hot reloads); approve/reject/cancel handlers flip DB state and the
@@ -21,17 +26,23 @@
 // ---------------------------------------------------------------------------
 
 import { db } from "@/lib/db";
-import ZAI from "z-ai-web-dev-sdk";
-import { z } from "zod";
-import { getBudgets, buildSystemPrompt } from "@/lib/novara/content";
-import { chatJson } from "@/lib/novara/ai-json";
-import { withTimeout } from "@/lib/novara/api-helpers";
+import { getBudgets, buildSystemPrompt, getSkillEntry } from "@/lib/novara/content";
+import { glmChat } from "@/lib/novara/glm";
 import { countWords } from "@/lib/novara/words";
 import { assessOverwrite } from "@/lib/novara/write-gate";
+import { reviewChapter } from "@/lib/novara/review";
+import { sedimentChapterCore, type SedimentOutcome } from "@/lib/novara/sediment";
 import { buildMemoryView, formatMemoryLines, queryMemory } from "@/lib/novara/memory";
+import {
+  auditReport,
+  evaluateFinalize,
+  evaluateRepair,
+  evaluateSettle,
+} from "@/lib/novara/qc";
 import type {
   AgentEvent,
   AgentEventKind,
+  AgentRoleId,
   AgentRun,
   AgentRunDetail,
   AgentRunMode,
@@ -40,7 +51,8 @@ import type {
   ApprovalKind,
   RunFinalReport,
 } from "@/lib/novara/agent-types";
-import { parseAgentTurn } from "./tool-protocol";
+import { parseAgentTurn, type DelegateOrder } from "./tool-protocol";
+import { buildManuscriptMarkdown } from "@/lib/novara/export";
 import {
   languageDirective,
   loadStorySnapshot,
@@ -71,6 +83,7 @@ function truncate(text: string, max: number) {
 async function emitEvent(params: {
   runId: string;
   taskId?: string | null;
+  actor?: AgentRoleId | "author";
   kind: AgentEventKind;
   summary: string;
   payload?: Record<string, unknown>;
@@ -79,6 +92,7 @@ async function emitEvent(params: {
     data: {
       runId: params.runId,
       taskId: params.taskId ?? null,
+      actor: params.actor ?? "atlas",
       kind: params.kind,
       summary: params.summary,
       payload: params.payload ? JSON.stringify(params.payload) : null,
@@ -145,6 +159,7 @@ function serializeTask(t: {
   runId: string;
   key: string;
   parallelGroup: string | null;
+  assignee: string;
   title: string;
   detail: string;
   status: string;
@@ -158,6 +173,7 @@ function serializeTask(t: {
     runId: t.runId,
     key: t.key,
     parallelGroup: t.parallelGroup,
+    assignee: t.assignee as AgentTask["assignee"],
     title: t.title,
     detail: t.detail,
     status: t.status as AgentTask["status"],
@@ -172,6 +188,7 @@ function serializeEvent(e: {
   id: string;
   runId: string;
   taskId: string | null;
+  actor: string;
   kind: string;
   summary: string;
   payload: string | null;
@@ -181,6 +198,7 @@ function serializeEvent(e: {
     id: e.id,
     runId: e.runId,
     taskId: e.taskId,
+    actor: e.actor as AgentEvent["actor"],
     kind: e.kind as AgentEventKind,
     summary: e.summary,
     payload: parseJsonSafe<Record<string, unknown> | null>(e.payload, null),
@@ -461,11 +479,26 @@ interface Measured {
   chaptersUpdated: number;
   outlineBeatsUpdated: number;
   words: number;
+  // Phase 5 audited counters (Prism / Forge work).
+  reviewsRun: number;
+  blockingFound: number;
+  exportsRun: number;
+  // Phase 6 audited counters (E2 gate outcomes).
+  chaptersFinalized: number;
+  settlesRun: number;
 }
 
-const ZERO_MEASURED: Measured = { chaptersWritten: 0, chaptersUpdated: 0, outlineBeatsUpdated: 0, words: 0 };
-
-const REPORT_KEYS = Object.keys(ZERO_MEASURED);
+const ZERO_MEASURED: Measured = {
+  chaptersWritten: 0,
+  chaptersUpdated: 0,
+  outlineBeatsUpdated: 0,
+  words: 0,
+  reviewsRun: 0,
+  blockingFound: 0,
+  exportsRun: 0,
+  chaptersFinalized: 0,
+  settlesRun: 0,
+};
 
 /** Entry point — called from the route handler via after(). Idempotent. */
 export async function executeRun(runId: string): Promise<void> {
@@ -497,182 +530,271 @@ async function runLoop(runId: string, signal: AbortSignal): Promise<void> {
   signal.addEventListener("abort", onAbort, { once: true });
 
   try {
-    await executePlanned(runId, run.goal, freshController.signal);
+    await leaderLoop(runId, run.goal, freshController.signal);
   } finally {
     signal.removeEventListener("abort", onAbort);
   }
 }
 
 // ---------------------------------------------------------------------------
-// Planning (Atlas)
+// Per-role tool surfaces (Phase 5 §8 / Phase 6 §QC) — a role asking for a
+// tool it does not own gets an error feed. Writes are sage-only; prism owns
+// the E2 gate pair (finalize/settle — CODE-gated on the persisted review);
+// atlas/nova/forge are readers with role-specific extras. `finish` is always
+// allowed.
 // ---------------------------------------------------------------------------
 
-const planTaskSchema = z.object({
-  title: z.string().trim().min(1).max(200),
-  detail: z.string().trim().max(6000).default(""),
-  artifactType: z
-    .enum(["chapter", "outline_beat", "world_entry", "character"])
-    .nullish()
-    .transform((v) => v ?? null),
-  artifactLabel: z.string().trim().max(120).nullish().transform((v) => v ?? null),
-});
+const READ_ACTIONS = new Set([
+  "read_novel",
+  "read_chapter",
+  "read_outline",
+  "read_foreshadows",
+  "memory_query",
+]);
 
-const planSchema = z.object({
-  tasks: z.array(planTaskSchema).max(24),
-  notes: z.string().max(1200).default(""),
-});
+const MEMBER_TOOLS: Record<AgentRoleId, string[]> = {
+  atlas: [...READ_ACTIONS, "doctor_scan"],
+  sage: [...READ_ACTIONS, "doctor_scan", "create_chapter", "update_chapter", "update_outline_beat", "finish"],
+  nova: [...READ_ACTIONS],
+  prism: [...READ_ACTIONS, "doctor_scan", "review_chapter", "finalize_chapter", "settle_chapter", "finish"],
+  forge: [...READ_ACTIONS, "doctor_scan", "export_markdown", "finish"],
+};
 
-async function planTasks(
-  runId: string,
-  goal: string,
-  snapshot: StorySnapshotData
-): Promise<{ title: string; detail: string; artifactType: string | null; artifactLabel: string | null }[]> {
-  const budgets = getBudgets();
-  const system = buildSystemPrompt("atlas");
-  const user = [
-    `AUTHOR GOAL: ${goal}`,
-    "",
-    "STORY SNAPSHOT:",
-    renderSnapshot(snapshot),
-    "",
-    "Plan the task board now. Output the JSON object only.",
-  ].join("\n");
-
-  const plan = await chatJson({
-    system,
-    user,
-    tag: "Agent planning",
-    parse: (json) => planSchema.parse(json),
-  });
-
-  return plan.tasks.slice(0, budgets.glm.planMaxTasks).map((t) => ({
-    title: t.title,
-    detail: t.detail,
-    artifactType: t.artifactType,
-    artifactLabel: t.artifactLabel,
-  }));
+function toolAllowedFor(actor: AgentRoleId, action: string): boolean {
+  return MEMBER_TOOLS[actor]?.includes(action) ?? false;
 }
 
 // ---------------------------------------------------------------------------
-// Planned execution: planning → task loop → final report
+// QC ledger (Phase 6) — run-scoped, per-chapter revision state. Feeds the
+// E2 gates: latest blocking count drives finalize/settle/repair decisions;
+// repairRounds enforces the ≤2 revision cycles per chapter (budgets.qc).
 // ---------------------------------------------------------------------------
 
-async function executePlanned(runId: string, goal: string, signal: AbortSignal): Promise<void> {
+interface QcLedger {
+  /** chapter index → blocking count of the latest persisted review (run view). */
+  lastBlocking: Map<number, number>;
+  /** chapter index → repair writes committed while blocking was open. */
+  repairs: Map<number, number>;
+}
+
+function newQcLedger(): QcLedger {
+  return { lastBlocking: new Map(), repairs: new Map() };
+}
+
+// ---------------------------------------------------------------------------
+// Leader loop (Atlas, Phase 5): snapshot → bounded turn loop of reads +
+// ```team-delegate work orders → CODE executes each order with its member →
+// verified outcomes fed back → final report.
+// ---------------------------------------------------------------------------
+
+async function leaderLoop(runId: string, goal: string, signal: AbortSignal): Promise<void> {
   const budgets = getBudgets();
   const run = await db.agentRun.findUnique({ where: { id: runId } });
   if (!run) return;
   const novelId = run.novelId;
 
   const snapshot = await loadStorySnapshot(novelId);
-  await emitEvent({ runId, kind: "message", summary: "Atlas is reading the story state and planning the task board…" });
+  await emitEvent({ runId, kind: "message", summary: "Atlas is reading the story state and assembling the team…" });
 
-  let plan;
-  try {
-    plan = await planTasks(runId, goal, snapshot);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "planning failed";
-    await db.agentRun.update({ where: { id: runId }, data: { status: "failed", error: `Planning failed: ${message}` } });
-    await emitEvent({ runId, kind: "error", summary: `Planning failed: ${truncate(message, 300)}` });
-    return;
-  }
-  if (signal.aborted) return;
+  const atlasSystem = buildSystemPrompt("atlas").prompt;
+  const envelope = [
+    `AUTHOR GOAL: ${goal}`,
+    "",
+    "STORY SNAPSHOT (measured now):",
+    renderSnapshot(snapshot),
+    "",
+    "LEAD THE TEAM: read what you need, then dispatch work with ```team-delegate",
+    "blocks (JSON array of orders). Each executed order's VERIFIED outcome comes",
+    "back to you as a tool result — decide the next step from those, never from",
+    "the member's narration alone. Finish with a tool-free reply.",
+  ].join("\n");
 
-  if (plan.length === 0) {
-    const report: RunFinalReport = {
-      summary: "Atlas planned zero tasks — the goal is already satisfied by the current story state.",
-      reported: { ...ZERO_MEASURED },
-      verified: { ...ZERO_MEASURED },
-      blockingIssues: [],
-    };
-    await db.agentRun.update({
-      where: { id: runId },
-      data: { status: "completed", finalReport: JSON.stringify(report) },
-    });
-    await emitEvent({ runId, kind: "message", summary: "Nothing to do — run completed without tasks." });
-    return;
-  }
+  type ChatMessage = { role: "assistant" | "user"; content: string };
+  const messages: ChatMessage[] = [
+    { role: "assistant", content: atlasSystem },
+    { role: "user", content: envelope },
+  ];
 
-  const taskRows: {
-    id: string;
-    key: string;
-    title: string;
-    detail: string;
-    artifactType: string | null;
-    artifactLabel: string | null;
-  }[] = [];
-  for (let i = 0; i < plan.length; i++) {
-    const t = plan[i];
-    const row = await db.agentTask.create({
-      data: {
-        runId,
-        key: `Task ${i + 1}`,
-        parallelGroup: null,
-        title: t.title,
-        detail: t.detail,
-        status: "pending",
-        artifactType: t.artifactType,
-        artifactId: null,
-        artifactLabel: t.artifactLabel,
-        order: i + 1,
-      },
-    });
-    taskRows.push(row);
-  }
-  await emitEvent({ runId, kind: "message", summary: `Plan ready — ${taskRows.length} task${taskRows.length > 1 ? "s" : ""}. Executing in order.` });
-
-  // Sequential execution (parallel groups arrive with Phase 5 delegate).
-  const verified: Measured = { ...ZERO_MEASURED };
+  const measured: Measured = { ...ZERO_MEASURED };
+  const qc = newQcLedger();
   const claimed: Record<string, number> = {};
   const issues: string[] = [];
-  const outcomes: string[] = [];
-  let doneCount = 0;
+  let taskCounter = 0;
+  let delegateCount = 0;
+  let leaderBlocked: string | null = null;
 
-  for (const task of taskRows) {
-    if (signal.aborted) break;
-    const outcome = await executeTask({
-      runId,
-      novelId,
-      task,
-      snapshot,
-      signal,
-      measured: verified,
-      claimed,
-      issues,
+  const glmCall = async (tag: string): Promise<string> => {
+    if (signal.aborted) throw new Error("Run aborted");
+    return glmChat({ messages, tag, signal });
+  };
+
+  for (let turn = 1; turn <= budgets.glm.leaderMaxTurns; turn++) {
+    if (signal.aborted) return;
+    const reply = await glmCall(`leader turn ${turn}`);
+    const parsed = parseAgentTurn(reply);
+
+    if (parsed.narration) {
+      await emitEvent({
+        runId,
+        kind: "message",
+        actor: "atlas",
+        summary: truncate(parsed.narration.replace(/BLOCKED[:：][\s\S]*/g, "").trim() || parsed.narration, 280),
+      });
+    }
+    if (parsed.blockedReason) {
+      leaderBlocked = parsed.blockedReason;
+      break;
+    }
+    if (parsed.runReport) {
+      for (const [key, value] of Object.entries(parsed.runReport)) {
+        claimed[key] = (claimed[key] ?? 0) + value;
+      }
+    }
+
+    const feeds: string[] = [];
+
+    // 1) Atlas's own read tools.
+    for (let i = 0; i < parsed.toolCalls.length; i++) {
+      const call = parsed.toolCalls[i];
+      if (i >= budgets.glm.maxActionsPerTurn) {
+        feeds.push(`${i + 1}. [rejected] action budget exceeded (${budgets.glm.maxActionsPerTurn} per turn)`);
+        continue;
+      }
+      if (call.error || !call.action) {
+        feeds.push(`${i + 1}. [error] ${call.error}`);
+        continue;
+      }
+      const result = await executeTool({
+        action: call.action,
+        prose: null,
+        runId,
+        novelId,
+        taskId: null,
+        taskKey: "leader",
+        measured,
+        qc,
+        signal,
+        actor: "atlas",
+      });
+      feeds.push(`${i + 1}. ${result.feed}`);
+    }
+
+    // 2) Work orders → CODE creates the task, member executes, verified
+    //    outcome feeds back. Sequential by design (parallelGroup stays null
+    //    in v1 — plan §4.1).
+    for (const d of parsed.delegates) {
+      if (d.error || !d.order) {
+        feeds.push(`delegate: [error] ${d.error}`);
+        continue;
+      }
+      if (delegateCount >= budgets.glm.planMaxTasks) {
+        feeds.push(`delegate "${truncate(d.order.title, 60)}": [rejected] delegate budget exceeded (${budgets.glm.planMaxTasks} per run)`);
+        continue;
+      }
+      delegateCount += 1;
+      taskCounter += 1;
+      const row = await db.agentTask.create({
+        data: {
+          runId,
+          key: `Task ${taskCounter}`,
+          parallelGroup: null,
+          assignee: d.order.assignee,
+          title: d.order.title,
+          detail: d.order.detail,
+          status: "pending",
+          artifactType: d.order.artifactType,
+          artifactId: null,
+          artifactLabel: d.order.artifactLabel,
+          order: taskCounter,
+        },
+      });
+      await emitEvent({
+        runId,
+        taskId: row.id,
+        actor: "atlas",
+        kind: "task_update",
+        summary: `Task ${taskCounter} delegated to ${d.order.assignee} — ${truncate(d.order.title, 100)}`,
+      });
+
+      const outcome = await executeTask({
+        runId,
+        novelId,
+        task: row,
+        snapshot,
+        signal,
+        measured,
+        claimed,
+        issues,
+        qc,
+        extraSkills: d.order.skills ?? [],
+      });
+      if (outcome === "skipped") return; // gate stop — handlers own status
+      feeds.push(
+        `${row.key} (${d.order.assignee}) → ${outcome}${outcome === "done" ? " (verified)" : ""}`
+      );
+    }
+
+    // finish (or a tool-free reply) ends the loop — but only after this
+    // turn's delegates have run.
+    if (parsed.endsLoop && parsed.delegates.length === 0) break;
+
+    messages.push({ role: "assistant", content: reply });
+    messages.push({
+      role: "user",
+      content: `TOOL RESULTS:\n${feeds.join("\n") || "(no actions parsed — use read tools or ```team-delegate blocks)"}`,
     });
-    // "skipped" = the run left the executor's hands (reject→paused gate stop
-    // or cancel abort). The decision handler owns run/task status now —
-    // finalizing here would overwrite `paused` with `failed`.
-    if (outcome === "skipped") return;
-    if (outcome === "done") doneCount += 1;
-    outcomes.push(`${task.key}: ${outcome}`);
   }
-  void outcomes;
 
-  // A cancelled run is owned by the cancel handler — never write a terminal
-  // report over its status.
   if (signal.aborted) return;
 
-  // Honesty pass — claimed (model) vs verified (measured).
-  for (const key of REPORT_KEYS) {
-    if (key in claimed && claimed[key] !== verified[key]) {
-      issues.push(`claimed ${key}=${claimed[key]} but measured ${key}=${verified[key]}`);
-    }
+  // ---- Final report (leader verification closure, plan §4 capability 5) ----
+  if (leaderBlocked) {
+    issues.push(`leader blocked: ${leaderBlocked}`);
   }
 
-  const writeTasks = taskRows.filter((t) => t.artifactType === "chapter");
-  const status: AgentRunStatus =
-    doneCount > 0 || writeTasks.length === 0 ? "completed" : "failed";
+  // Honesty pass — claimed (model) vs verified (measured), all audited keys.
+  issues.push(...auditReport(claimed, snapshotOf(measured)));
 
-  const summaryBits: string[] = [`${doneCount}/${taskRows.length} tasks done.`];
-  if (verified.chaptersWritten > 0 || verified.chaptersUpdated > 0) {
-    summaryBits.push(
-      `Chapters: ${verified.chaptersWritten} created, ${verified.chaptersUpdated} updated · ${verified.words.toLocaleString()} words written (measured).`
+  // Review→repair closure: blocking findings must be answered by a repair
+  // write or an explicit leader decision, never silently dropped.
+  if (measured.blockingFound > 0 && measured.chaptersUpdated === 0) {
+    issues.push(
+      `review found ${measured.blockingFound} blocking issue(s) but no repair write followed — verify the leader's decision to defer`
     );
   }
+
+  const tasks = await db.agentTask.findMany({ where: { runId }, select: { status: true } });
+  const doneCount = tasks.filter((t) => t.status === "done").length;
+  const status: AgentRunStatus =
+    leaderBlocked && doneCount === 0 ? "failed" : "completed";
+
+  const summaryBits: string[] = [
+    `${doneCount}/${tasks.length} tasks done across the team.`,
+  ];
+  if (measured.chaptersWritten > 0 || measured.chaptersUpdated > 0) {
+    summaryBits.push(
+      `Chapters: ${measured.chaptersWritten} created, ${measured.chaptersUpdated} updated · ${measured.words.toLocaleString()} words written (measured).`
+    );
+  }
+  if (measured.reviewsRun > 0) {
+    summaryBits.push(`Reviews: ${measured.reviewsRun} run, ${measured.blockingFound} blocking found.`);
+  }
+  if (measured.chaptersFinalized > 0 || measured.settlesRun > 0) {
+    summaryBits.push(
+      `E2 gates: ${measured.chaptersFinalized} finalized, ${measured.settlesRun} settled (code-verified).`
+    );
+  }
+  if (measured.exportsRun > 0) {
+    summaryBits.push(`Exports: ${measured.exportsRun} manuscript build(s).`);
+  }
+  if (leaderBlocked) {
+    summaryBits.push(`Leader stopped early: ${truncate(leaderBlocked, 200)}`);
+  }
+
   const report: RunFinalReport = {
     summary: summaryBits.join(" "),
-    reported: Object.keys(claimed).length > 0 ? { ...claimed } : { ...verified },
-    verified: { ...verified },
+    reported: Object.keys(claimed).length > 0 ? { ...claimed } : { ...snapshotOf(measured) },
+    verified: snapshotOf(measured),
     blockingIssues: issues.slice(0, 12),
   };
 
@@ -683,6 +805,7 @@ async function executePlanned(runId: string, goal: string, signal: AbortSignal):
   await emitEvent({
     runId,
     kind: "message",
+    actor: "atlas",
     summary:
       status === "completed"
         ? `Run complete — ${report.summary}${issues.length > 0 ? ` (${issues.length} verification note${issues.length > 1 ? "s" : ""})` : ""}`
@@ -690,8 +813,23 @@ async function executePlanned(runId: string, goal: string, signal: AbortSignal):
   });
 }
 
+/** The audited counters as a plain record for the final report. */
+function snapshotOf(m: Measured): Record<string, number> {
+  return {
+    chaptersWritten: m.chaptersWritten,
+    chaptersUpdated: m.chaptersUpdated,
+    outlineBeatsUpdated: m.outlineBeatsUpdated,
+    words: m.words,
+    reviewsRun: m.reviewsRun,
+    blockingFound: m.blockingFound,
+    exportsRun: m.exportsRun,
+    chaptersFinalized: m.chaptersFinalized,
+    settlesRun: m.settlesRun,
+  };
+}
+
 // ---------------------------------------------------------------------------
-// Task execution (Sage tool loop)
+// Task execution (member tool loop — sage/nova/prism/forge)
 // ---------------------------------------------------------------------------
 
 type TaskOutcome = "done" | "blocked" | "failed" | "skipped";
@@ -704,21 +842,47 @@ interface ToolResult {
 async function executeTask(params: {
   runId: string;
   novelId: string;
-  task: { id: string; key: string; title: string; detail: string; artifactType: string | null; artifactLabel: string | null };
+  task: { id: string; key: string; title: string; detail: string; assignee: string; artifactType: string | null; artifactLabel: string | null };
   snapshot: StorySnapshotData;
   signal: AbortSignal;
   measured: Measured;
   claimed: Record<string, number>;
   issues: string[];
+  /** Run-scoped QC state (Phase 6 E2 gates). */
+  qc: QcLedger;
+  /** delegate-supplied skill ids appended after the role's defaults (P5). */
+  extraSkills: string[];
 }): Promise<TaskOutcome> {
   const budgets = getBudgets();
   const { runId, novelId, task, snapshot, signal, measured } = params;
+  const assignee = (
+    ["sage", "nova", "prism", "forge"].includes(task.assignee) ? task.assignee : "sage"
+  ) as AgentRoleId;
   const taskRef = { runId, taskId: task.id };
 
   await db.agentTask.update({ where: { id: task.id }, data: { status: "in_progress" } });
-  await emitEvent({ ...taskRef, kind: "task_update", summary: `${task.key} started — ${task.title}` });
+  await emitEvent({ ...taskRef, actor: assignee, kind: "task_update", summary: `${task.key} started (${assignee}) — ${task.title}` });
 
-  const system = buildSystemPrompt("sage");
+  // Skills: role defaults + delegate-supplied extras → telemetry rows record
+  // what was actually injected (plan §7.2 SkillInvocation). Unknown ids from
+  // the delegate block are recorded with injected:false — never silent.
+  const { prompt: system, injectedSkillIds } = buildSystemPrompt(assignee, params.extraSkills);
+  const unknownSkills = params.extraSkills.filter((id) => !getSkillEntry(id));
+  await db.skillInvocation.createMany({
+    data: [
+      ...injectedSkillIds.map((skillId) => ({ taskId: task.id, skillId, injected: true })),
+      ...unknownSkills.map((skillId) => ({ taskId: task.id, skillId, injected: false })),
+    ],
+  }).catch(() => undefined); // telemetry must never break execution
+  if (unknownSkills.length > 0) {
+    await emitEvent({
+      ...taskRef,
+      actor: "atlas",
+      kind: "message",
+      summary: `Skill note: unknown skill id(s) dropped for ${task.key} — ${unknownSkills.join(", ")}`,
+    });
+  }
+
   const quotaHint =
     task.artifactLabel?.match(/chapter\s*(\d+)/i) ?? task.title.match(/chapter\s*(\d+)/i);
   const targetChapterIndex = quotaHint ? Number(quotaHint[1]) : null;
@@ -728,15 +892,18 @@ async function executeTask(params: {
     `${task.key} — ${task.title}`,
     truncate(task.detail || "(no additional detail)", budgets.prompt.taskBriefCapChars),
     "",
-    "MISSION LOCK: actions beyond this brief are failures. If it is impossible, make your final line start with BLOCKED: plus the reason.",
+    "MISSION LOCK: you are the assigned member for this brief; actions beyond it are failures. If it is impossible, make your final line start with BLOCKED: plus the reason.",
     "",
     "STORY SNAPSHOT (measured at run start; use read tools for fresher data):",
     renderSnapshot(snapshot),
   ];
-  if (targetChapterIndex) {
-    envelopeParts.push("", quotaForChapter(snapshot, targetChapterIndex));
-  } else {
-    envelopeParts.push("", quotaForChapter(snapshot, snapshot.nextChapterIndex));
+  if (assignee === "sage") {
+    // Word quota is a writer concern — researchers/analysts don't need it.
+    if (targetChapterIndex) {
+      envelopeParts.push("", quotaForChapter(snapshot, targetChapterIndex));
+    } else {
+      envelopeParts.push("", quotaForChapter(snapshot, snapshot.nextChapterIndex));
+    }
   }
   envelopeParts.push("", languageDirective(snapshot));
 
@@ -753,13 +920,7 @@ async function executeTask(params: {
 
   const glmCall = async (tag: string): Promise<string> => {
     if (signal.aborted) throw new Error("Run aborted");
-    const zai = await ZAI.create();
-    const completion = await withTimeout(
-      zai.chat.completions.create({ messages, thinking: { type: "disabled" } }),
-      budgets.glm.timeoutMs,
-      tag
-    );
-    return completion.choices[0]?.message?.content?.trim() ?? "";
+    return glmChat({ messages, tag, signal });
   };
 
   const runTurns = async (turnBudget: number): Promise<void> => {
@@ -771,6 +932,7 @@ async function executeTask(params: {
       if (parsed.narration) {
         await emitEvent({
           ...taskRef,
+          actor: assignee,
           kind: "message",
           summary: truncate(parsed.narration.replace(/BLOCKED[:：][\s\S]*/g, "").trim() || parsed.narration, 280),
         });
@@ -787,6 +949,12 @@ async function executeTask(params: {
 
       const feeds: string[] = [];
 
+      // Members cannot delegate — a team-delegate block here is a protocol
+      // violation, reported back instead of executed.
+      if (parsed.delegates.length > 0) {
+        feeds.push(`note: ${parsed.delegates.length} team-delegate block(s) ignored — only the leader dispatches work.`);
+      }
+
       for (let i = 0; i < parsed.toolCalls.length; i++) {
         const call = parsed.toolCalls[i];
         if (i >= budgets.glm.maxActionsPerTurn) {
@@ -797,6 +965,10 @@ async function executeTask(params: {
           feeds.push(`${i + 1}. [error] ${call.error}`);
           continue;
         }
+        if (!toolAllowedFor(assignee, call.action.action)) {
+          feeds.push(`${i + 1}. [error] ${call.action.action} is not available to your role (${assignee}). Use one of: ${MEMBER_TOOLS[assignee].join(", ")}.`);
+          continue;
+        }
         const result = await executeTool({
           action: call.action,
           prose: parsed.novelWrite,
@@ -805,7 +977,9 @@ async function executeTask(params: {
           taskId: task.id,
           taskKey: task.key,
           measured: measuredForTask,
+          qc: params.qc,
           signal,
+          actor: assignee,
         });
         feeds.push(`${i + 1}. ${result.feed}`);
         if (result.stopped) {
@@ -815,6 +989,18 @@ async function executeTask(params: {
       }
       if (parsed.extraWriteBlocks > 0) {
         feeds.push(`note: ${parsed.extraWriteBlocks} extra novel-write block(s) dropped — one write per turn.`);
+      }
+      // Prose arrived but no write action consumed it — the most common
+      // verification failure. Say so BEFORE the loop ends so the model can
+      // pair the ```novel-write block with create_chapter/update_chapter.
+      if (
+        parsed.novelWrite &&
+        !parsed.toolCalls.some((t) => t.action?.action === "create_chapter" || t.action?.action === "update_chapter") &&
+        !parsed.endsLoop
+      ) {
+        feeds.push(
+          "note: your ```novel-write block was received but NO write action consumed it — prose without create_chapter/update_chapter in the SAME turn is discarded. Re-send BOTH in one turn."
+        );
       }
 
       if (parsed.endsLoop) return;
@@ -834,8 +1020,8 @@ async function executeTask(params: {
     // wait ended — the handler owns task & run status; never touch them here.
     if (stoppedByGate) return "skipped";
 
-    // Write verification for chapter tasks — repair rounds before failure.
-    const requiresWrite = task.artifactType === "chapter";
+    // Write verification for SAGE chapter tasks — repair rounds before failure.
+    const requiresWrite = task.artifactType === "chapter" && assignee === "sage";
     while (
       requiresWrite &&
       measuredForTask.chaptersWritten + measuredForTask.chaptersUpdated === 0 &&
@@ -846,6 +1032,7 @@ async function executeTask(params: {
       repairRound += 1;
       await emitEvent({
         ...taskRef,
+        actor: assignee,
         kind: "error",
         summary: `Write verification failed — no verified DB write. Repair round ${repairRound}/${budgets.glm.repairRounds}.`,
       });
@@ -864,21 +1051,26 @@ async function executeTask(params: {
     measured.chaptersUpdated += measuredForTask.chaptersUpdated;
     measured.outlineBeatsUpdated += measuredForTask.outlineBeatsUpdated;
     measured.words += measuredForTask.words;
+    measured.reviewsRun += measuredForTask.reviewsRun;
+    measured.blockingFound += measuredForTask.blockingFound;
+    measured.exportsRun += measuredForTask.exportsRun;
+    measured.chaptersFinalized += measuredForTask.chaptersFinalized;
+    measured.settlesRun += measuredForTask.settlesRun;
 
     let outcome: TaskOutcome;
     if (blockedReason) {
       await db.agentTask.update({ where: { id: task.id }, data: { status: "blocked" } });
-      await emitEvent({ ...taskRef, kind: "task_update", summary: `${task.key} blocked: ${truncate(blockedReason, 200)}` });
-      params.issues.push(`${task.key} blocked: ${blockedReason}`);
+      await emitEvent({ ...taskRef, actor: assignee, kind: "task_update", summary: `${task.key} blocked: ${truncate(blockedReason, 200)}` });
+      params.issues.push(`${task.key} (${assignee}) blocked: ${blockedReason}`);
       outcome = "blocked";
     } else if (requiresWrite && measuredForTask.chaptersWritten + measuredForTask.chaptersUpdated === 0) {
       await db.agentTask.update({ where: { id: task.id }, data: { status: "failed" } });
-      await emitEvent({ ...taskRef, kind: "task_update", summary: `${task.key} failed — write verification never passed.` });
+      await emitEvent({ ...taskRef, actor: assignee, kind: "task_update", summary: `${task.key} failed — write verification never passed.` });
       params.issues.push(`${task.key} failed: no verified write after ${budgets.glm.repairRounds} repair round(s)`);
       outcome = "failed";
     } else {
       await db.agentTask.update({ where: { id: task.id }, data: { status: "done" } });
-      await emitEvent({ ...taskRef, kind: "task_update", summary: `${task.key} done (write verified in DB).` });
+      await emitEvent({ ...taskRef, actor: assignee, kind: "task_update", summary: `${task.key} done${measuredForTask.chaptersWritten + measuredForTask.chaptersUpdated > 0 ? " (write verified in DB)" : ` (${assignee} work verified)`}.` });
       outcome = "done";
     }
     return outcome;
@@ -889,7 +1081,7 @@ async function executeTask(params: {
     }
     const message = error instanceof Error ? error.message : "unknown task error";
     await db.agentTask.update({ where: { id: task.id }, data: { status: "failed" } }).catch(() => undefined);
-    await emitEvent({ ...taskRef, kind: "error", summary: `${task.key} failed: ${truncate(message, 250)}` });
+    await emitEvent({ ...taskRef, actor: assignee, kind: "error", summary: `${task.key} failed: ${truncate(message, 250)}` });
     params.issues.push(`${task.key} failed: ${truncate(message, 200)}`);
     return "failed";
   }
@@ -904,15 +1096,27 @@ interface ExecuteToolParams {
   prose: string | null;
   runId: string;
   novelId: string;
-  taskId: string;
+  taskId: string | null;
   taskKey: string;
   measured: Measured;
+  /** Run-scoped QC state (Phase 6 E2 gates). */
+  qc: QcLedger;
   signal: AbortSignal;
+  /** Which member is calling — gates the per-role tool surface. */
+  actor: AgentRoleId;
 }
 
 async function executeTool(params: ExecuteToolParams): Promise<ToolResult & { stopped?: boolean }> {
-  const { action, prose } = params;
+  const { action, prose, actor } = params;
   const budgets = getBudgets();
+
+  // Per-role tool surface (§8) — hard code-level gate, before any effect.
+  if (!toolAllowedFor(actor, action.action)) {
+    return {
+      ok: false,
+      feed: `${action.action} → error: not available to role "${actor}" (allowed: ${MEMBER_TOOLS[actor].join(", ")}).`,
+    };
+  }
 
   switch (action.action) {
     // ---------------- reads ----------------
@@ -980,6 +1184,131 @@ async function executeTool(params: ExecuteToolParams): Promise<ToolResult & { st
         feed: `doctor_scan → ok (${view.doctor.filter((d) => d.status !== "pass").length} finding(s))\n${lines.join("\n")}`,
       };
     }
+    case "review_chapter": {
+      // Prism's structured review (Phase 5, persisted in Phase 6) — same
+      // core as the Review tab; critical issues are forced blocking
+      // SERVER-SIDE. The verdict lands in ChapterReview (the E2 gate's data
+      // source) and in the run's QC ledger for repair budgeting.
+      const chapter = await db.chapter.findFirst({
+        where: { novelId: params.novelId, index: action.index },
+      });
+      if (!chapter) return { ok: false, feed: `review_chapter(${action.index}) → error: no such chapter` };
+      try {
+        const result = await reviewChapter(chapter.id, { source: "agent" });
+        const blocking = result.issues.filter((i) => i.blocking).length;
+        params.measured.reviewsRun += 1;
+        params.measured.blockingFound += blocking;
+        params.qc.lastBlocking.set(chapter.index, blocking);
+        const lines = result.issues.map(
+          (i) => `- [${i.severity}${i.blocking ? "/BLOCKING" : ""}] (${i.category}, ${i.location}) ${truncate(i.evidence, 200)}${i.fixHint ? ` → fix: ${truncate(i.fixHint, 160)}` : ""}`
+        );
+        await emitEvent({
+          runId: params.runId,
+          taskId: params.taskId,
+          actor,
+          kind: "message",
+          summary: `Reviewed Chapter ${chapter.index} "${truncate(chapter.title, 60)}" — ${result.issues.length} issue(s), ${blocking} blocking.`,
+        });
+        return {
+          ok: true,
+          feed: `review_chapter(${action.index}) → ok: ${result.issues.length} issue(s), ${blocking} blocking (verdict persisted)${blocking > 0 ? " — report these to the leader in your run-report; the leader must dispatch a sage repair, then re-review" : " — you may now call finalize_chapter and settle_chapter for it"}\n${lines.join("\n") || "(no issues found)"}`,
+        };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "review failed";
+        return { ok: false, feed: `review_chapter(${action.index}) → error: ${truncate(message, 200)}` };
+      }
+    }
+    case "finalize_chapter": {
+      // Phase 6 E2 gate — CODE decides from the LATEST persisted review,
+      // never from the model's claim. Prism-only by MEMBER_TOOLS.
+      const chapter = await db.chapter.findFirst({
+        where: { novelId: params.novelId, index: action.index },
+      });
+      if (!chapter) return { ok: false, feed: `finalize_chapter(${action.index}) → error: no such chapter` };
+      const latest = await db.chapterReview.findFirst({
+        where: { chapterId: chapter.id },
+        orderBy: { createdAt: "desc" },
+      });
+      const verdict = evaluateFinalize({
+        latestBlockingCount: latest ? latest.blockingCount : null,
+        wordCount: chapter.wordCount,
+      });
+      if (!verdict.allowed) {
+        return { ok: false, feed: `finalize_chapter(${action.index}) → ${verdict.reason}` };
+      }
+      await db.chapter.update({
+        where: { id: chapter.id },
+        data: { status: "final" },
+      });
+      params.measured.chaptersFinalized += 1;
+      await emitEvent({
+        runId: params.runId,
+        taskId: params.taskId,
+        actor,
+        kind: "write",
+        summary: `Chapter ${chapter.index} "${truncate(chapter.title, 60)}" marked FINAL — E2 gate passed (latest review: ${latest?.blockingCount ?? 0} blocking, verified in DB).`,
+        payload: { artifact: "chapter", chapterId: chapter.id, index: chapter.index, status: "final" },
+      });
+      return {
+        ok: true,
+        feed: `finalize_chapter(${action.index}) → ok: chapter status = final (E2 gate passed on the persisted review).`,
+      };
+    }
+    case "settle_chapter": {
+      // Phase 6 — memory sedimentation through the SAME core as the Review
+      // tab, gated on a clean review. Single-writer rule preserved.
+      const chapter = await db.chapter.findFirst({
+        where: { novelId: params.novelId, index: action.index },
+      });
+      if (!chapter) return { ok: false, feed: `settle_chapter(${action.index}) → error: no such chapter` };
+      const latest = await db.chapterReview.findFirst({
+        where: { chapterId: chapter.id },
+        orderBy: { createdAt: "desc" },
+      });
+      const verdict = evaluateSettle({
+        latestBlockingCount: latest ? latest.blockingCount : null,
+        wordCount: chapter.wordCount,
+      });
+      if (!verdict.allowed) {
+        return { ok: false, feed: `settle_chapter(${action.index}) → ${verdict.reason}` };
+      }
+      try {
+        const outcome: SedimentOutcome = (await sedimentChapterCore(chapter.id)).result;
+        params.measured.settlesRun += 1;
+        await emitEvent({
+          runId: params.runId,
+          taskId: params.taskId,
+          actor,
+          kind: "write",
+          summary: `Chapter ${chapter.index} memory settled — ${outcome.factsCreated} facts, ${outcome.characterStates} states, ${outcome.plantsCreated} plants (verified in DB).`,
+          payload: { artifact: "chapter", chapterId: chapter.id, index: chapter.index, settles: outcome },
+        });
+        return {
+          ok: true,
+          feed: `settle_chapter(${action.index}) → ok: digest + ${outcome.factsCreated} facts (+${outcome.factsTouched} reinforced), ${outcome.characterStates} states, ${outcome.plantsCreated} plants, ${outcome.advanced} advanced, ${outcome.paid} paid (verified).`,
+        };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "settle failed";
+        return { ok: false, feed: `settle_chapter(${action.index}) → error: ${truncate(message, 200)}` };
+      }
+    }
+    case "export_markdown": {
+      // Forge's manuscript build (Phase 5) — real generation over the live
+      // DB; the artifact is reported in the feed (file download stays an
+      // author-facing UI action).
+      try {
+        const manuscript = await buildManuscriptMarkdown(params.novelId);
+        params.measured.exportsRun += 1;
+        const preview = truncate(manuscript.body.replace(/\s+/g, " ").trim(), 600);
+        return {
+          ok: true,
+          feed: `export_markdown → ok: manuscript built (${manuscript.chapterCount} chapters, ${manuscript.totalWords.toLocaleString()} words, ${manuscript.body.length.toLocaleString()} chars). Preview: ${preview}`,
+        };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "export failed";
+        return { ok: false, feed: `export_markdown → error: ${truncate(message, 200)}` };
+      }
+    }
 
     // ---------------- writes ----------------
     case "create_chapter": {
@@ -998,11 +1327,12 @@ async function executeTool(params: ExecuteToolParams): Promise<ToolResult & { st
       if (run?.mode === "approval") {
         return await pauseForApproval({
           ...params,
+          taskId: params.taskId ?? "", // writes only originate from member tasks
           payload: {
             pending: true,
             action: "create_chapter",
             kind: "chapter_settle",
-            taskId: params.taskId,
+            taskId: params.taskId ?? "",
             taskKey: params.taskKey,
             novelId: params.novelId,
             index,
@@ -1049,6 +1379,20 @@ async function executeTool(params: ExecuteToolParams): Promise<ToolResult & { st
       });
       if (!chapter) return { ok: false, feed: `update_chapter(${action.index}) → error: no such chapter` };
 
+      // Phase 6 revision budget: a replacement of a chapter whose latest
+      // review found blocking issues counts as a REPAIR round — bounded by
+      // budgets.qc.revisionRounds so a blocking→fix loop cannot spin forever.
+      const latestBlocking = params.qc.lastBlocking.get(chapter.index) ?? null;
+      const repairVerdict = evaluateRepair({
+        latestBlockingCount: latestBlocking,
+        repairRoundsUsed: params.qc.repairs.get(chapter.index) ?? 0,
+        maxRevisionRounds: budgets.qc.revisionRounds,
+      });
+      if (!repairVerdict.allowed) {
+        return { ok: false, feed: `update_chapter(${action.index}) → ${repairVerdict.reason}` };
+      }
+      const isRepair = repairVerdict.code === "ok" && latestBlocking !== null && latestBlocking > 0;
+
       const verdict = assessOverwrite({
         existingContent: chapter.content,
         incomingContent: prose,
@@ -1061,11 +1405,12 @@ async function executeTool(params: ExecuteToolParams): Promise<ToolResult & { st
       if (needsGate) {
         return await pauseForApproval({
           ...params,
+          taskId: params.taskId ?? "", // writes only originate from member tasks
           payload: {
             pending: true,
             action: "update_chapter",
             kind: verdict.blocked ? "bulk_rewrite" : "chapter_settle",
-            taskId: params.taskId,
+            taskId: params.taskId ?? "",
             taskKey: params.taskKey,
             novelId: params.novelId,
             index: chapter.index,
@@ -1076,7 +1421,8 @@ async function executeTool(params: ExecuteToolParams): Promise<ToolResult & { st
             existingWords: verdict.existingWords,
             content: prose,
           },
-          pendingSummary: `Rewrite of Chapter ${chapter.index} ready (~${words.toLocaleString()} words) — awaiting approval.`,
+          pendingSummary: `Rewrite of Chapter ${chapter.index} ready (~${words.toLocaleString()} words)${isRepair ? " — counts as a QC repair round" : ""} — awaiting approval.`,
+          repairTracking: isRepair ? { qc: params.qc, chapterIndex: chapter.index } : undefined,
         });
       }
 
@@ -1087,14 +1433,20 @@ async function executeTool(params: ExecuteToolParams): Promise<ToolResult & { st
       await db.novel.update({ where: { id: params.novelId }, data: { updatedAt: new Date() } });
       params.measured.chaptersUpdated += 1;
       params.measured.words += Math.max(0, words - verdict.existingWords);
+      if (isRepair) {
+        params.qc.repairs.set(
+          chapter.index,
+          (params.qc.repairs.get(chapter.index) ?? 0) + 1
+        );
+      }
       await emitEvent({
         runId: params.runId,
         taskId: params.taskId,
         kind: "write",
-        summary: `Updated Chapter ${chapter.index} "${truncate(chapter.title, 80)}" — now ${words.toLocaleString()} words (verified in DB).`,
+        summary: `Updated Chapter ${chapter.index} "${truncate(chapter.title, 80)}" — now ${words.toLocaleString()} words${isRepair ? ` (repair round ${params.qc.repairs.get(chapter.index)}/${budgets.qc.revisionRounds})` : ""} (verified in DB).`,
         payload: { artifact: "chapter", chapterId: chapter.id, index: chapter.index, words },
       });
-      return { ok: true, feed: `update_chapter(${chapter.index}) → ok: content replaced, ${words} words (verified).` };
+      return { ok: true, feed: `update_chapter(${chapter.index}) → ok: content replaced, ${words} words (verified).${isRepair ? " Re-review this chapter to re-check the blocking findings." : ""}` };
     }
 
     case "update_outline_beat": {
@@ -1136,6 +1488,8 @@ async function pauseForApproval(params: {
   taskId: string;
   measured: Measured;
   signal: AbortSignal;
+  /** Phase 6: when set, a verified commit counts as a QC repair round. */
+  repairTracking?: { qc: QcLedger; chapterIndex: number };
 }): Promise<ToolResult & { stopped?: boolean }> {
   const { payload, runId, taskId, signal } = params;
 
@@ -1160,7 +1514,8 @@ async function pauseForApproval(params: {
   });
 
   // Stateless wait — poll run.status; approve/reject/cancel handlers flip it.
-  const deadline = Date.now() + 30 * 60 * 1000;
+  const budgets = getBudgets();
+  const deadline = Date.now() + budgets.qc.approvalWaitMs;
   while (Date.now() < deadline) {
     if (signal.aborted) return { ok: false, feed: "gate aborted", stopped: true };
     await sleep(1000);
@@ -1189,6 +1544,10 @@ async function pauseForApproval(params: {
       if (updated) {
         params.measured.chaptersUpdated += 1;
         params.measured.words += Math.max(0, updated.wordCount - payload.existingWords);
+        if (params.repairTracking) {
+          const { qc, chapterIndex } = params.repairTracking;
+          qc.repairs.set(chapterIndex, (qc.repairs.get(chapterIndex) ?? 0) + 1);
+        }
         return {
           ok: true,
           feed: `gate approved → Chapter ${updated.index} now has ${updated.wordCount} words (verified). Task complete; end your reply without tool calls.`,

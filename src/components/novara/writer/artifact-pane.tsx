@@ -28,6 +28,7 @@ import { cn } from "@/lib/utils";
 import { CharactersPanel, OutlinePanel, WorldPanel } from "./bible-panels";
 import { ChapterEditor } from "./chapter-editor";
 import { MemoryPanel } from "./memory-panel";
+import { QcPanel } from "./qc-panel";
 import { ReviewPanel } from "./review-panel";
 
 // ---------------------------------------------------------------------------
@@ -263,6 +264,10 @@ export function ArtifactPane({
 
           <TabsContent value="memory" className="mt-0">
             <MemoryPanel novel={detail.novel} />
+          </TabsContent>
+
+          <TabsContent value="qc" className="mt-0">
+            <QcPanel />
           </TabsContent>
         </div>
       </Tabs>

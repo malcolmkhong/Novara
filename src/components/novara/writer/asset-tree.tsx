@@ -21,6 +21,7 @@ import {
   Loader2,
   Pencil,
   Plus,
+  ShieldCheck,
   Trash2,
   Upload,
   Users,
@@ -326,6 +327,11 @@ export function AssetTree({
             icon={<Brain className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />}
             label="Memory"
             onClick={() => onOpenArtifactTab("memory")}
+          />
+          <TreeGroup
+            icon={<ShieldCheck className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />}
+            label="QC"
+            onClick={() => onOpenArtifactTab("qc")}
           />
         </ul>
 

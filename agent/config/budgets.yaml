@@ -11,13 +11,21 @@ glm:
   routeMaxDuration: 90        # export const maxDuration on AI route handlers
   maxTurns: 3                 # bounded tool loop per task (Think→Tool→Observe ≤3)
   maxActionsPerTurn: 3        # novel-tool blocks per turn (plan §7.1)
-  planMaxTasks: 8             # Atlas may not plan more than this
+  planMaxTasks: 44            # Atlas may not plan more than this (10-chapter QC runs need ~3 orders/chapter)
+  leaderMaxTurns: 22          # Phase 5: Atlas delegate-loop turns per run (raised for multi-chapter runs)
   chapterContextChars: 24000  # max chapter text fed to GLM (review/sediment)
   chapterTailChars: 6000      # previous-chapter tail inside write context
   snapshotCastLimit: 12       # characters in the story snapshot
   snapshotOutlineLimit: 40    # outline beats in the story snapshot
   snapshotFactsLimit: 20      # story facts in the story snapshot
   repairRounds: 2             # write-verification repair rounds per task
+  retryAttempts: 2            # Phase 6: retries for transient GLM errors (429/5xx/timeout)
+  retryBackoffMs: 2500        # Phase 6: exponential backoff base (2.5s → 5s)
+  maxConcurrent: 2            # Phase 6: global in-flight GLM call semaphore
+
+qc:
+  revisionRounds: 2           # Phase 6 E2: review→repair→re-review cycles per chapter (hard budget)
+  approvalWaitMs: 1800000     # gate wait ceiling (30 min) before a gate times out
 
 draft:
   quotaMinWords: 300          # QUOTA_MIN — chapter quota clamp floor
