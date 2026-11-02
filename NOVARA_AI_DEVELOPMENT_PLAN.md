@@ -335,7 +335,7 @@ pending → in_progress → needs_approval → done
 - ✅ 章节编辑器 + AI 起草（实验性 /api/ai/draft，内容经用户编辑回环才落库）
 - ✅ **draft 401 已修复**（2026-11 实测 200 + prose，双模式 E2E）
 - ✅ **字数配额注入（targetWords → AI 可见）**：LENGTH PLAN（目标/已写/剩余）+ 章节配额 = 剩余字数按剩余 beats 均摊（无 beats 时按已成稿平均章长，信号不足回退默认 500-800 词；配额限幅 300–4000；append 模式扣减本章已有字数）；实测 append 2652/3929 词、fill 回退 401 词，行为符合设计
-- ⬜ 创建向导（GLM 生成 bible/角色/卷纲/章纲）+ 大纲→章节工作流打通
+- ⬜ 创建向导 **GLM 生成 + 结构化落库已完成 ✅**（2026-11 实测）：`POST /api/ai/wizard` 按 section 生成 logline/premise/characters/beats（中英双语规范行格式，上下文连贯传递）；`wizard-parse.ts` 容错解析（编号/破折号变体/裸行全兜底）；`POST /api/novels` 支持嵌套 characters/worldEntries/outlineBeats 原子落库（wizard 传 targetWords，联动 draft 字数配额）；Agent Browser E2E：四步全 AI 生成 → 创建 → Characters(6)/Outline(12) 结构化入库 ✓。**剩余：大纲→章节工作流打通（随 Phase 3 run 系统实装）**
 - ⬜ 沉淀管线重建（summary/facts/charStates/伏笔台账）+ 审查（issue 清单 + blocking 门）+ 防覆盖闸
 - ⬜ markdown 整书导出（现有 JSON 备份之外）
 - **验收**: 建书→规划→写1章（AI 起草落库）→审查→沉淀→导出 全流程走通

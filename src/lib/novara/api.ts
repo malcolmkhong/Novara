@@ -52,12 +52,39 @@ export interface CreateNovelInput {
   genre?: string;
   synopsis?: string;
   targetWords?: number;
+  characters?: { name: string; role?: string; description?: string }[];
+  worldEntries?: { title: string; category?: string; content?: string }[];
+  outlineBeats?: { title: string; summary?: string }[];
 }
 
 export function createNovel(
   input: CreateNovelInput
 ): Promise<{ novel: NovelSummary }> {
   return request("/api/novels", { method: "POST", body: JSON.stringify(input) });
+}
+
+// ---------------------------------------------------------------------------
+// AI wizard ("New with the AI team")
+// ---------------------------------------------------------------------------
+
+export type WizardSection = "logline" | "premise" | "characters" | "beats";
+
+export interface WizardGenerateInput {
+  section: WizardSection;
+  genre?: string;
+  logline?: string;
+  premise?: string;
+  characters?: string;
+  targetWords?: number;
+}
+
+export function generateWizardSection(
+  input: WizardGenerateInput
+): Promise<{ content: string }> {
+  return request("/api/ai/wizard", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
 }
 
 export function getNovel(id: string): Promise<NovelDetail> {
