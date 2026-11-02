@@ -23,6 +23,8 @@ import { Progress } from "@/components/ui/progress";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
+import { useWriterStore } from "@/hooks/use-writer-store";
+import { WRITER_TABS, type WriterTabId } from "@/config/writer";
 import {
   addChapter,
   addCharacter,
@@ -51,9 +53,12 @@ import type {
 } from "@/lib/novara/types";
 import { formatWordCount } from "@/lib/novara/words";
 import { AiTeamPanel } from "./ai-team-panel";
+import { AgentConsole } from "./agent-console";
 import { CharactersPanel, OutlinePanel, WorldPanel } from "./bible-panels";
 import { ChapterEditor } from "./chapter-editor";
 import { ExportDialog } from "./import-export";
+import { MemoryPanel } from "./memory-panel";
+import { ReviewPanel } from "./review-panel";
 import { ConfirmDialog } from "./ui-bits";
 
 interface NovelWorkspaceProps {
@@ -73,6 +78,8 @@ export function NovelWorkspace({
 }: NovelWorkspaceProps) {
   const { toast } = useToast();
   const { novel } = detail;
+  const activeTab = useWriterStore((s) => s.activeTabByNovel[novel.id] ?? "chapters");
+  const setActiveTab = useWriterStore((s) => s.setActiveTab);
 
   const [selectedChapterId, setSelectedChapterId] = useState<string | null>(
     detail.chapters[0]?.id ?? null
@@ -266,22 +273,30 @@ export function NovelWorkspace({
       </div>
 
       {/* Tabs */}
-      <Tabs defaultValue="chapters">
+      <Tabs
+        value={activeTab}
+        onValueChange={(v) => setActiveTab(novel.id, v as WriterTabId)}
+      >
         <TabsList className="flex-wrap">
-          <TabsTrigger value="chapters">Chapters</TabsTrigger>
-          <TabsTrigger value="characters">
-            Characters
-            {detail.characters.length > 0 && ` (${detail.characters.length})`}
-          </TabsTrigger>
-          <TabsTrigger value="world">
-            World
-            {detail.worldEntries.length > 0 && ` (${detail.worldEntries.length})`}
-          </TabsTrigger>
-          <TabsTrigger value="outline">
-            Outline
-            {detail.outlineBeats.length > 0 && ` (${detail.outlineBeats.length})`}
-          </TabsTrigger>
-          <TabsTrigger value="team">AI Team</TabsTrigger>
+          {WRITER_TABS.map((tab) => (
+            <TabsTrigger key={tab.id} value={tab.id} className="gap-1.5">
+              {tab.label}
+              {tab.phaseTag && (
+                <span className="rounded bg-muted px-1 py-0.5 text-[10px] font-normal text-muted-foreground">
+                  {tab.phaseTag}
+                </span>
+              )}
+              {tab.id === "characters" && detail.characters.length > 0
+                ? ` (${detail.characters.length})`
+                : null}
+              {tab.id === "world" && detail.worldEntries.length > 0
+                ? ` (${detail.worldEntries.length})`
+                : null}
+              {tab.id === "outline" && detail.outlineBeats.length > 0
+                ? ` (${detail.outlineBeats.length})`
+                : null}
+            </TabsTrigger>
+          ))}
         </TabsList>
 
         <TabsContent value="chapters" className="mt-4">
@@ -341,8 +356,22 @@ export function NovelWorkspace({
           />
         </TabsContent>
 
-        <TabsContent value="team" className="mt-4">
-          <AiTeamPanel />
+        <TabsContent value="team" className="mt-4 space-y-6">
+          <AgentConsole novel={novel} chapterCount={detail.chapters.length} />
+          <div>
+            <h3 className="mb-3 font-display text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+              Team roster
+            </h3>
+            <AiTeamPanel />
+          </div>
+        </TabsContent>
+
+        <TabsContent value="review" className="mt-4">
+          <ReviewPanel chapters={detail.chapters} />
+        </TabsContent>
+
+        <TabsContent value="memory" className="mt-4">
+          <MemoryPanel novel={novel} />
         </TabsContent>
       </Tabs>
 

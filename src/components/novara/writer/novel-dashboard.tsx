@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { BookOpen, Loader2, Plus, Trash2, Upload } from "lucide-react";
+import { BookOpen, Loader2, Plus, Sparkles, Trash2, Upload } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -27,6 +27,7 @@ import type { CreateNovelInput } from "@/lib/novara/api";
 import type { NovelSummary } from "@/lib/novara/types";
 import { formatWordCount } from "@/lib/novara/words";
 import { ImportDialog } from "./import-export";
+import { CreateWizard } from "./create-wizard";
 import { ConfirmDialog, ListSkeleton } from "./ui-bits";
 
 interface NovelDashboardProps {
@@ -48,6 +49,7 @@ export function NovelDashboard({
 }: NovelDashboardProps) {
   const { toast } = useToast();
   const [createOpen, setCreateOpen] = useState(false);
+  const [wizardOpen, setWizardOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [deleting, setDeleting] = useState<NovelSummary | null>(null);
 
@@ -97,6 +99,10 @@ export function NovelDashboard({
           <Button variant="outline" onClick={() => setImportOpen(true)}>
             <Upload className="h-4 w-4" aria-hidden="true" />
             Import backup
+          </Button>
+          <Button variant="outline" onClick={() => setWizardOpen(true)}>
+            <Sparkles className="h-4 w-4" aria-hidden="true" />
+            New with AI team
           </Button>
           <Button onClick={() => setCreateOpen(true)}>
             <Plus className="h-4 w-4" aria-hidden="true" />
@@ -283,6 +289,13 @@ export function NovelDashboard({
           }}
         />
       )}
+
+      {/* AI team creation wizard */}
+      <CreateWizard
+        open={wizardOpen}
+        onOpenChange={setWizardOpen}
+        onFinish={onCreate}
+      />
 
       {/* Delete confirm */}
       <ConfirmDialog
