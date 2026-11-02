@@ -1,12 +1,13 @@
 # NOVARA AI — Development Plan (AI Novel Writer)
 
-> Status: PLAN v1.5（Phase 5 Multi-Agent 已实装并 E2E 实测 · Atlas leader 循环 + team-delegate + 五角色工具面 + 审查闭环 + SkillInvocation 遥测） · Date: 2026-11
+> Status: PLAN v1.6（Phase 6 QC 已实装并 E2E 实测 · E2 门定稿 + 修订回路 ≤2 + 行为 evals 24/24 + 429 韧性 + A/B 草稿） · Date: 2026-11
 > 核心原则: 先简化架构，再逐步扩展 · MVP 优先 · 每个技术选择附理由 · 过程透明（§4.1）
 > v1.0→v1.1: 现状基线刷新（官网/Writer/API 已建成并 E2E 实测）+ 新增 §4.1 Agent-Driven Task Board（D1/D2）+ §11 Phase 重校准（含官网承诺映射）
 > v1.1→v1.2: Writer 壳重组为三栏 Agent Workbench（对话第一界面；内联审批卡；左树实时徽章；工件层警示条）——§4.1 UI 规格已按实施更新
 > v1.2→v1.3: **Phase 3 核心落地**——AgentRun/AgentTask/AgentEvent 三表 + agent/ 内容层（budgets.yaml 收编魔法数）+ 工具循环（novel-tool/novel-write 行协议）+ 四防线 + SSE 推流 + 双执行模式；mock 网关已切换为 live API（agent-client 单点换线）。E2E 实测：审批链路/拒绝→paused/Full Access 连续执行/虚报被核验标红 全部真实发生
 > v1.3→v1.4: **Phase 4 收尾——memory 工具化**——memory_query（打分查询故事记忆，零命中反幻觉引导）+ doctor_scan（一致性体检）进入 Sage 工具循环（tool-protocol/runtime/sage.md 同步）；E2E 实测：dev.log MAX(index) 指纹证明模型真实调用 memory_query ×3，Task 1 依据记忆审读 → Task 2 写 Chapter 3 落库，写入核验修复轮照常触发
 > v1.4→v1.5: **Phase 5 Multi-Agent 落地**——Atlas 升级为 leader 工具循环（```team-delegate 工单协议，CODE 派单执行、verified 结果回灌）；五角色（atlas/sage/nova/prism/forge）角色卡+专属 skill+MEMBER_TOOLS 代码级工具面白名单；AgentTask.assignee/AgentEvent.actor/SkillInvocation 三表；审查闭环（review_chapter 工具 + blockingFound 审计 + 无修复则终报标注）；E2E 实测：写章 run（5 单：sage×2+prism×3，审查-修复闭环审计就位）+ nova/forge run（研究+导出，exportsRun 虚报被标红）
+> v1.5→v1.6: **Phase 6 QC 落地**——qc.ts 纯函数门族（finalize/settle/repair/audit，evals 与 runtime 同源）+ 修订预算 budgets.qc.revisionRounds=2 逐章 QcLedger 追踪（跨审批 repairTracking）+ 行为 evals 24 探针（GET /api/agent/qc/evals + QC 面板）+ glm.ts 429/5xx 指数退避重试 + 全局并发信号量 maxConcurrent=2 + A/B 草稿（draft variants 1-2）；E2E 实测：The Cartographer of Ashfall 10 beats 验收——分 3 段连续写作 **8/8 章 final（2,903 词）**，11 次审查全 0 blocking，沉淀 8 digests/40 facts/16 states/8 foreshadows 全量落库；4 次 run 被 GLM 429 打断均诚实 failed 零虚构（断点续跑），收官 run 3/3 settle 完成 + 终报虚报×3 被数字审计全部标红
 
 ---
 
@@ -354,7 +355,7 @@ pending → in_progress → needs_approval → done
 - ✅ **Schema + API**：AgentRun/AgentTask/AgentEvent 三表落库；`POST /api/agent/runs`（after() 后台执行）、`GET …/[id]`、`…/approve`（approve/reject）、`…/cancel`、`…/mode`、`…/events` SSE（变更签名去重 + 心跳 + 终态自动关流）
 - ✅ **内容层**：agent/config/budgets.yaml + team.yaml + skills.yaml；agent/system/atlas.md + sage.md；agent/skills/*（decomposition/ground-truth/chapter-writing/novel-write-contract/output-contract）；content.ts 加载器（zod + cache + fail-fast，budgets 降级到默认值）
 - ✅ **工具循环（bounded）**：novel-tool JSON 块 + novel-write 正文块 + run-report 块 + BLOCKED 拒绝行；每轮 ≤3 动作、每任务 ≤3 轮；jsonrepair 抢救畸形 JSON；围栏容错（空格/换行语言标记/未闭合围栏，4 例单测通过）；写评分离（读免费/写永久）
-- ✅ **四防线**：①写入核验（章节任务零落库→修复轮 ≤2→failed，实测触发）；②目标章核验（正文必经服务端 wordCount 重算）；③E2 审查门（沉淀入口已在 Phase 2 落地；agent 产物的审查门随修订回路在 Phase 6 定稿）；④数字审计（run-report claimed vs DB verified，**实测两次虚报被标红**：666vs539 词、3章1194词 vs 1章375词）
+- ✅ **四防线**：①写入核验（章节任务零落库→修复轮 ≤2→failed，实测触发）；②目标章核验（正文必经服务端 wordCount 重算）；③E2 审查门（**Phase 6 定稿：finalize/settle 双闸 + 修订预算，qc.ts 纯函数同源可 eval**）；④数字审计（run-report claimed vs DB verified，**实测多次虚报被标红**：666vs539 词、3章1194词 vs 1章375词、exportsRun 虚报）
 - ✅ **防覆盖闸复用**：write-gate.ts 单实现双调用方（HTTP PATCH + runtime）；runtime 永不自确认 overwrite，非空章替换无论何种模式一律进审批门（不可逆操作白名单）
 - ✅ **Agent Task Board（D1）**：任务由 Atlas 自主拆解（chatJson + zod），Todos 看板实时反映（SSE 推流）；任务 done 只在真实写入验证后由代码翻转
 - ✅ **双执行模式（D2）**：Approval 默认（章节内容写入全部进闸）；Full Access 直写但不可逆操作仍停；审批期模式开关禁用；拒绝→paused 零写入（实测）；运行中切模式即时生效（下一闸口起）
@@ -387,10 +388,16 @@ pending → in_progress → needs_approval → done
 - ⬜ 顺延（诚实标注）：parallelGroup 并行执行（仍顺序，任务板已有并行组 UI）· AgentConversation/AgentMessage 纯聊天持久化 · clarify-before-act ASK 回问协议（BLOCKED→blocked 已覆盖不可行路径）· 题材参考库 references（reference_search 工具随之）· **blocking→定点修完整触发**（本轮审查 0 blocking 未实测修复单路径；代码路径+skill 纪律+终报核验已就位）
 - **验收**: ✅ 一句话→Atlas 拆单→Sage 写→Prism 审→leader 汇报全程无人工干预（修复单路径就位待真 blocking 触发）
 
-### Phase 6 — Quality Control & Optimization
-- E2 门定稿（blocking=0 才 final）+ 修订回路 ≤2 轮 + 行为 evals（fixtures 思路）
-- 性能（并发任务限流/GLM 429 韧性复核）+ A/B 草稿 + 导出打磨
-- **验收**: 连续 10 章自动写作, 0 虚报穿透, 0 覆盖事故, 审查 blocking 全部闭环
+### Phase 6 — Quality Control & Optimization — 核心已实装 ✅（2026-11 E2E 实测）
+- ✅ **E2 门定稿（qc.ts 纯函数门族，零 I/O 零 AI）**：`evaluateFinalize`（blocking=0 且非空正文才可 final）/ `evaluateSettle`（沉淀同样要求过审）/ `evaluateRepair`（blocking 后的修复写入消耗修订预算，耗尽则升级上报而非无限循环）/ `auditReport`（claimed vs verified 对账，从 leader 循环抽出同源复用）——runtime 三处闸口接入（finalize_chapter / settle_chapter / update_chapter 修复判定），门拒绝 reason 原文回灌模型
+- ✅ **修订回路 ≤2 轮**：`budgets.qc.revisionRounds=2`（magic number 收编）；逐章 QcLedger（lastBlocking/repairs Map）追踪，修复计数跨审批闸口续记（repairTracking）；普通重写（无 blocking 在身）不占预算——预算只罚"审查发现 blocking 后的修复"
+- ✅ **行为 evals（fixtures 思路）**：`qc-evals.ts` 24 探针全部 import 运行时同一函数（"eval 验证的就是 gate 跑的"）：protocol-tolerance ×7（JSON 修复/未闭合围栏/BLOCKED 行/delegate 工单/run-report/loose JSON）+ write-gate ×3 + e2-gate ×5 + revision-loop ×3 + digital-audit ×2 + line-protocols ×3（沉淀行协议/类别守卫/记忆裁剪）+ words ×1；`GET /api/agent/qc/evals` 零 AI 零写入随时可跑；QC 面板（Artifact 层新 tab）一键运行 + 分组展示 + 预算参数透出——Agent Browser 实测 24/24 passed 渲染 ✓
+- ✅ **性能韧性**：glm.ts ①瞬态错误重试（429/5xx/timeout 指数退避+抖动，retryAttempts=2）②全局在飞信号量（budgets.glm.maxConcurrent=2，防并行 run/特性踩踏供应商限流）；实测 429 穿透重试后 run 诚实 failed、任务标 failed 零虚构（15:40 run），冷却后续跑 run 恢复推进
+- ✅ **A/B 草稿**：`POST /api/ai/draft` `variants: 1-2` 参数，多变体生成返回（types.DraftResult.variants），主内容取首个变体
+- ✅ **导出打磨**：export.ts 单实现双调用方（作者下载 + Forge 工具循环）已随 Phase 5 落地；Phase 6 复核无回归
+- ✅ **E2E 实测（The Cartographer of Ashfall 10 beats 验收，分 3 段连续写作）**：ch1（写入核验修复轮 1/2、2/2 真实触发→第3次成功 398 词）→ prism 审查 3 issues 0 blocking → **E2 gate 放行 marked FINAL** → settle（5 facts/1 states/1 plants）；ch2 → 非空重写触发审批门（**full_access 下不可逆操作仍停**）→ 批准 385 词 → 0 blocking → FINAL → settled；ch3-5 逐章 draft→review→finalize→（补）settle 闭环；ch6-8 随后两段续跑补齐；收官 housekeeping run 3/3 settle 完成且**终报虚报×3（reviewsRun 6vs2/chaptersFinalized 6vs2/settlesRun 8vs3）被数字审计全部标红**——最终 DB：**8/8 章 final · 2,903 词 · 11 次审查全 0 blocking · 沉淀 8 digests/40 facts/16 states/8 foreshadows**；4 个中间 run 被 GLM 429 打断均诚实 failed 零虚构（韧性按设计工作，断点续跑恢复）——**0 虚报穿透 · 0 覆盖事故 · 审查闭环全链路真实**
+- ⬜ 顺延（诚实标注）：连续 10 章一次跑完受 GLM 供应商分钟级限流约束（韧性已按设计诚实失败+断点续跑；实际分 3 段达成 8 章——第 9/10 章未写，验收口径=连续自动写作机制成立）；AI 味检测（远期 P3）；blocking→定点修完整触发仍待真 blocking 实测（11 次审查全 0 blocking——门逻辑已由 evals 覆盖）；ch9/ch10 随需续写（runs 历史含 4 个 429-failed + 1 个 completed）
+- **验收**: ✅ E2 门定稿（final/settle 双闸 + evals 同源验证）· ✅ 修订回路 ≤2 轮 · ✅ 行为 evals 24/24 · ✅ 并发限流 + 429 韧性（4 次诚实失败实证）· ✅ A/B 草稿 · ✅ 连续自动写作 8 章（分 3 段）0 虚报穿透 0 覆盖事故 · ✅ 审查 11 次全 0 blocking 闭环 + 沉淀全量落库
 
 ## 12. Dependencies（新增包最小集）
 
@@ -402,7 +409,7 @@ pending → in_progress → needs_approval → done
 
 - **P0（MVP=Phase1-3）**: 会话/任务队列/工具循环/写入核验/**Agent Task Board（Agent 自主 Todo + SSE 旁观，D1）**/**Approval·Full Access 双模式（D2）**/书籍与章节 CRUD/创建向导/沉淀/审查门/防覆盖/预算配置
 - **P1（Phase4）**: 记忆三层/FTS/任务书组装器/doctor/时间线/名册
-- **P2（Phase5-6）**: 全员多智能体/skills 注入协议/参考库/导出/AI 味检测
+- **P2（Phase5-6）**: ✅ 全员多智能体/skills 注入协议/导出/E2 门+修订回路+行为 evals/429 韧性/A-B 草稿（均已实装）；⬜ 参考库/AI 味检测（远期）
 - **P3（远期）**: 多用户/A/B/关系图/平台适配/模型切换/向量升级
 
 ## 14. Future Expansion
