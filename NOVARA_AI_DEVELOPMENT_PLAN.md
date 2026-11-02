@@ -15,7 +15,7 @@
 - **AI Writer 已建成**：novel dashboard / workspace（Chapters·Characters·World·Outline·AI Team 五标签）/ chapter editor / 版本化 JSON 导入导出（`format: novara-novel-backup, version: 1` + integrity 计数校验块，E2E 实测可用）
 - **API 已建成**：novels / chapters / characters / world-entries / outline-beats CRUD + import + ai/draft（实验）
 - 当前 schema 6 models：`User`（NextAuth 预留，未使用）· `Novel` · `Chapter`（wordCount 服务端重算）· `Character` · `WorldEntry` · `OutlineBeat`；v1.0 所述 12 models 旧命名已随 Atlas 清理废弃
-- 已知缺陷：`POST /api/ai/draft` 运行时 401（GLM SDK `missing X-Token header`，凭据注入问题，非代码结构问题）→ Phase 2 P0
+- ~~已知缺陷：`POST /api/ai/draft` 运行时 401~~ → **已修复（2026-11 实测）**：GLM 凭据注入恢复正常，POST /api/ai/draft 返回 200 + 真实 prose（append/fill 双模式 E2E 实测通过）
 - v1.0 引用的旧引擎参考件（server.ts 1396 行 / novel-tools.ts / prompts.ts）**现已不在磁盘**；其机制设计已收录本计划 §4/§7/§8，作为重建蓝本
 - DB 数据完好（真实样例书可读写）；平台自带 `/skills/` 目录为 Z.ai 资产，不计入本项目、不依赖、不修改
 - 开源仓库 `lingfengQAQ/webnovel-writer` 已实际克隆检查（v6，Claude Code 插件，GPL-3.0）：8 skills + 4 agents + Python 记忆引擎 + 只读 dashboard，详见 §9
@@ -333,7 +333,8 @@ pending → in_progress → needs_approval → done
 
 ### Phase 2 — Novel Creation System — 部分建成
 - ✅ 章节编辑器 + AI 起草（实验性 /api/ai/draft，内容经用户编辑回环才落库）
-- ⬜ **P0：修复 draft 401**（GLM SDK X-Token 凭据注入，见 §0 已知缺陷）
+- ✅ **draft 401 已修复**（2026-11 实测 200 + prose，双模式 E2E）
+- ✅ **字数配额注入（targetWords → AI 可见）**：LENGTH PLAN（目标/已写/剩余）+ 章节配额 = 剩余字数按剩余 beats 均摊（无 beats 时按已成稿平均章长，信号不足回退默认 500-800 词；配额限幅 300–4000；append 模式扣减本章已有字数）；实测 append 2652/3929 词、fill 回退 401 词，行为符合设计
 - ⬜ 创建向导（GLM 生成 bible/角色/卷纲/章纲）+ 大纲→章节工作流打通
 - ⬜ 沉淀管线重建（summary/facts/charStates/伏笔台账）+ 审查（issue 清单 + blocking 门）+ 防覆盖闸
 - ⬜ markdown 整书导出（现有 JSON 备份之外）
