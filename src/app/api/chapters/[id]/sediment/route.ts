@@ -1,11 +1,12 @@
 import { db } from "@/lib/db";
+import { getBudgets } from "@/lib/novara/content";
 import { jsonError, withTimeout } from "@/lib/novara/api-helpers";
 import ZAI from "z-ai-web-dev-sdk";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 90;
 
-const GLM_TIMEOUT_MS = 60_000;
+const GLM_TIMEOUT_MS = getBudgets().glm.timeoutMs;
 
 type Params = { params: Promise<{ id: string }> };
 
@@ -216,7 +217,7 @@ export async function POST(_req: Request, { params }: Params) {
         if (existing) {
           await tx.storyFact.update({
             where: { id: existing.id },
-            data: { lastSeenAt: new Date() },
+            data: { lastSeenAt: new Date(), lastSeenChapter: chapter.index },
           });
           factsTouched += 1;
         } else {
@@ -226,6 +227,7 @@ export async function POST(_req: Request, { params }: Params) {
               category: fact.category,
               content: fact.content,
               sourceChapter: chapter.index,
+              lastSeenChapter: chapter.index,
             },
           });
           factsCreated += 1;

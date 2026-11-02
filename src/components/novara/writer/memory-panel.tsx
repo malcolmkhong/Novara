@@ -1,23 +1,33 @@
 "use client";
 
 // ---------------------------------------------------------------------------
-// Memory tab (Phase 4 preview) — story memory + doctor health check.
+// Memory tab (Phase 4 — live). The story bible read back:
 //
-// Honest placeholder: the shapes below are the designed contracts
-// (MemoryItem, DoctorCheck) populated with static mock data. No persistence,
-// no scans — the real engine lands in Phase 4.
+//   - Story memory: items sedimented by Review → Settle (facts, character
+//     states, foreshadow ledger), searchable and filterable by category.
+//   - Story so far: recent chapter digests the AI chains continuity from.
+//   - Doctor checks: deterministic integrity scans over the real tables.
+//
+// The same sediment layer is scored and injected into AI drafting (and the
+// Phase 3 agent snapshot) by src/lib/novara/memory.ts.
 // ---------------------------------------------------------------------------
 
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
+  BookOpenText,
   Brain,
   CheckCircle2,
-  Info,
+  Loader2,
+  RefreshCw,
+  Search,
   Stethoscope,
   XCircle,
   type LucideIcon,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import {
   Card,
   CardContent,
@@ -25,6 +35,8 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { cn } from "@/lib/utils";
+import { getNovelMemory } from "@/lib/novara/api";
 import type {
   DoctorCheck,
   MemoryCategory,
@@ -32,7 +44,7 @@ import type {
 } from "@/lib/novara/agent-types";
 import type { NovelMeta } from "@/lib/novara/types";
 
-const MEMORY_CATEGORY_LABELS: Record<MemoryCategory, string> = {
+const CATEGORY_LABELS: Record<MemoryCategory, string> = {
   world_rule: "World rule",
   character_state: "Character state",
   relationship: "Relationship",
@@ -40,71 +52,23 @@ const MEMORY_CATEGORY_LABELS: Record<MemoryCategory, string> = {
   open_loop: "Open loop",
 };
 
-// Static mock — one item per category, all anchored to chapter 1.
-const MOCK_MEMORY: readonly MemoryItem[] = [
-  {
-    id: "mem-world-1",
-    category: "world_rule",
-    content:
-      "The ledger records lifespan trades in exact years and never lies.",
-    sourceChapter: 1,
-    firstSeen: "2025-01-06T09:15:00.000Z",
-    lastSeen: "2025-01-06T09:15:00.000Z",
-  },
-  {
-    id: "mem-character-1",
-    category: "character_state",
-    content: "Mara knows the register accepts years as payment.",
-    sourceChapter: 1,
-    firstSeen: "2025-01-06T09:15:00.000Z",
-    lastSeen: "2025-01-06T09:15:00.000Z",
-  },
-  {
-    id: "mem-relationship-1",
-    category: "relationship",
-    content: "Mara owes the unhurried customer a favor — origin unknown.",
-    sourceChapter: 1,
-    firstSeen: "2025-01-06T09:15:00.000Z",
-    lastSeen: "2025-01-06T09:15:00.000Z",
-  },
-  {
-    id: "mem-fact-1",
-    category: "story_fact",
-    content: "The store's door chimes before every trade.",
-    sourceChapter: 1,
-    firstSeen: "2025-01-06T09:15:00.000Z",
-    lastSeen: "2025-01-06T09:15:00.000Z",
-  },
-  {
-    id: "mem-loop-1",
-    category: "open_loop",
-    content: "Who audited the ledger before Mara took the night shift?",
-    sourceChapter: 1,
-    firstSeen: "2025-01-06T09:15:00.000Z",
-    lastSeen: "2025-01-06T09:15:00.000Z",
-  },
+const CATEGORY_ORDER: (MemoryCategory | "all")[] = [
+  "all",
+  "open_loop",
+  "character_state",
+  "relationship",
+  "world_rule",
+  "story_fact",
 ];
 
-const MOCK_CHECKS: readonly DoctorCheck[] = [
-  {
-    id: "check-bible-integrity",
-    name: "Bible integrity",
-    status: "pass",
-    detail: "All entries reference valid chapters.",
-  },
-  {
-    id: "check-timeline-order",
-    name: "Timeline order",
-    status: "warn",
-    detail: "1 beat has no time anchor.",
-  },
-  {
-    id: "check-foreshadow-ledger",
-    name: "Foreshadow ledger",
-    status: "fail",
-    detail: "1 promise is past its pay-by chapter (mock).",
-  },
-];
+const LOOP_STATUS_META: Record<
+  "open" | "advanced" | "paid",
+  { label: string; className: string }
+> = {
+  open: { label: "open", className: "border-amber-300 bg-amber-50 text-amber-700" },
+  advanced: { label: "advanced", className: "border-emerald-300 bg-emerald-50 text-emerald-700" },
+  paid: { label: "paid", className: "text-muted-foreground" },
+};
 
 const CHECK_META: Record<
   DoctorCheck["status"],
@@ -115,118 +79,308 @@ const CHECK_META: Record<
   fail: { icon: XCircle, className: "text-rose-600" },
 };
 
+const SCROLL_LIST = "max-h-[380px] overflow-y-auto pr-1 [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-border";
+
 export function MemoryPanel({ novel }: { novel: NovelMeta }) {
+  const [view, setView] = useState<Awaited<ReturnType<typeof getNovelMemory>> | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
+  const [category, setCategory] = useState<MemoryCategory | "all">("all");
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      setView(await getNovelMemory(novel.id));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Unknown error");
+    } finally {
+      setLoading(false);
+    }
+  }, [novel.id]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const categoryCounts = useMemo(() => {
+    const counts = new Map<MemoryCategory, number>();
+    for (const item of view?.items ?? []) {
+      counts.set(item.category, (counts.get(item.category) ?? 0) + 1);
+    }
+    return counts;
+  }, [view]);
+
+  const filtered = useMemo(() => {
+    const items = view?.items ?? [];
+    const q = query.trim().toLowerCase();
+    return items.filter((item) => {
+      if (category !== "all" && item.category !== category) return false;
+      if (q && !item.content.toLowerCase().includes(q)) return false;
+      return true;
+    });
+  }, [view, query, category]);
+
+  const hasMemory =
+    view !== null &&
+    view.stats.facts +
+      view.stats.states +
+      view.stats.loopsOpen +
+      view.stats.loopsAdvanced +
+      view.stats.loopFacts >
+      0;
+
   return (
     <div className="space-y-4">
-      {/* Phase honesty banner */}
+      {/* Live pipeline banner */}
       <div
         role="note"
-        className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900"
+        className="flex items-start gap-2 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900"
       >
-        <Info className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+        <Brain className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
         <p>
-          Story memory and the doctor health check are Phase 4 features. The
-          shapes below are the designed contracts, populated with static mock
-          data.
+          Story memory is written by <span className="font-medium">Review → Settle</span>{" "}
+          after each chapter, and retrieved automatically into AI drafting so new
+          prose cannot contradict established canon. This view is the bible read
+          back — nothing here is mock data.
         </p>
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-2">
-        {/* Story memory */}
-        <Card>
-          <CardHeader>
-            <div className="flex items-center gap-2">
-              <Brain className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
-              <CardTitle className="font-display text-base">
-                Story memory
-              </CardTitle>
-              <Badge
-                variant="outline"
-                className="ml-auto text-[11px] text-muted-foreground"
-              >
-                Phase 4
-              </Badge>
-            </div>
-            <CardDescription>
-              Static preview for “{novel.title}” — nothing is extracted or
-              stored yet.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <ul>
-              {MOCK_MEMORY.map((item) => (
-                <li
-                  key={item.id}
-                  className="flex items-start gap-2 border-b py-2 last:border-0"
-                >
-                  <Badge
-                    variant="outline"
-                    className="mt-0.5 shrink-0 text-[11px] text-muted-foreground"
-                  >
-                    {MEMORY_CATEGORY_LABELS[item.category]}
-                  </Badge>
-                  <div className="min-w-0">
-                    <p className="text-sm">{item.content}</p>
-                    <p className="mt-0.5 text-[11px] text-muted-foreground">
-                      since ch. {item.sourceChapter}
-                    </p>
-                  </div>
-                </li>
-              ))}
-            </ul>
-          </CardContent>
-        </Card>
+      {error && (
+        <div className="flex items-center justify-between gap-2 rounded-lg border border-rose-200 bg-rose-50 p-3 text-sm text-rose-900">
+          <span>Could not load memory: {error}</span>
+          <Button size="sm" variant="outline" onClick={() => void load()}>
+            Retry
+          </Button>
+        </div>
+      )}
 
-        {/* Doctor checks */}
-        <Card>
-          <CardHeader>
-            <div className="flex items-center gap-2">
-              <Stethoscope
-                className="h-4 w-4 text-muted-foreground"
-                aria-hidden="true"
-              />
-              <CardTitle className="font-display text-base">
-                Doctor checks
-              </CardTitle>
-              <Badge
-                variant="outline"
-                className="ml-auto text-[11px] text-muted-foreground"
+      {loading && !view && (
+        <div className="space-y-2" aria-busy="true" aria-label="Loading memory">
+          {[0, 1, 2, 3].map((i) => (
+            <div key={i} className="h-10 animate-pulse rounded-md bg-muted" />
+          ))}
+        </div>
+      )}
+
+      {view && (
+        <>
+          {/* Counters */}
+          <div className="flex flex-wrap gap-1.5" aria-label="Memory counters">
+            <StatBadge label="facts" value={view.stats.facts} />
+            <StatBadge label="states" value={view.stats.states} />
+            <StatBadge
+              label="open loops"
+              value={view.stats.loopsOpen + view.stats.loopsAdvanced + view.stats.loopFacts}
+            />
+            <StatBadge label="paid" value={view.stats.loopsPaid} />
+            <StatBadge label="digests" value={view.stats.digests} />
+            <StatBadge label="chapters" value={view.stats.chapters} />
+            <span className="ml-auto">
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => void load()}
+                disabled={loading}
+                className="h-7 gap-1.5 px-2 text-xs text-muted-foreground"
               >
-                Phase 4
-              </Badge>
+                {loading ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+                ) : (
+                  <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
+                )}
+                Refresh
+              </Button>
+            </span>
+          </div>
+
+          {!hasMemory && (
+            <div className="rounded-lg border border-dashed p-6 text-center">
+              <p className="text-sm font-medium">No memory yet</p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Write a chapter, run Review, then Settle it — the extracted facts,
+                character states and foreshadowing will appear here and start
+                feeding every AI draft.
+              </p>
             </div>
-            <CardDescription>Three designed checks, mock results.</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <ul>
-              {MOCK_CHECKS.map((check) => {
-                const meta = CHECK_META[check.status];
-                const Icon = meta.icon;
-                return (
-                  <li
-                    key={check.id}
-                    className="flex items-start gap-2 border-b py-2 last:border-0"
-                  >
-                    <Icon
-                      className={`mt-0.5 h-4 w-4 shrink-0 ${meta.className}`}
-                      aria-hidden="true"
-                    />
-                    <div className="min-w-0">
-                      <p className="text-sm font-medium">{check.name}</p>
-                      <p className="text-xs text-muted-foreground">
-                        {check.detail}
-                      </p>
+          )}
+
+          <div className="grid gap-4">
+            {/* Story memory */}
+            <Card>
+              <CardHeader className="pb-3">
+                <div className="flex items-center gap-2">
+                  <Brain className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
+                  <CardTitle className="font-display text-base">Story memory</CardTitle>
+                </div>
+                <CardDescription>
+                  What the AI learned from settled chapters.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                {hasMemory && (
+                  <>
+                    <div className="relative">
+                      <Search
+                        className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground"
+                        aria-hidden="true"
+                      />
+                      <Input
+                        value={query}
+                        onChange={(e) => setQuery(e.target.value)}
+                        placeholder="Search memory…"
+                        aria-label="Search memory items"
+                        className="h-8 pl-8 text-sm"
+                      />
                     </div>
-                  </li>
-                );
-              })}
-            </ul>
-            <p className="pt-2 text-xs text-muted-foreground">
-              Doctor scans run on demand once Phase 4 lands.
-            </p>
-          </CardContent>
-        </Card>
-      </div>
+
+                    <div className="flex flex-wrap gap-1.5" role="group" aria-label="Filter by category">
+                      {CATEGORY_ORDER.map((c) => {
+                        const count =
+                          c === "all"
+                            ? view.items.length
+                            : categoryCounts.get(c) ?? 0;
+                        const active = category === c;
+                        return (
+                          <button
+                            key={c}
+                            type="button"
+                            onClick={() => setCategory(c)}
+                            aria-pressed={active}
+                            className={cn(
+                              "rounded-full border px-2.5 py-0.5 text-[11px] transition-colors",
+                              active
+                                ? "border-primary bg-primary text-primary-foreground"
+                                : "text-muted-foreground hover:bg-secondary"
+                            )}
+                          >
+                            {c === "all" ? "All" : CATEGORY_LABELS[c]} · {count}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </>
+                )}
+
+                {filtered.length > 0 ? (
+                  <ul className={SCROLL_LIST} aria-label="Memory items">
+                    {filtered.map((item) => (
+                      <li
+                        key={item.id}
+                        className="flex items-start gap-2 border-b py-2 last:border-0"
+                      >
+                        <Badge
+                          variant="outline"
+                          className="mt-0.5 shrink-0 text-[11px] text-muted-foreground"
+                        >
+                          {CATEGORY_LABELS[item.category]}
+                        </Badge>
+                        {item.category === "open_loop" && item.status && (
+                          <Badge
+                            variant="outline"
+                            className={cn("mt-0.5 shrink-0 text-[11px]", LOOP_STATUS_META[item.status].className)}
+                          >
+                            {LOOP_STATUS_META[item.status].label}
+                          </Badge>
+                        )}
+                        <div className="min-w-0">
+                          <p className="text-sm">{item.content}</p>
+                          <p className="mt-0.5 text-[11px] text-muted-foreground">
+                            {item.sourceChapter != null ? `since ch. ${item.sourceChapter}` : "source unknown"}
+                            {item.lastSeenChapter != null &&
+                              item.lastSeenChapter !== item.sourceChapter &&
+                              ` · last seen ch. ${item.lastSeenChapter}`}
+                          </p>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  hasMemory && (
+                    <p className="py-2 text-sm text-muted-foreground">
+                      No memory items match this filter.
+                    </p>
+                  )
+                )}
+              </CardContent>
+            </Card>
+
+            {/* Story so far */}
+            {view.digests.length > 0 && (
+              <Card>
+                <CardHeader className="pb-3">
+                  <div className="flex items-center gap-2">
+                    <BookOpenText className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
+                    <CardTitle className="font-display text-base">Story so far</CardTitle>
+                  </div>
+                  <CardDescription>
+                    Chapter digests the AI chains continuity from.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <ul className={SCROLL_LIST} aria-label="Chapter digests">
+                    {view.digests.map((d) => (
+                      <li key={d.chapterIndex} className="border-b py-2 last:border-0">
+                        <p className="text-sm font-medium">
+                          Ch. {d.chapterIndex} — {d.title}
+                        </p>
+                        <p className="mt-0.5 line-clamp-3 text-xs text-muted-foreground">
+                          {d.summary}
+                        </p>
+                      </li>
+                    ))}
+                  </ul>
+                </CardContent>
+              </Card>
+            )}
+
+            {/* Doctor checks */}
+            <Card>
+              <CardHeader className="pb-3">
+                <div className="flex items-center gap-2">
+                  <Stethoscope className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
+                  <CardTitle className="font-display text-base">Doctor checks</CardTitle>
+                </div>
+                <CardDescription>
+                  Deterministic integrity scans over the live memory tables.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <ul aria-label="Doctor checks">
+                  {view.doctor.map((check) => {
+                    const meta = CHECK_META[check.status];
+                    const Icon = meta.icon;
+                    return (
+                      <li
+                        key={check.id}
+                        className="flex items-start gap-2 border-b py-2 last:border-0"
+                      >
+                        <Icon
+                          className={`mt-0.5 h-4 w-4 shrink-0 ${meta.className}`}
+                          aria-hidden="true"
+                        />
+                        <div className="min-w-0">
+                          <p className="text-sm font-medium">{check.name}</p>
+                          <p className="text-xs text-muted-foreground">{check.detail}</p>
+                        </div>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </CardContent>
+            </Card>
+          </div>
+        </>
+      )}
     </div>
+  );
+}
+
+function StatBadge({ label, value }: { label: string; value: number }) {
+  return (
+    <Badge variant="secondary" className="text-[11px] font-normal">
+      {value} {label}
+    </Badge>
   );
 }

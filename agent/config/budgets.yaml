@@ -37,3 +37,12 @@ client:
 prompt:
   systemPromptCapChars: 6000  # role card + skills concatenation cap
   taskBriefCapChars: 1800     # task envelope detail cap
+
+memory:
+  topK: 14                    # max scored memory items injected per draft
+  contextBudgetChars: 2600    # char budget for the memory prompt block
+  itemContentChars: 240       # per-item clip inside the block
+  digestWindow: 3             # recent chapter digests injected verbatim
+  digestSummaryChars: 500     # per-digest clip
+  recencyHalfLifeChapters: 12 # chapters until an item's recency ≈ 0.75
+  staleLoopChapters: 10       # doctor: open loop untouched for N chapters → warn

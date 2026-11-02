@@ -34,8 +34,8 @@
 - **D4 — 边界沿袭**：认证延后（Login 直通，User model 已预留）；订阅仅配置与展示，Payment Gateway 不开发、不虚构任何付款/订阅状态（官网已如实标注 pending development）
 
 ### ❓ To-Confirm（待确认事项）
-- z-ai-web-dev-sdk 是否提供 embedding 接口（影响 Phase 4 路线；未确认前不做向量）
-- SQLite FTS5 在本机 Prisma/SQLite 的可用性（需 raw migration 验证）
+- ✅ z-ai-web-dev-sdk embedding 接口：**无**（2026-11 核验 dist/index.d.ts 零匹配）→ Phase 4 v1 走确定性打分召回，向量路线 no-go 留档（仅需替换打分函数）
+- ✅ SQLite FTS5：**v1 不采用**（2026-11 决策留档）——当前规模（每书数千条内）JS 侧打分足够且中文友好（bigram）；FTS5 需 raw 虚表会引入 db push 漂移风险，规模触发时再评估
 - Approval 闸口首批粒度（建议：章节入档 final / 批量改写 / 删除性操作 三类起步，按用户反馈增减）
 
 ---
@@ -361,11 +361,15 @@ pending → in_progress → needs_approval → done
 - ⬜ **明确顺延（诚实标注）**：AgentConversation/AgentMessage 会话持久化（run 事件流已覆盖任务历史；无 run 的纯聊天持久化随 Phase 5 会话 UI 一起做）；clarify-before-act 的 ASK 回问协议（当前任务不可行→BLOCKED→blocked，无交互回问）；大纲→章节工作流（随 run 系统现已部分打通：Atlas 可规划写章任务）
 - **验收（MVP Gate）**: ✅ 派单写章→Todos 实时可见→后台完成→DB 有货→报告数字=DB 实测（虚报被标红×2）→Approval 未批准不入库（拒绝→paused 实测）→Full Access 连续完成且闸口跳过留痕（approval events=0）
 
-### Phase 4 — RAG & Memory System
-- MemoryItem/ChapterChunk/StateChange 落地 + FTS5 验证
-- context pack 组装器（三层召回+启发式排序+预算分配）+ 写作任务书五段化
-- memory_query 工具 + 冲突检测 + doctor 体检端点/页面
-- **验收**: 写第 10 章时任务书自动含第 3 章伏笔与角色状态变化；向量路线 go/no-go 决策留档
+### Phase 4 — RAG & Memory System — v1 已实装 ✅（2026-11 E2E 实测）
+- ✅ **检索引擎（lib/novara/memory.ts）**：确定性打分召回 `categoryWeight × 关键词重合 × 新近度衰减`（latin 词元 + CJK bigram，无需分词器/向量）；预算收编 budgets.yaml memory 段（topK/contextBudgetChars/digestWindow/recencyHalfLife/staleLoopChapters）
+- ✅ **StoryFact.lastSeenChapter**：沉淀管线唯一写入方——事实被后续章 touch 时记录章号，新近度按叙事距离计算而非时间戳（ch12 重提的 ch1 伏笔保持"热"）
+- ✅ **生成端注入闭环（曾缺口：故事圣经只写不读）**：/api/ai/draft 注入 STORY MEMORY + STORY SO FAR 块（实测 considered=25 selected=14 chars=1634，dev.log 留痕）；snapshot.ts 同源供血 agent runtime（memoryBlock 含 digests，替代单条 lastDigest 去重 token）
+- ✅ **Memory 视图 API**：GET /api/novels/[id]/memory（items 全量 contract 形 + digests + stats + doctor）；FACT 行产出的 open_loop 类事实（无台账 status）单独计 loopFacts，对账不隐藏
+- ✅ **doctor 体检（确定性，零 AI 成本）**：bible-integrity（幽灵章引用）· foreshadow-ledger（≥N 章未推进 warn）· memory-coverage（未沉淀章 warn / 空记忆 fail）· cast-recognition（state 名不在 cast warn）——实测抓出真实数据质量信号（cast-recognition warn）
+- ✅ **Memory 面板接真数据**：计数徽章/分类 chips/搜索/循环状态徽章（open·advanced·paid）/Story so far/doctor 卡/空状态指引；mock 移除；Agent Browser E2E：有数据书 25 items 全交互（搜索 25→11、筛选 6/6）✓ 空书 empty state ✓ 移动端 sheet ✓
+- ⬜ 顺延：memory_query / reference_search 工具化（进 agent 工具循环）· StateChange「最近变化」通道 · 冲突检测 · ChapterChunk FTS5（规模到几千条前不需要）
+- **验收（v1）**: ✅ 沉淀书面板全真数据可检索可过滤；✅ draft 提示词自动携带该章相关记忆+前情 digest；✅ doctor 报真实完整性；向量 go/no-go 已留档
 
 ### Phase 5 — Multi-Agent System
 - 全员就位 + 专属 skills 充实 + delegate `skills` 字段 + mission-lock

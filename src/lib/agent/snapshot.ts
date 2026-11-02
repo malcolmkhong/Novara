@@ -8,6 +8,7 @@
 
 import { db } from "@/lib/db";
 import { getBudgets } from "@/lib/novara/content";
+import { retrieveMemory } from "@/lib/novara/memory";
 import { computeChapterQuota, quotaPromptBlock } from "@/lib/novara/quota";
 
 export interface StorySnapshotData {
@@ -28,6 +29,8 @@ export interface StorySnapshotData {
   world: { title: string; category: string; contentPreview: string }[];
   openForeshadows: { id: string; status: string; content: string; plantChapter: number }[];
   lastDigest: { chapterIndex: number; summary: string } | null;
+  /** Phase 4: scored story memory + recent digests, rendered prompt-ready. */
+  memoryBlock: string | null;
   isChinese: boolean;
   nextQuota: { chapterQuota: number; remainingWords: number; basis: string };
 }
@@ -72,6 +75,20 @@ export async function loadStorySnapshot(novelId: string): Promise<StorySnapshotD
 
   const isChinese = /[\u4e00-\u9fff]/.test(`${novel.title}\n${novel.synopsis}`);
 
+  // Phase 4 memory retrieval — the agent runtime plans and writes against the
+  // same scored story memory the experimental draft route uses.
+  const nextBeat = novel.outlineBeats.find((b) => b.index === nextChapterIndex);
+  const memory = await retrieveMemory({
+    novelId,
+    chapterIndex: nextChapterIndex,
+    queryText: [nextBeat?.title, nextBeat?.summary].filter(Boolean).join(" "),
+  });
+  if (memory) {
+    console.log(
+      `[memory] snapshot novel=${novelId} next=ch${nextChapterIndex} considered=${memory.stats.considered} selected=${memory.stats.selected} chars=${memory.stats.chars} digests=${memory.digests.length}`
+    );
+  }
+
   return {
     novel: {
       id: novel.id,
@@ -106,6 +123,7 @@ export async function loadStorySnapshot(novelId: string): Promise<StorySnapshotD
     lastDigest: novel.digests[0]
       ? { chapterIndex: novel.digests[0].chapter.index, summary: novel.digests[0].summary }
       : null,
+    memoryBlock: memory?.block ?? null,
     isChinese,
     nextQuota: {
       chapterQuota: quota.chapterQuota,
@@ -155,7 +173,11 @@ export function renderSnapshot(s: StorySnapshotData): string {
         .join("\n")}`
     );
   }
-  if (s.lastDigest) {
+  if (s.memoryBlock) {
+    // Scored memory already carries the recent digests (STORY SO FAR);
+    // printing the single last digest again would only duplicate tokens.
+    lines.push(s.memoryBlock);
+  } else if (s.lastDigest) {
     lines.push(`LAST CHAPTER ${s.lastDigest.chapterIndex} SUMMARY: ${s.lastDigest.summary.slice(0, 800)}`);
   }
   return lines.join("\n\n");

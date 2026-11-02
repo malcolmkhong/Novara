@@ -1,5 +1,7 @@
 import ZAI from "z-ai-web-dev-sdk";
 import { db } from "@/lib/db";
+import { getBudgets } from "@/lib/novara/content";
+import { retrieveMemory } from "@/lib/novara/memory";
 import { jsonError, parseBody, validationError, withTimeout } from "@/lib/novara/api-helpers";
 import { countWords } from "@/lib/novara/words";
 import { z } from "zod";
@@ -8,8 +10,6 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 90;
 
 const draftSchema = z.object({ chapterId: z.string().min(1) });
-
-const GLM_TIMEOUT_MS = 60_000;
 
 // POST /api/ai/draft — experimental one-chapter AI drafting.
 // Grounded in the novel's synopsis, characters, world entries, outline and
@@ -62,6 +62,7 @@ export async function POST(req: Request) {
   if (!chapter) return jsonError("Chapter not found", 404);
 
   const novel = chapter.novel;
+  const budgets = getBudgets();
   const prevChapter = novel.chapters.find((c) => c.index === chapter.index - 1);
   const hasContent = chapter.content.trim().length > 0;
   const mode: "fill" | "append" = hasContent ? "append" : "fill";
@@ -88,8 +89,8 @@ export async function POST(req: Request) {
     (b) => b.index >= chapter.index,
   ).length;
 
-  const QUOTA_MIN = 300;
-  const QUOTA_MAX = 4000;
+  const QUOTA_MIN = budgets.draft.quotaMinWords;
+  const QUOTA_MAX = budgets.draft.quotaMaxWords;
   const clampQuota = (n: number) =>
     Math.min(QUOTA_MAX, Math.max(QUOTA_MIN, Math.round(n)));
 
@@ -98,7 +99,7 @@ export async function POST(req: Request) {
   if (remainingWords > 0) {
     if (beatsAhead > 0) {
       chapterQuota = clampQuota(remainingWords / beatsAhead);
-    } else if (avgChapterWords >= 200) {
+    } else if (avgChapterWords >= budgets.draft.avgChapterWordsSignal) {
       // Match the rhythm the manuscript has already established.
       chapterQuota = clampQuota(avgChapterWords);
     }
@@ -108,7 +109,7 @@ export async function POST(req: Request) {
     chapterQuota === null
       ? null
       : mode === "append"
-        ? Math.max(200, chapterQuota - chapter.wordCount)
+        ? Math.max(budgets.draft.appendFloorWords, chapterQuota - chapter.wordCount)
         : chapterQuota;
 
   const lengthRule = passQuota
@@ -116,8 +117,10 @@ export async function POST(req: Request) {
       ? `本章篇幅约 ${passQuota} 字。`
       : `Length: roughly ${passQuota} words.`
     : isChinese
-      ? "篇幅约 800–1200 个汉字。"
-      : "Length: roughly 500-800 words.";
+      ? `篇幅约 ${Math.round(budgets.draft.fallbackChapterWords[0] * 1.5)}–${Math.round(
+          budgets.draft.fallbackChapterWords[1] * 1.5
+        )} 个汉字。`
+      : `Length: roughly ${budgets.draft.fallbackChapterWords[0]}-${budgets.draft.fallbackChapterWords[1]} words.`;
 
   const system = isChinese
     ? `你是 Novara AI 的小说写作代理。任务：为长篇小说写出沉浸式的章节正文。只输出正文本身——不要标题、不要解释、不要 Markdown 格式。沿用已有上下文的视角、时态与文风。${lengthRule}`
@@ -148,6 +151,27 @@ export async function POST(req: Request) {
         .map((b) => `${b.index}. ${b.title}${b.summary ? ` — ${clip(b.summary, 150)}` : ""}`)
         .join("\n")}`
     );
+  }
+
+  // Phase 4 memory retrieval — the story bible read back into generation.
+  // Everything the sediment pipeline has learned (facts, character states,
+  // open loops, recent digests) is scored against THIS chapter and injected,
+  // so the AI can no longer contradict established canon.
+  const memory = await retrieveMemory({
+    novelId: novel.id,
+    chapterIndex: chapter.index,
+    queryText: [
+      chapter.title,
+      novel.outlineBeats.find((b) => b.index === chapter.index)?.summary ?? "",
+    ]
+      .filter(Boolean)
+      .join(" "),
+  });
+  console.log(
+    `[memory] draft novel=${novel.id} ch=${chapter.index} considered=${memory?.stats.considered ?? 0} selected=${memory?.stats.selected ?? 0} chars=${memory?.stats.chars ?? 0} digests=${memory?.digests.length ?? 0}`
+  );
+  if (memory?.block) {
+    parts.push(memory.block);
   }
   if (novel.targetWords > 0) {
     parts.push(
@@ -214,7 +238,7 @@ export async function POST(req: Request) {
         ],
         thinking: { type: "disabled" },
       }),
-      GLM_TIMEOUT_MS,
+      GLM_TIMEOUT,
       "AI draft"
     );
 
@@ -238,3 +262,5 @@ function clip(text: string, max: number): string {
   if (trimmed.length <= max) return trimmed;
   return trimmed.slice(-max);
 }
+
+const GLM_TIMEOUT = getBudgets().glm.timeoutMs;

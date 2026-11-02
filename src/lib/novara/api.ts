@@ -17,7 +17,7 @@ import type {
   WorldCategory,
   WorldEntryDTO,
 } from "./types";
-import type { ChapterReview } from "./agent-types";
+import type { ChapterReview, NovelMemoryView } from "./agent-types";
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, {
@@ -192,6 +192,14 @@ export interface SedimentResponse {
 
 export function sedimentChapter(id: string): Promise<SedimentResponse> {
   return request(`/api/chapters/${id}/sediment`, { method: "POST" });
+}
+
+// ---------------------------------------------------------------------------
+// Memory view (Phase 4) — the story bible read back
+// ---------------------------------------------------------------------------
+
+export function getNovelMemory(id: string): Promise<NovelMemoryView> {
+  return request(`/api/novels/${id}/memory`);
 }
 
 export function deleteChapter(id: string): Promise<{ ok: true }> {

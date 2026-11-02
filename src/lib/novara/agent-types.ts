@@ -160,7 +160,8 @@ export interface ChapterReview {
 }
 
 // ---------------------------------------------------------------------------
-// Memory & doctor (Phase 4 — mock data today)
+// Memory & doctor (Phase 4 — live since the sediment pipeline + retrieval
+// engine: GET /api/novels/[id]/memory, lib/novara/memory.ts)
 // ---------------------------------------------------------------------------
 
 export type MemoryCategory =
@@ -177,6 +178,35 @@ export interface MemoryItem {
   sourceChapter: number | null;
   firstSeen: string;
   lastSeen: string;
+  /** Chapter that last resurfaced the item (sediment touch). */
+  lastSeenChapter?: number | null;
+  /** open_loop items only: foreshadow state machine position. */
+  status?: "open" | "advanced" | "paid";
+}
+
+export interface MemoryDigestRow {
+  chapterIndex: number;
+  title: string;
+  summary: string;
+}
+
+export interface NovelMemoryView {
+  novelId: string;
+  items: MemoryItem[];
+  digests: MemoryDigestRow[];
+  doctor: DoctorCheck[];
+  stats: {
+    facts: number;
+    /** open_loop-category items that arrived via FACT lines (no ledger row). */
+    loopFacts: number;
+    states: number;
+    loopsOpen: number;
+    loopsAdvanced: number;
+    loopsPaid: number;
+    digests: number;
+    chapters: number;
+  };
+  generatedAt: string;
 }
 
 export interface DoctorCheck {

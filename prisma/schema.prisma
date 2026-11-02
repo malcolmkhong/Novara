@@ -163,6 +163,10 @@ model StoryFact {
   sourceChapter Int?
   firstSeenAt   DateTime @default(now())
   lastSeenAt    DateTime @updatedAt
+  // Chapter that last resurfaced this fact (sediment touch). Drives honest
+  // recency in the Phase 4 retrieval scoring — a fact re-used in ch. 12 is
+  // "hot" even if first planted in ch. 1.
+  lastSeenChapter Int?
 
   novel Novel @relation(fields: [novelId], references: [id], onDelete: Cascade)
 

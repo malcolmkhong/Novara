@@ -80,6 +80,15 @@ export const budgetsSchema = z.object({
     systemPromptCapChars: z.number().int().min(1000),
     taskBriefCapChars: z.number().int().min(400),
   }),
+  memory: z.object({
+    topK: z.number().int().min(1).max(60),
+    contextBudgetChars: z.number().int().min(400),
+    itemContentChars: z.number().int().min(80),
+    digestWindow: z.number().int().min(0).max(10),
+    digestSummaryChars: z.number().int().min(100),
+    recencyHalfLifeChapters: z.number().int().min(1),
+    staleLoopChapters: z.number().int().min(3),
+  }),
 });
 
 export type Budgets = z.infer<typeof budgetsSchema>;
@@ -116,6 +125,15 @@ export const DEFAULT_BUDGETS: Budgets = {
   prompt: {
     systemPromptCapChars: 6000,
     taskBriefCapChars: 1800,
+  },
+  memory: {
+    topK: 14,                  // max scored memory items per draft
+    contextBudgetChars: 2600,  // char budget for the memory prompt block
+    itemContentChars: 240,     // per-item clip inside the block
+    digestWindow: 3,           // recent chapter digests injected verbatim
+    digestSummaryChars: 500,   // per-digest clip
+    recencyHalfLifeChapters: 12,  // chapters until recency factor ≈ 0.75
+    staleLoopChapters: 10,     // doctor: open loop untouched for N chapters → warn
   },
 };
 
