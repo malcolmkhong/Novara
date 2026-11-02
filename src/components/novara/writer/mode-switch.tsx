@@ -18,10 +18,13 @@ export function ModeSwitch({
   mode,
   onChange,
   disabled = false,
+  showHint = true,
 }: {
   mode: AgentRunMode;
   onChange: (mode: AgentRunMode) => void;
   disabled?: boolean;
+  /** Hide the hint line (compact contexts, e.g. the run control bar). */
+  showHint?: boolean;
 }) {
   return (
     <div className="inline-flex flex-col gap-1.5">
@@ -55,7 +58,9 @@ export function ModeSwitch({
           Full access
         </Button>
       </div>
-      <p className="text-[11px] leading-4 text-muted-foreground">{MODE_HINT[mode]}</p>
+      {showHint && (
+        <p className="text-[11px] leading-4 text-muted-foreground">{MODE_HINT[mode]}</p>
+      )}
     </div>
   );
 }

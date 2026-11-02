@@ -29,6 +29,11 @@ interface ChapterEditorProps {
     patch: { title?: string; content?: string; status?: ChapterStatus }
   ) => Promise<ChapterDTO | null>;
   onAiDraft: (chapter: ChapterDTO) => Promise<AiDraftResult | null>;
+  /**
+   * Workbench mode: hide the built-in chapter list (the left asset tree
+   * provides navigation) and render the editor full width.
+   */
+  hideList?: boolean;
 }
 
 export function ChapterEditor({
@@ -39,6 +44,7 @@ export function ChapterEditor({
   onDelete,
   onSave,
   onAiDraft,
+  hideList = false,
 }: ChapterEditorProps) {
   const { toast } = useToast();
   const selected = chapters.find((c) => c.id === selectedId) ?? null;
@@ -140,6 +146,45 @@ export function ChapterEditor({
     }
   };
 
+  if (hideList) {
+    // Workbench artifact view — editor only, full width.
+    return (
+      <>
+        {renderEditor()}
+        {confirmDelete && (
+          <ConfirmDialog
+            open
+            onOpenChange={setConfirmDelete}
+            title="Delete this chapter?"
+            description={
+              selected
+                ? `“${selected.title}” and its ${formatWordCount(selected.wordCount)} words will be permanently deleted. Later chapters keep their order.`
+                : ""
+            }
+            busy={false}
+            onConfirm={async () => {
+              setConfirmDelete(false);
+              if (selected) await onDelete(selected);
+            }}
+          />
+        )}
+        <ConfirmDialog
+          open={confirmDraft}
+          onOpenChange={setConfirmDraft}
+          title="Generate an AI draft?"
+          description={
+            selected && selected.content.trim()
+              ? `The Novel Writer agent will continue “${selected.title}” from where your text ends. Your existing words stay untouched — the draft is appended below them.`
+              : `The Novel Writer agent will write an opening draft for “${selected?.title ?? ""}”, grounded in your synopsis, characters, world and outline.`
+          }
+          confirmLabel="Write draft"
+          busy={drafting}
+          onConfirm={runAiDraft}
+        />
+      </>
+    );
+  }
+
   return (
     <div className="grid gap-4 lg:grid-cols-[300px_1fr]">
       {/* Chapter list */}
@@ -228,6 +273,42 @@ export function ChapterEditor({
       </div>
 
       {/* Editor */}
+      {renderEditor()}
+
+      <ConfirmDialog
+        open={confirmDelete}
+        onOpenChange={setConfirmDelete}
+        title="Delete this chapter?"
+        description={
+          selected
+            ? `“${selected.title}” and its ${formatWordCount(selected.wordCount)} words will be permanently deleted. Later chapters keep their order.`
+            : ""
+        }
+        busy={false}
+        onConfirm={async () => {
+          setConfirmDelete(false);
+          if (selected) await onDelete(selected);
+        }}
+      />
+
+      <ConfirmDialog
+        open={confirmDraft}
+        onOpenChange={setConfirmDraft}
+        title="Generate an AI draft?"
+        description={
+          selected && selected.content.trim()
+            ? `The Novel Writer agent will continue “${selected.title}” from where your text ends. Your existing words stay untouched — the draft is appended below them.`
+            : `The Novel Writer agent will write an opening draft for “${selected?.title ?? ""}”, grounded in your synopsis, characters, world and outline.`
+        }
+        confirmLabel="Write draft"
+        busy={drafting}
+        onConfirm={runAiDraft}
+      />
+    </div>
+  );
+
+  function renderEditor() {
+    return (
       <div className="rounded-lg border bg-card">
         {!selected ? (
           <div className="flex h-64 items-center justify-center text-sm text-muted-foreground">
@@ -315,36 +396,6 @@ export function ChapterEditor({
           </div>
         )}
       </div>
-
-      <ConfirmDialog
-        open={confirmDelete}
-        onOpenChange={setConfirmDelete}
-        title="Delete this chapter?"
-        description={
-          selected
-            ? `“${selected.title}” and its ${formatWordCount(selected.wordCount)} words will be permanently deleted. Later chapters keep their order.`
-            : ""
-        }
-        busy={false}
-        onConfirm={async () => {
-          setConfirmDelete(false);
-          if (selected) await onDelete(selected);
-        }}
-      />
-
-      <ConfirmDialog
-        open={confirmDraft}
-        onOpenChange={setConfirmDraft}
-        title="Generate an AI draft?"
-        description={
-          selected && selected.content.trim()
-            ? `The Novel Writer agent will continue “${selected.title}” from where your text ends. Your existing words stay untouched — the draft is appended below them.`
-            : `The Novel Writer agent will write an opening draft for “${selected?.title ?? ""}”, grounded in your synopsis, characters, world and outline.`
-        }
-        confirmLabel="Write draft"
-        busy={drafting}
-        onConfirm={runAiDraft}
-      />
-    </div>
-  );
+    );
+  }
 }

@@ -15,7 +15,7 @@ import type { CreateNovelInput } from "@/lib/novara/api";
 import { getGuestSession } from "@/lib/novara/session";
 import type { ChapterDTO, NovelDetail, NovelSummary } from "@/lib/novara/types";
 import { NovelDashboard } from "./novel-dashboard";
-import { NovelWorkspace } from "./novel-workspace";
+import { WorkbenchShell } from "./workbench-shell";
 
 export function WriterApp({ onExit }: { onExit: () => void }) {
   const { toast } = useToast();
@@ -129,7 +129,13 @@ export function WriterApp({ onExit }: { onExit: () => void }) {
   }, [detail]);
 
   return (
-    <div className="flex min-h-screen flex-col bg-background">
+    <div
+      className={
+        detail
+          ? "flex h-[100dvh] flex-col overflow-hidden bg-background"
+          : "flex min-h-screen flex-col bg-background"
+      }
+    >
       <header className="sticky top-0 z-40 border-b bg-background/85 backdrop-blur">
         <div className="mx-auto flex h-14 max-w-6xl items-center gap-3 px-4 sm:px-6">
           <Button variant="ghost" size="sm" onClick={detail ? closeNovel : onExit}>
@@ -158,7 +164,13 @@ export function WriterApp({ onExit }: { onExit: () => void }) {
         </div>
       </header>
 
-      <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-6 sm:px-6 sm:py-8">
+      <main
+        className={
+          detail
+            ? "flex w-full flex-1 overflow-hidden"
+            : "mx-auto w-full max-w-6xl flex-1 px-4 py-6 sm:px-6 sm:py-8"
+        }
+      >
         {opening ? (
           <div className="flex h-64 items-center justify-center gap-2 text-sm text-muted-foreground">
             <span
@@ -168,7 +180,7 @@ export function WriterApp({ onExit }: { onExit: () => void }) {
             Opening novel…
           </div>
         ) : detail ? (
-          <NovelWorkspace
+          <WorkbenchShell
             detail={detail}
             onBack={closeNovel}
             onDelete={handleDelete}
@@ -187,10 +199,12 @@ export function WriterApp({ onExit }: { onExit: () => void }) {
         )}
       </main>
 
-      <footer className="mt-auto border-t bg-secondary/40 py-3 text-center text-xs text-muted-foreground">
-        Novara AI Writer — preview build · Full authentication and payments
-        arrive later · Export backups regularly
-      </footer>
+      {!detail && (
+        <footer className="mt-auto border-t bg-secondary/40 py-3 text-center text-xs text-muted-foreground">
+          Novara AI Writer — preview build · Full authentication and payments
+          arrive later · Export backups regularly
+        </footer>
+      )}
     </div>
   );
 }

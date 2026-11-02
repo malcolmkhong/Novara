@@ -101,31 +101,33 @@ export const REVIEW_SEVERITY_META: Record<
 };
 
 // ---------------------------------------------------------------------------
-// Workspace tab layout
+// Workbench layout (three-pane Agent Workbench — plan §4.1, D1/D2)
+//
+//   left   AssetTree        — novel header + asset tree + live agent badges
+//   center ConversationPane — chat flow (D1 board inline) + approval gate + composer
+//   right  ArtifactPane     — draft / outline / bible / review / memory + warnings
+//
+// The old 7-tab workspace is retired; content surfaces now live in the right
+// pane as artifact views, and the agent conversation is the primary surface.
 // ---------------------------------------------------------------------------
 
-export type WriterTabId =
-  | "chapters"
-  | "characters"
-  | "world"
-  | "outline"
-  | "team"
-  | "review"
-  | "memory";
+/** Center pane view: conversational flow or the Todos board. */
+export type CenterView = "chat" | "board";
 
-export interface WriterTabDef {
-  id: WriterTabId;
+/** Right pane artifact views. */
+export type ArtifactTabId = "draft" | "outline" | "bible" | "review" | "memory";
+
+export interface ArtifactTabDef {
+  id: ArtifactTabId;
   label: string;
   /** Badge shown next to the label, e.g. roadmap phase marker. */
   phaseTag?: string;
 }
 
-export const WRITER_TABS: WriterTabDef[] = [
-  { id: "chapters", label: "Chapters" },
-  { id: "characters", label: "Characters" },
-  { id: "world", label: "World" },
+export const ARTIFACT_TABS: ArtifactTabDef[] = [
+  { id: "draft", label: "Draft" },
   { id: "outline", label: "Outline" },
-  { id: "team", label: "AI Team" },
+  { id: "bible", label: "Bible" },
   { id: "review", label: "Review", phaseTag: "Phase 2" },
   { id: "memory", label: "Memory", phaseTag: "Phase 4" },
 ];

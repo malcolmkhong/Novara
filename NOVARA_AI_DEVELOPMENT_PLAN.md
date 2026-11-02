@@ -1,8 +1,9 @@
 # NOVARA AI — Development Plan (AI Novel Writer)
 
-> Status: PLAN v1.1（Agent Task Board 已融合 · 决策 D1-D4 已锁定） · Date: 2026-11
+> Status: PLAN v1.2（三栏 Agent Workbench 壳已实施 · Agent Task Board UI 地基就绪） · Date: 2026-11
 > 核心原则: 先简化架构，再逐步扩展 · MVP 优先 · 每个技术选择附理由 · 过程透明（§4.1）
 > v1.0→v1.1: 现状基线刷新（官网/Writer/API 已建成并 E2E 实测）+ 新增 §4.1 Agent-Driven Task Board（D1/D2）+ §11 Phase 重校准（含官网承诺映射）
+> v1.1→v1.2: Writer 壳重组为三栏 Agent Workbench（对话第一界面；内联审批卡；左树实时徽章；工件层警示条）——§4.1 UI 规格已按实施更新
 
 ---
 
@@ -118,7 +119,7 @@
 ```
 Frontend (Next.js App Router, RSC + client islands)
   ├─ 官网五页（已建成）· 书架/工作台/章节编辑器/审查面板/聊天浮窗
-  ├─ Agent Todos 卡片（计数徽章/Task ID/并行组/状态图标）+ 审批对话框 + Approval·Full Access 模式开关（§4.1）
+  ├─ Agent Todos 看板（计数徽章/Task ID/并行组/状态图标）+ 内联审批卡 + Approval·Full Access 模式开关，承载于三栏 Workbench 壳（§4.1 v1.2）
   └─ I/O: REST API + SSE 订阅 → 只信 API，不直连 DB
 
 Backend (Route Handlers /api/*)
@@ -178,12 +179,23 @@ pending → in_progress → needs_approval → done
                      ↘ blocked / failed（含修复轮；blocked 可回 in_progress）
 ```
 
-**UI 规格（Writer 工作区）**
-- Todos 卡片：标题 Todos + 计数徽章；行 = 状态图标 + Task ID（并行组形如 Task 3-a / 3-b）+ 一行范围描述
-- 状态图标：pending 空心 · in_progress 旋转 · needs_approval 橙 · done 绿 · failed/blocked 红
-- 活动流：步骤、工具调用、错误如实展示（不美化失败，Task stopped 类中断照实标注）
-- 审批对话框：展示将写入内容的摘要（目标章/字数/改动点）→ 批准（继续）或 拒绝（run 转 paused，库不变）
-- 模式开关（D2）：Approval（默认）/ Full Access；Full Access 连续执行，但不可逆操作（删除、覆盖非空章节）无论何种模式一律暂停确认
+**UI 规格（Writer 工作区 · v1.2 已实施：三栏 Agent Workbench 壳）**
+
+> v1.2 变更（已确认后实施）：原 7 标签工作区（Chapters/Characters/World/Outline/AI Team/Review/Memory 平级标签，Agent 面板嫁接在 "AI Team" 标签内）已重组为三栏 Agent Workbench —— 对话是第一界面，内容面降为工件视图。地基层（types/agent-types/mock-agent/agent-client/hooks/api）原封未动，仅换壳。
+
+| 栏 | 内容 | 对应数据 |
+|---|---|---|
+| 左 · AssetTree（300px） | 小说头卡（进度/Details/Export/Delete）+ 资产树（章节列表/Outline/Characters/World/Review/Memory）+ **实时 agent 徽章** | Novel/Chapter/OutlineBeat/Character/WorldEntry + AgentTask.artifactType/artifactLabel 绑定 |
+| 中 · ConversationPane（弹性） | Chat/Board 切换；Chat = 对话流（agent 气泡/连续工具调用与写入折叠为过程组/错误红卡/系统行）+ **内联审批卡**；Board = Todos 看板 + 活动流；底部输入区 = goal 编辑器 + 模式开关（运行中变控制条：状态/目标/模式/取消） | AgentEvent(kind=message/tool_call/write/task_update/error/approval) + AgentRun.mode |
+| 右 · ArtifactPane（400px，<xl 折叠为 Sheet） | Draft/Outline/Bible/Review/Memory 工件 tabs + **工件层警示条**（error 事件按资产类型挂到对应 tab；in_progress 写入任务显示 amber 提示） | Chapter.content 等 + AgentEvent.payload.artifact |
+
+- Todos 看板（Board 视图 + 保留可内嵌）：标题 Todos + 计数徽章；行 = 状态图标 + Task ID（并行组形如 Task 3-a / 3-b）+ 一行范围描述 + 平行组左色轨
+- 状态图标：pending 空心 · in_progress 旋转 · needs_approval 橙（含手掌图标） · done 绿 · failed/blocked 红
+- 左树徽章绑定规则：task.artifactType=chapter → 解析 artifactLabel 章号绑定对应章节行（章不在树中→回落到 Chapters 组头）；outline_beat/world_entry/character → 对应组头；无 artifact → 小说头卡。in_progress=旋转，needs_approval=橙手掌
+- 审批：**内联卡长在对话流里**（amber 卡：写入目标/字数/摘要/拒绝说明 + Reject/Approve），闸口出现时自动切到 Chat 视图；不再使用弹窗作为主通道（弹窗组件已移除）
+- 模式开关（D2）：Approval（默认）/ Full Access，位于输入区（运行中在控制条，awaiting_approval 时禁用切换）；Full Access 连续执行，但不可逆操作（删除、覆盖非空章节）无论何种模式一律暂停确认
+- 响应式契约：≥1280 三栏；1024–1280 双栏 + 右栏 Sheet（对话头部预览按钮）；<1024 单栏 + 底部三键（Conversation/Assets/Artifacts），点树资产自动弹工件 Sheet
+- 纯手写路径保留：右栏 Draft 编辑器不依赖任何 run，随时可写（对齐“agent 主驱动但不锁死人写”的边界）
 
 **通道与对接**
 - SSE `/api/agent/runs/[id]/events`：推送 task 状态变化与 AgentEvent；断线重连以 run 详情全量对账；降级 2s 轮询

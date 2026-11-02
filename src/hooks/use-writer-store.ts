@@ -2,28 +2,43 @@
 
 // ---------------------------------------------------------------------------
 // Novara AI — writer UI state (zustand).
-// Holds cross-component UI state that outlives tab switches: the active
-// workspace tab per novel and the last execution mode the author chose.
+// Holds cross-pane UI state that survives pane switches and novel switches in
+// the Workbench shell: the center view (chat/board), the active artifact tab,
+// the selected chapter, and the last execution mode the author chose.
 // Domain data stays in component state + API; this store is UI-only.
 // ---------------------------------------------------------------------------
 
 import { create } from "zustand";
 import type { AgentRunMode } from "@/lib/novara/agent-types";
-import type { WriterTabId } from "@/config/writer";
+import type { ArtifactTabId, CenterView } from "@/config/writer";
 
 interface WriterState {
-  /** Active workspace tab per novel id (restored when switching novels). */
-  activeTabByNovel: Record<string, WriterTabId>;
+  /** Center pane view per novel id (chat flow vs Todos board). */
+  centerViewByNovel: Record<string, CenterView>;
+  /** Active right-pane artifact tab per novel id. */
+  artifactTabByNovel: Record<string, ArtifactTabId>;
+  /** Selected chapter per novel id (opened in the Draft artifact view). */
+  selectedChapterByNovel: Record<string, string | null>;
   /** Last execution mode chosen by the author (defaults to approval, D2). */
   lastMode: AgentRunMode;
-  setActiveTab: (novelId: string, tab: WriterTabId) => void;
+  setCenterView: (novelId: string, view: CenterView) => void;
+  setArtifactTab: (novelId: string, tab: ArtifactTabId) => void;
+  selectChapter: (novelId: string, chapterId: string | null) => void;
   setLastMode: (mode: AgentRunMode) => void;
 }
 
 export const useWriterStore = create<WriterState>((set) => ({
-  activeTabByNovel: {},
+  centerViewByNovel: {},
+  artifactTabByNovel: {},
+  selectedChapterByNovel: {},
   lastMode: "approval",
-  setActiveTab: (novelId, tab) =>
-    set((s) => ({ activeTabByNovel: { ...s.activeTabByNovel, [novelId]: tab } })),
+  setCenterView: (novelId, view) =>
+    set((s) => ({ centerViewByNovel: { ...s.centerViewByNovel, [novelId]: view } })),
+  setArtifactTab: (novelId, tab) =>
+    set((s) => ({ artifactTabByNovel: { ...s.artifactTabByNovel, [novelId]: tab } })),
+  selectChapter: (novelId, chapterId) =>
+    set((s) => ({
+      selectedChapterByNovel: { ...s.selectedChapterByNovel, [novelId]: chapterId },
+    })),
   setLastMode: (mode) => set({ lastMode: mode }),
 }));
