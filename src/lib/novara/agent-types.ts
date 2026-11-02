@@ -155,8 +155,8 @@ export interface ChapterReview {
   chapterId: string;
   issues: ReviewIssue[];
   reviewedAt: string;
-  /** Mock-only marker so the UI can label it honestly. */
-  mock: true;
+  /** True only for the legacy deterministic mock generator. */
+  mock: boolean;
 }
 
 // ---------------------------------------------------------------------------

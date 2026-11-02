@@ -183,16 +183,46 @@ export function WorkbenchShell({
     }
   };
 
+  const [pendingOverwrite, setPendingOverwrite] = useState<{
+    id: string;
+    patch: { title?: string; content?: string; status?: ChapterStatus };
+    existingWords: number;
+    incomingWords: number;
+  } | null>(null);
+
   const handleSaveChapter = async (
     id: string,
-    patch: { title?: string; content?: string; status?: ChapterStatus }
+    patch: { title?: string; content?: string; status?: ChapterStatus },
+    opts?: { overwrite?: boolean }
   ): Promise<ChapterDTO | null> => {
     try {
-      const { chapter } = await updateChapter(id, patch);
+      const { chapter } = await updateChapter(id, {
+        ...patch,
+        ...(opts?.overwrite ? { overwrite: true } : {}),
+      });
       onPatchChapter(chapter);
       toast({ title: "Chapter saved" });
       return chapter;
     } catch (e) {
+      // Anti-overwrite gate: the server refuses to replace non-empty content
+      // without an explicit confirmation — surface it as a confirm dialog.
+      const err = e as Error & {
+        status?: number;
+        body?: {
+          requiresOverwrite?: boolean;
+          existingWords?: number;
+          incomingWords?: number;
+        };
+      };
+      if (err.status === 409 && err.body?.requiresOverwrite) {
+        setPendingOverwrite({
+          id,
+          patch,
+          existingWords: err.body.existingWords ?? 0,
+          incomingWords: err.body.incomingWords ?? 0,
+        });
+        return null;
+      }
       toast({
         title: "Save failed",
         description: e instanceof Error ? e.message : "Unknown error",
@@ -449,6 +479,27 @@ export function WorkbenchShell({
         onConfirm={async () => {
           setDeleteOpen(false);
           await onDelete(novel.id);
+        }}
+      />
+
+      {/* Anti-overwrite gate: explicit confirmation to replace content */}
+      <ConfirmDialog
+        open={pendingOverwrite !== null}
+        onOpenChange={(v) => {
+          if (!v) setPendingOverwrite(null);
+        }}
+        title="Overwrite chapter content?"
+        description={`This chapter already has ${pendingOverwrite?.existingWords ?? 0} words. Saving will replace the existing text with the ${pendingOverwrite?.incomingWords ?? 0} new words — the old text cannot be recovered.`}
+        confirmLabel="Overwrite"
+        onConfirm={async () => {
+          const pending = pendingOverwrite;
+          setPendingOverwrite(null);
+          if (!pending) return;
+          await handleSaveChapter(
+            pending.id,
+            pending.patch,
+            { overwrite: true }
+          );
         }}
       />
     </div>

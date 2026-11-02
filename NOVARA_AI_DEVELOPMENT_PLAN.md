@@ -335,9 +335,14 @@ pending → in_progress → needs_approval → done
 - ✅ 章节编辑器 + AI 起草（实验性 /api/ai/draft，内容经用户编辑回环才落库）
 - ✅ **draft 401 已修复**（2026-11 实测 200 + prose，双模式 E2E）
 - ✅ **字数配额注入（targetWords → AI 可见）**：LENGTH PLAN（目标/已写/剩余）+ 章节配额 = 剩余字数按剩余 beats 均摊（无 beats 时按已成稿平均章长，信号不足回退默认 500-800 词；配额限幅 300–4000；append 模式扣减本章已有字数）；实测 append 2652/3929 词、fill 回退 401 词，行为符合设计
-- ⬜ 创建向导 **GLM 生成 + 结构化落库已完成 ✅**（2026-11 实测）：`POST /api/ai/wizard` 按 section 生成 logline/premise/characters/beats（中英双语规范行格式，上下文连贯传递）；`wizard-parse.ts` 容错解析（编号/破折号变体/裸行全兜底）；`POST /api/novels` 支持嵌套 characters/worldEntries/outlineBeats 原子落库（wizard 传 targetWords，联动 draft 字数配额）；Agent Browser E2E：四步全 AI 生成 → 创建 → Characters(6)/Outline(12) 结构化入库 ✓。**剩余：大纲→章节工作流打通（随 Phase 3 run 系统实装）**
-- ⬜ 沉淀管线重建（summary/facts/charStates/伏笔台账）+ 审查（issue 清单 + blocking 门）+ 防覆盖闸
-- ⬜ markdown 整书导出（现有 JSON 备份之外）
+- ✅ 创建向导 **GLM 生成 + 结构化落库**（2026-11 实测）：`POST /api/ai/wizard` 按 section 生成 logline/premise/characters/beats（中英双语规范行格式，上下文连贯传递）；`wizard-parse.ts` 容错解析（编号/破折号变体/裸行全兜底）；`POST /api/novels` 支持嵌套 characters/worldEntries/outlineBeats 原子落库（wizard 传 targetWords，联动 draft 字数配额）；Agent Browser E2E：四步全 AI 生成 → 创建 → Characters(6)/Outline(12) 结构化入库 ✓。**剩余：大纲→章节工作流打通（随 Phase 3 run 系统实装）**
+- ✅ **沉淀管线 + 审查门 + 防覆盖闸（2026-11 实测）**：
+  - **Schema**：新增 ChapterDigest / StoryFact / CharacterState / Foreshadow 四表（共 10 models）；StoryFact 与 MemoryItem contract 同构（category 五类/sourceChapter/firstSeen/lastSeen）——Phase 4 在其上建 FTS/召回，不另起炉灶；沉淀管线是这些表的**唯一写入方**（单一真相源）
+  - **审查门**：`POST /api/chapters/[id]/review` — GLM issue 清单（severity/category/location/evidence/fixHint），**critical 强制 blocking（服务端裁决，模型无权决定）**；带上一章 digest 做连续性审查；chatJson 自动重试 + jsonrepair 修复 GLM 畸形 JSON
+  - **沉淀管线**：`POST /api/chapters/[id]/sediment` — 一章一次事务写入 digest（upsert）/charStates（按章替换）/facts（按 category+content 去重，命中则 touch lastSeen）/伏笔状态机（open→advanced→paid，只前进不后退，ADVANCE/PAID 只认服务端台账 id）；**输出协议为行格式而非 JSON**（章节对话引号会击穿 JSON 转义，实测两次 502 后改行协议一次通过）
+  - **防覆盖闸**：PATCH chapter 有内容替换需显式 `overwrite:true` 否则 **409 requiresOverwrite**（实测 409/200 双向）；编辑器弹确认对话框（旧词数 vs 新词数）；Phase 3 agent 写入直接复用此闸
+  - **Review 标签页实装**：选章→Run AI review→issue 清单（blocking 红线）→ blocking=0 才出现 Settle 按钮→沉淀结果卡（计数徽章+digest+伏笔台账带状态徽章）；Agent Browser E2E：审查（4 issues）→闸门放行→沉淀（4 facts/1 state/1 plant/**2 advanced/1 paid** 状态机全链路演示）✓
+- ✅ **markdown 整书导出（2026-11 实测）**：`GET /api/novels/[id]/export/markdown`（meta+cast+world+outline+全部章节单文件 .md，Content-Disposition 附件）；Export 对话框新增 Markdown 按钮（JSON 备份用于重导入，MD 用于阅读）——**Phase 2 验收链路「建书→规划→写1章→审查→沉淀→导出」全环闭合**
 - **验收**: 建书→规划→写1章（AI 起草落库）→审查→沉淀→导出 全流程走通
 
 ### Phase 3 — Agent Runtime & Task Board（MVP 完成线 · D1/D2 核心交付）

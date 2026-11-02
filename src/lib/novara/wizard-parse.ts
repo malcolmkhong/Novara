@@ -71,7 +71,7 @@ export function parseCastLines(text: string): ParsedCharacter[] {
 
     if (rest) {
       // rest may be "role: description" or just "description".
-      const colon = rest.match(/^([^:：]{1,60})[：:]\s*(.+)$/s);
+      const colon = rest.match(/^([^:：]{1,60})[：:]\s*(.+)$/);
       if (colon) {
         role = colon[1].trim();
         description = colon[2].trim();
@@ -84,7 +84,7 @@ export function parseCastLines(text: string): ParsedCharacter[] {
       name = paren.name;
       role = paren.role;
       if (!role) {
-        const colon = line.match(/^([^:：]{1,60})[：:]\s*(.+)$/s);
+        const colon = line.match(/^([^:：]{1,60})[：:]\s*(.+)$/);
         if (colon) {
           name = colon[1].trim();
           description = colon[2].trim();
@@ -119,7 +119,7 @@ export function parseBeatLines(text: string): ParsedBeat[] {
     let title = line;
     let summary = "";
 
-    const colon = line.match(/^([^:：]{1,200}?)[：:]\s*(.+)$/s);
+    const colon = line.match(/^([^:：]{1,200}?)[：:]\s*(.+)$/);
     const dash = line.match(/^(.+?)\s*[—–]\s*(.+)$/);
     if (colon) {
       title = colon[1].trim();

@@ -50,4 +50,7 @@ export const updateChapterSchema = z.object({
   title: z.string().trim().min(1).max(200).optional(),
   content: z.string().max(1000000).optional(),
   status: z.enum(["draft", "revised", "final"]).optional(),
+  // Anti-overwrite gate: saving over non-empty content requires an explicit
+  // client-side confirmation; the server enforces it with a 409 otherwise.
+  overwrite: z.boolean().optional(),
 });

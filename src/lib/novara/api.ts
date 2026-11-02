@@ -17,6 +17,7 @@ import type {
   WorldCategory,
   WorldEntryDTO,
 } from "./types";
+import type { ChapterReview } from "./agent-types";
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, {
@@ -28,13 +29,23 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
   });
   if (!res.ok) {
     let message = `Request failed (${res.status})`;
+    let body: unknown = null;
     try {
-      const body = (await res.json()) as { error?: string };
-      if (body?.error) message = body.error;
+      body = await res.json();
+      const err = body as { error?: string };
+      if (err?.error) message = err.error;
     } catch {
       // ignore JSON parse errors on error responses
     }
-    throw new Error(message);
+    // Attach status + parsed body so callers can branch on structured
+    // errors (e.g. the chapter overwrite gate's 409 requiresOverwrite).
+    const error = new Error(message) as Error & {
+      status?: number;
+      body?: unknown;
+    };
+    error.status = res.status;
+    error.body = body;
+    throw error;
   }
   return (await res.json()) as T;
 }
@@ -131,6 +142,8 @@ export interface UpdateChapterInput {
   title?: string;
   content?: string;
   status?: ChapterStatus;
+  /** Explicit confirmation required by the anti-overwrite gate (409). */
+  overwrite?: boolean;
 }
 
 export function updateChapter(
@@ -141,6 +154,44 @@ export function updateChapter(
     method: "PATCH",
     body: JSON.stringify(patch),
   });
+}
+
+// ---------------------------------------------------------------------------
+// Review & sediment (Phase 2)
+// ---------------------------------------------------------------------------
+
+export function reviewChapter(id: string): Promise<ChapterReview> {
+  return request(`/api/chapters/${id}/review`, { method: "POST" });
+}
+
+export interface SedimentResult {
+  digestSummary: string;
+  factsCreated: number;
+  factsTouched: number;
+  characterStates: number;
+  plantsCreated: number;
+  advanced: number;
+  paid: number;
+}
+
+export interface ForeshadowRow {
+  id: string;
+  content: string;
+  plantChapter: number;
+  payByChapter: number | null;
+  status: "open" | "advanced" | "paid" | string;
+  lastChapter: number | null;
+}
+
+export interface SedimentResponse {
+  chapterId: string;
+  sedimentedAt: string;
+  result: SedimentResult;
+  ledger: ForeshadowRow[];
+}
+
+export function sedimentChapter(id: string): Promise<SedimentResponse> {
+  return request(`/api/chapters/${id}/sediment`, { method: "POST" });
 }
 
 export function deleteChapter(id: string): Promise<{ ok: true }> {

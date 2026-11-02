@@ -9,6 +9,9 @@ type Params = { params: Promise<{ id: string }> };
 
 // PATCH /api/chapters/[id] — update title/content/status.
 // wordCount is ALWAYS recomputed server-side from content (never trusted).
+// Anti-overwrite gate: replacing non-empty content requires `overwrite:
+// true` (explicit client confirmation) — otherwise 409 with
+// requiresOverwrite so the UI can ask. Title/status-only updates pass.
 export async function PATCH(req: Request, { params }: Params) {
   const { id } = await params;
   const parsed = await parseBody(req);
@@ -20,9 +23,30 @@ export async function PATCH(req: Request, { params }: Params) {
   const existing = await db.chapter.findUnique({ where: { id } });
   if (!existing) return jsonError("Chapter not found", 404);
 
-  const data: { title?: string; content?: string; status?: string; wordCount?: number } = {
-    ...schema.data,
-  };
+  const contentChange =
+    schema.data.content !== undefined &&
+    schema.data.content !== existing.content;
+  const overwritesText = contentChange && existing.content.trim().length > 0;
+  if (overwritesText && schema.data.overwrite !== true) {
+    return Response.json(
+      {
+        error:
+          "This chapter already has content — confirm the overwrite to replace it.",
+        requiresOverwrite: true,
+        existingWords: existing.wordCount,
+        incomingWords: countWords(schema.data.content ?? ""),
+      },
+      { status: 409 }
+    );
+  }
+
+  const data: {
+    title?: string;
+    content?: string;
+    status?: string;
+    wordCount?: number;
+  } = { ...schema.data };
+  delete (data as { overwrite?: boolean }).overwrite;
   if (schema.data.content !== undefined) {
     data.wordCount = countWords(schema.data.content);
   }

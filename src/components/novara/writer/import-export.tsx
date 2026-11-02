@@ -6,6 +6,7 @@ import {
   CheckCircle2,
   ClipboardCopy,
   Download,
+  FileText,
   FileUp,
   Loader2,
   TriangleAlert,
@@ -46,6 +47,7 @@ export function ExportDialog({
   const [json, setJson] = useState<string | null>(null);
   const [busy, setBusy] = useState(true);
   const [copied, setCopied] = useState(false);
+  const [mdBusy, setMdBusy] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -80,6 +82,32 @@ export function ExportDialog({
     a.click();
     a.remove();
     URL.revokeObjectURL(url);
+  };
+
+  // Markdown manuscript: fetch the rendered file from the server as a blob.
+  const downloadMarkdown = async () => {
+    setMdBusy(true);
+    try {
+      const res = await fetch(`/api/novels/${novel.id}/export/markdown`);
+      if (!res.ok) throw new Error(`Export failed (${res.status})`);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${novel.title.toLowerCase().replace(/[^a-z0-9]+/gi, "-").replace(/^-+|-+$/g, "") || "novel"}.md`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      toast({
+        title: "Markdown export failed",
+        description: e instanceof Error ? e.message : "Unknown error",
+        variant: "destructive",
+      });
+    } finally {
+      setMdBusy(false);
+    }
   };
 
   const copy = async () => {
@@ -131,6 +159,18 @@ export function ExportDialog({
           <Button variant="outline" onClick={copy} disabled={!json}>
             <ClipboardCopy className="h-4 w-4" aria-hidden="true" />
             {copied ? "Copied" : "Copy JSON"}
+          </Button>
+          <Button
+            variant="outline"
+            onClick={downloadMarkdown}
+            disabled={mdBusy}
+          >
+            {mdBusy ? (
+              <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+            ) : (
+              <FileText className="h-4 w-4" aria-hidden="true" />
+            )}
+            Markdown
           </Button>
           <Button onClick={download} disabled={!json}>
             <Download className="h-4 w-4" aria-hidden="true" />

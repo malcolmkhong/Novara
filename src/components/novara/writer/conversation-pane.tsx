@@ -607,7 +607,7 @@ export function ConversationPane({
             ) : (
               <>
                 <ConversationStream events={events} />
-                {detail.run.status === "running" && (
+                {detail?.run.status === "running" && (
                   <div className="flex items-center gap-2 pl-8 text-xs text-muted-foreground">
                     <Loader2 className="h-3 w-3 animate-spin" aria-hidden="true" />
                     Working…

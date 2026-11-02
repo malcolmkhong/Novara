@@ -42,6 +42,10 @@ model Novel {
   characters    Character[]
   worldEntries  WorldEntry[]
   outlineBeats  OutlineBeat[]
+  digests       ChapterDigest[]
+  storyFacts    StoryFact[]
+  characterStates CharacterState[]
+  foreshadows   Foreshadow[]
 
   @@index([updatedAt])
 }
@@ -64,6 +68,7 @@ model Chapter {
   updatedAt DateTime @updatedAt
 
   novel Novel @relation(fields: [novelId], references: [id], onDelete: Cascade)
+  digest ChapterDigest?
 
   @@unique([novelId, index])
   @@index([novelId])
@@ -123,4 +128,74 @@ model OutlineBeat {
 
   @@unique([novelId, index])
   @@index([novelId])
+}
+
+// ---------------------------------------------------------------------------
+// Sediment layer (Phase 2) — written ONLY by the sediment pipeline
+// (POST /api/chapters/[id]/sediment) after a blocking-free review.
+// Single source of truth: each fact type has exactly one writable home.
+// StoryFact mirrors the designed MemoryItem contract (agent-types.ts):
+// category mirrors MemoryCategory; sourceChapter/firstSeen/lastSeen same
+// semantics — Phase 4 builds FTS/recall on top of this table, not beside it.
+// ---------------------------------------------------------------------------
+
+model ChapterDigest {
+  id        String   @id @default(cuid())
+  chapterId String   @unique
+  novelId   String
+  summary   String   @default("")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  chapter Chapter @relation(fields: [chapterId], references: [id], onDelete: Cascade)
+  novel   Novel   @relation(fields: [novelId], references: [id], onDelete: Cascade)
+
+  @@index([novelId])
+}
+
+model StoryFact {
+  id            String   @id @default(cuid())
+  novelId       String
+  // world_rule | character_state | relationship | story_fact | open_loop
+  category      String
+  content       String
+  sourceChapter Int?
+  firstSeenAt   DateTime @default(now())
+  lastSeenAt    DateTime @updatedAt
+
+  novel Novel @relation(fields: [novelId], references: [id], onDelete: Cascade)
+
+  @@index([novelId, category])
+}
+
+model CharacterState {
+  id           String   @id @default(cuid())
+  novelId      String
+  name         String
+  chapterIndex Int
+  state        String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  novel Novel @relation(fields: [novelId], references: [id], onDelete: Cascade)
+
+  @@unique([novelId, name, chapterIndex])
+  @@index([novelId, name])
+}
+
+model Foreshadow {
+  id           String   @id @default(cuid())
+  novelId      String
+  content      String
+  plantChapter Int
+  payByChapter Int?
+  // open -> advanced -> paid (settlement happens only in a sediment step)
+  status       String   @default("open")
+  lastChapter  Int?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  novel Novel @relation(fields: [novelId], references: [id], onDelete: Cascade)
+
+  @@index([novelId, status])
 }
