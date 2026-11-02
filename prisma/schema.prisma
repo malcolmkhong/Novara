@@ -1,8 +1,8 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
-// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
-// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+// ---------------------------------------------------------------------------
+// Novara AI — AI-powered Novel Creation System
+// SQLite + Prisma. Structured facts are the single source of truth.
+// JSON columns are avoided (SQLite + Prisma); all relations are normalized.
+// ---------------------------------------------------------------------------
 
 generator client {
   provider = "prisma-client-js"
@@ -13,6 +13,8 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+// Reserved for the future authentication system (NextAuth-ready).
+// The current preview build uses a guest session and does not create users.
 model User {
   id        String   @id @default(cuid())
   email     String   @unique
@@ -21,240 +23,104 @@ model User {
   updatedAt DateTime @updatedAt
 }
 
-model Post {
-  id        String   @id @default(cuid())
-  title     String
-  content   String?
-  published Boolean  @default(false)
-  authorId  String
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-}
-
 // ---------------------------------------------------------------------------
-// Novel Creator (webnovel-writer inspired pipeline)
-// init(设定集+总纲) → plan(卷节拍表+章纲) → write(流式正文) → sediment(记忆沉淀)
-// → review(审查) with a foreshadowing ledger (伏笔台账) for long-range
-// consistency, mirroring the webnovel-writer skill workflow.
-// JSON payloads (bible, beats, facts…) are stored as serialized strings
-// because SQLite + Prisma do not support Json on this datasource.
+// Novel — the aggregate root. Everything below cascades from it.
 // ---------------------------------------------------------------------------
 
 model Novel {
-  id             String   @id @default(cuid())
-  title          String
-  genre          String
-  logline        String
-  coreConflict   String?
-  targetChapters Int      @default(24)
-  platform       String?
-  // JSON: { world, power, goldenFinger, themes[] }
-  bible          String?
-  // JSON: [{ name, role, desire, flaw, arc }]
-  characters     String?
-  // JSON: { name, scheme, mirror }
-  villain        String?
-  // JSON: [{ index, name, startChapter, endChapter, coreConflict, climax, hook }]
-  masterOutline  String?
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
-
-  volumes     Volume[]
-  chapters    NovelChapter[]
-  foreshadows Foreshadow[]
-}
-
-model Volume {
-  id           String  @id @default(cuid())
-  novelId      String
-  index        Int
-  name         String
-  startChapter Int
-  endChapter   Int
-  coreConflict String?
-  climax       String?
-  hook         String?
-  // JSON: [{ phase, title, description }]
-  beats        String?
-  planned      Boolean @default(false)
-
-  novel    Novel          @relation(fields: [novelId], references: [id], onDelete: Cascade)
-  chapters NovelChapter[]
-
-  @@unique([novelId, index])
-}
-
-model NovelChapter {
-  id         String  @id @default(cuid())
-  novelId    String
-  volumeId   String
-  number     Int
-  title      String
-  // outline fields
-  goal       String?
-  timeAnchor String?
-  // JSON: string[]
-  mustCover  String?
-  endHook    String?
-  // prose
-  content    String?
-  wordCount  Int     @default(0)
-  // sediment (memory)
-  summary    String?
-  // JSON: string[]
-  facts      String?
-  // JSON: [{ name, change }]
-  charStates String?
-  // JSON: review result { overallScore, dimensions[], blocking[], suggestions[], consistencyFlags[] }
-  review     String?
-  // outlined | drafted | final
-  status     String  @default("outlined")
-  revision   Int     @default(0)
-
-  novel  Novel  @relation(fields: [novelId], references: [id], onDelete: Cascade)
-  volume Volume @relation(fields: [volumeId], references: [id], onDelete: Cascade)
-
-  @@unique([novelId, number])
-}
-
-model Foreshadow {
-  id          String @id @default(cuid())
-  novelId     String
+  id          String   @id @default(cuid())
   title       String
-  description String
-  plantedAt   Int
-  lastTouched Int?
-  // open | advanced | paid
-  status      String @default("open")
-  paidAt      Int?
+  genre       String   @default("")
+  synopsis    String   @default("")
+  targetWords Int      @default(100000)
+  // drafting | completed | archived
+  status      String   @default("drafting")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  chapters      Chapter[]
+  characters    Character[]
+  worldEntries  WorldEntry[]
+  outlineBeats  OutlineBeat[]
+
+  @@index([updatedAt])
+}
+
+// ---------------------------------------------------------------------------
+// Chapter — ordered by `index` (1-based). wordCount is authoritative,
+// recomputed server-side on every save (never trusted from the client).
+// ---------------------------------------------------------------------------
+
+model Chapter {
+  id        String   @id @default(cuid())
+  novelId   String
+  index     Int
+  title     String
+  content   String   @default("")
+  wordCount Int      @default(0)
+  // draft | revised | final
+  status    String   @default("draft")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   novel Novel @relation(fields: [novelId], references: [id], onDelete: Cascade)
 
-  @@index([novelId, status])
+  @@unique([novelId, index])
+  @@index([novelId])
 }
 
 // ---------------------------------------------------------------------------
-// AI Team — floating multi-agent chat workspace.
-// One conversation per (agent, browser session); tasks flow leader → member,
-// execution reports are appended back into the relevant conversations.
-// JSON payloads (capabilities, taskIds) are serialized strings because
-// SQLite + Prisma do not support Json on this datasource.
+// Character — story bible cast entry.
 // ---------------------------------------------------------------------------
 
-model TeamAgent {
-  id           String   @id @default(cuid())
-  key          String   @unique
-  name         String
-  role         String
-  description  String
-  // JSON: string[]
-  capabilities String
-  isLeader     Boolean  @default(false)
-  emoji        String   @default("🤖")
-  color        String   @default("#059669")
-  sortOrder    Int      @default(0)
-  createdAt    DateTime @default(now())
+model Character {
+  id          String   @id @default(cuid())
+  novelId     String
+  name        String
+  role        String   @default("")
+  description String   @default("")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
-  conversations TeamConversation[]
-  assignedTasks TeamTask[] @relation("assignee")
-  createdTasks  TeamTask[] @relation("creator")
+  novel Novel @relation(fields: [novelId], references: [id], onDelete: Cascade)
+
+  @@index([novelId])
 }
 
-model TeamConversation {
-  id         String   @id @default(cuid())
-  agentId    String
-  sessionKey String   @default("default")
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+// ---------------------------------------------------------------------------
+// WorldEntry — worldbuilding bible: places, factions, systems, items, lore.
+// ---------------------------------------------------------------------------
 
-  agent    TeamAgent     @relation(fields: [agentId], references: [id], onDelete: Cascade)
-  messages TeamMessage[]
-
-  @@unique([agentId, sessionKey])
-}
-
-model TeamMessage {
-  id             String   @id @default(cuid())
-  conversationId String
-  // user | assistant | system
-  role           String
-  content        String
-  // JSON: string[] — ids of tasks created via this (assistant) message
-  taskIds        String?
-  createdAt      DateTime @default(now())
-
-  conversation TeamConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
-
-  @@index([conversationId, createdAt])
-}
-
-model TeamTask {
-  id            String   @id @default(cuid())
-  title         String
-  description   String
-  // pending | in_progress | completed | failed
-  status        String   @default("pending")
-  progress      Int      @default(0)
-  result        String?
-  error         String?
-  // Browser session that owns this task — routes execution chat/report
-  // appends to the right conversations.
-  sessionKey    String   @default("default")
-  assigneeId    String
-  creatorId     String
-  creatorIsUser Boolean  @default(false)
-  // How many automatic leader follow-up rounds produced this task.
-  // User-initiated tasks are 0; each auto-continued delegation +1.
-  // The leader stops auto-continuing beyond MAX_AUTO_DEPTH.
-  autoDepth     Int      @default(0)
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
-
-  assignee TeamAgent     @relation("assignee", fields: [assigneeId], references: [id], onDelete: Cascade)
-  creator  TeamAgent     @relation("creator", fields: [creatorId], references: [id], onDelete: Cascade)
-  logs     TeamTaskLog[]
-
-  @@index([status])
-}
-
-model TeamTaskLog {
+model WorldEntry {
   id        String   @id @default(cuid())
-  taskId    String
-  message   String
-  progress  Int      @default(0)
+  novelId   String
+  title     String
+  // location | faction | item | system | culture | other
+  category  String   @default("other")
+  content   String   @default("")
   createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  task TeamTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  novel Novel @relation(fields: [novelId], references: [id], onDelete: Cascade)
 
-  @@index([taskId, createdAt])
+  @@index([novelId])
 }
 
 // ---------------------------------------------------------------------------
-// Turn telemetry — the observability layer of the self-healing loop.
-// One row per glmAgentTurn (chat turns, task executions, follow-ups),
-// classifying how the turn ended so problems (budget exhaustion, tool
-// param errors, model failures) can be counted, alerted on, and learned
-// from instead of only being visible as canned fallback texts.
+// OutlineBeat — plot outline beats in narrative order.
 // ---------------------------------------------------------------------------
 
-model TeamTurnLog {
-  id         String   @id @default(cuid())
-  // Agent key when known ("leader", "writer"…); otherwise the glm label
-  // ("task", "leader-followup", "task-closeout"…).
-  agentKey   String
-  // glm label passed to glmAgentTurn.
-  label      String
-  // answered | tool_exhausted | model_error
-  outcome    String
-  rounds     Int      @default(1)
-  // JSON: [{round, action, ok, error}] — per-action outcomes.
-  toolCalls  String?
-  // JSON: string[] — corrections fired after this turn
-  // (delegation-repair / claim-verify / continuation / ground-truth-note).
-  correctionsFired String?
-  durationMs Int      @default(0)
-  createdAt  DateTime @default(now())
+model OutlineBeat {
+  id        String   @id @default(cuid())
+  novelId   String
+  index     Int
+  title     String
+  summary   String   @default("")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  @@index([createdAt])
-  @@index([agentKey, outcome])
+  novel Novel @relation(fields: [novelId], references: [id], onDelete: Cascade)
+
+  @@unique([novelId, index])
+  @@index([novelId])
 }

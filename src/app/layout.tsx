@@ -14,24 +14,25 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "TruthLab — AI Detector & Hallucination Detector",
-  description: "GLM-powered AI content detection and hallucination checking for research & education.",
-  keywords: ["Z.ai", "Next.js", "TypeScript", "Tailwind CSS", "shadcn/ui", "AI development", "React"],
-  authors: [{ name: "Z.ai Team" }],
-  icons: {
-    icon: "https://z-cdn.chatglm.cn/z-ai/static/logo.svg",
-  },
+  title: "Novara AI — Your AI Novel Writing Team",
+  description:
+    "Novara AI coordinates a team of specialized AI agents — story architecture, worldbuilding, characters, plotting, drafting, editing and continuity — to take your novel from concept to a full-length manuscript.",
+  keywords: [
+    "Novara AI",
+    "AI novel writing",
+    "AI writing team",
+    "novel planning",
+    "worldbuilding",
+    "web novel",
+    "fiction writing assistant",
+  ],
+  authors: [{ name: "Novara AI" }],
   openGraph: {
-    title: "Z.ai Code Scaffold",
-    description: "AI-powered development with modern React stack",
-    url: "https://chat.z.ai",
-    siteName: "Z.ai",
+    title: "Novara AI — Your AI Novel Writing Team",
+    description:
+      "Plan, write, edit and manage long-form novels with a coordinated AI team.",
+    siteName: "Novara AI",
     type: "website",
-  },
-  twitter: {
-    card: "summary_large_image",
-    title: "Z.ai Code Scaffold",
-    description: "AI-powered development with modern React stack",
   },
 };
 
