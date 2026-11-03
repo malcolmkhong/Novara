@@ -595,11 +595,6 @@ export function ConversationPane({
           <>
             <StatusBadge status={detail.run.status} />
             <ModeChip mode={detail.run.mode} />
-            {/* P2 — the model the DISPLAYED run executes with. */}
-            <Badge variant="outline" className="gap-1 text-[11px] text-muted-foreground">
-              {getModelDefinition(detail.run.modelId).label}
-              {detail.run.thinkingLevel !== "off" && ` · thinking`}
-            </Badge>
           </>
         ) : (
           <Badge variant="outline" className="text-muted-foreground">
