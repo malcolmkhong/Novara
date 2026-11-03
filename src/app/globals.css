@@ -145,3 +145,95 @@
 .nice-scroll::-webkit-scrollbar-thumb:hover {
   background: oklch(0.68 0.02 70);
 }
+
+/* ---------------------------------------------------------------------------
+ * .novara-prose — reading typography for markdown document windows
+ * (chapter preview, bible cards, outline summaries). Serif body, comfortable
+ * rhythm; pairs with the font-display stack.
+ * ------------------------------------------------------------------------ */
+.novara-prose {
+  font-size: 0.925rem;
+  line-height: 1.75;
+  overflow-wrap: break-word;
+}
+.novara-prose > *:first-child {
+  margin-top: 0;
+}
+.novara-prose > *:last-child {
+  margin-bottom: 0;
+}
+.novara-prose p {
+  margin: 0.85em 0;
+}
+.novara-prose h1,
+.novara-prose h2,
+.novara-prose h3,
+.novara-prose h4 {
+  font-family: var(--font-display);
+  font-weight: 700;
+  line-height: 1.3;
+  margin: 1.4em 0 0.6em;
+}
+.novara-prose h1 {
+  font-size: 1.4em;
+}
+.novara-prose h2 {
+  font-size: 1.22em;
+}
+.novara-prose h3 {
+  font-size: 1.08em;
+}
+.novara-prose h4 {
+  font-size: 1em;
+}
+.novara-prose ul,
+.novara-prose ol {
+  margin: 0.85em 0;
+  padding-left: 1.5em;
+}
+.novara-prose ul {
+  list-style: disc;
+}
+.novara-prose ol {
+  list-style: decimal;
+}
+.novara-prose li {
+  margin: 0.3em 0;
+}
+.novara-prose blockquote {
+  margin: 1em 0;
+  border-left: 3px solid oklch(0.87 0.07 88);
+  padding: 0.15em 0 0.15em 1em;
+  font-style: italic;
+  color: var(--muted-foreground);
+}
+.novara-prose hr {
+  margin: 1.6em 0;
+  border: 0;
+  border-top: 1px solid var(--border);
+}
+.novara-prose a {
+  color: var(--primary);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.novara-prose strong {
+  font-weight: 700;
+}
+.novara-prose code {
+  background: var(--muted);
+  border-radius: 0.25rem;
+  padding: 0.1em 0.35em;
+  font-size: 0.86em;
+}
+.novara-prose pre {
+  background: var(--muted);
+  border-radius: 0.5rem;
+  padding: 0.9em 1em;
+  overflow-x: auto;
+  margin: 1em 0;
+}
+.novara-prose pre code {
+  background: transparent;
+  padding: 0;
+}

@@ -138,6 +138,10 @@ export interface ArtifactPaneHandlers {
   // chapters
   selectedChapterId: string | null;
   onSelectChapter: (id: string) => void;
+  // tree-opened asset focus (highlight + scroll into view)
+  focusBeatId: string | null;
+  focusCharacterId: string | null;
+  focusWorldId: string | null;
   onAddChapter: () => Promise<void>;
   onDeleteChapter: (chapter: ChapterDTO) => Promise<void>;
   onSaveChapter: (
@@ -230,6 +234,7 @@ export function ArtifactPane({
               />
               <OutlinePanel
                 beats={detail.outlineBeats}
+                focusBeatId={handlers.focusBeatId}
                 onAdd={handlers.onAddBeat}
                 onUpdate={handlers.onUpdateBeat}
                 onDelete={handlers.onDeleteBeat}
@@ -245,12 +250,14 @@ export function ArtifactPane({
               />
               <CharactersPanel
                 characters={detail.characters}
+                focusCharacterId={handlers.focusCharacterId}
                 onAdd={handlers.onAddCharacter}
                 onUpdate={handlers.onUpdateCharacter}
                 onDelete={handlers.onDeleteCharacter}
               />
               <WorldPanel
                 entries={detail.worldEntries}
+                focusWorldId={handlers.focusWorldId}
                 onAdd={handlers.onAddWorldEntry}
                 onUpdate={handlers.onUpdateWorldEntry}
                 onDelete={handlers.onDeleteWorldEntry}

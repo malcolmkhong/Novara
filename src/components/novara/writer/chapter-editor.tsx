@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Loader2, Plus, Sparkles, SplitSquareHorizontal, Trash2 } from "lucide-react";
+import { BookOpen, Loader2, PenLine, Plus, Sparkles, SplitSquareHorizontal, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -25,6 +25,10 @@ import type { AiDraftResult, ChapterDTO, ChapterStatus } from "@/lib/novara/type
 import { countWords, formatWordCount } from "@/lib/novara/words";
 import { cn } from "@/lib/utils";
 import { ChapterStatusBadge, ConfirmDialog } from "./ui-bits";
+import { MarkdownDocument } from "./markdown-document";
+
+/** Editor surface: raw writing vs rendered document window. */
+type ChapterView = "write" | "preview";
 
 interface ChapterEditorProps {
   chapters: ChapterDTO[];
@@ -72,6 +76,7 @@ export function ChapterEditor({
   const [confirmDraft, setConfirmDraft] = useState(false);
   const [confirmAbDraft, setConfirmAbDraft] = useState(false);
   const [adding, setAdding] = useState(false);
+  const [view, setView] = useState<ChapterView>("preview");
 
   // Sync local editor state when a different chapter is selected.
   useEffect(() => {
@@ -80,6 +85,9 @@ export function ChapterEditor({
       setContent(selected.content);
       setStatus(selected.status);
       setDirty(false);
+      // Opening a file reads like opening a document — chapters with content
+      // land in the rendered preview; empty ones go straight to writing.
+      setView(selected.content.trim() ? "preview" : "write");
     }
   }, [selectedId]);
 
@@ -205,6 +213,13 @@ export function ChapterEditor({
     } finally {
       setAdding(false);
     }
+  };
+
+  /** Switching to the document view autosaves, like clicking away does. */
+  const switchView = (next: ChapterView) => {
+    if (next === view) return;
+    if (next === "preview" && dirty && !saving) void save();
+    setView(next);
   };
 
   if (hideList) {
@@ -502,96 +517,171 @@ export function ChapterEditor({
           </div>
         ) : (
           <div className="flex flex-col">
+            {/* Header — inputs while writing, document title while reading */}
             <div className="flex flex-col gap-2 border-b p-4 sm:flex-row">
-              <Input
-                value={title}
-                onChange={(e) => {
-                  setTitle(e.target.value);
-                  setDirty(true);
-                }}
-                className="flex-1 font-medium"
-                aria-label="Chapter title"
-              />
-              <Select
-                value={status}
-                onValueChange={(v) => {
-                  setStatus(v as ChapterStatus);
-                  setDirty(true);
-                }}
-              >
-                <SelectTrigger className="w-full sm:w-32" aria-label="Chapter status">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="draft">Draft</SelectItem>
-                  <SelectItem value="revised">Revised</SelectItem>
-                  <SelectItem value="final">Final</SelectItem>
-                </SelectContent>
-              </Select>
+              {view === "write" ? (
+                <>
+                  <Input
+                    value={title}
+                    onChange={(e) => {
+                      setTitle(e.target.value);
+                      setDirty(true);
+                    }}
+                    className="flex-1 font-medium"
+                    aria-label="Chapter title"
+                  />
+                  <Select
+                    value={status}
+                    onValueChange={(v) => {
+                      setStatus(v as ChapterStatus);
+                      setDirty(true);
+                    }}
+                  >
+                    <SelectTrigger className="w-full sm:w-32" aria-label="Chapter status">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="draft">Draft</SelectItem>
+                      <SelectItem value="revised">Revised</SelectItem>
+                      <SelectItem value="final">Final</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </>
+              ) : (
+                <div className="flex min-w-0 flex-1 items-center justify-between gap-3">
+                  <h2 className="min-w-0 truncate font-display text-lg font-bold leading-tight">
+                    {title || selected.title}
+                  </h2>
+                  <span className="shrink-0 text-xs text-muted-foreground">
+                    Chapter {selected.index}
+                  </span>
+                </div>
+              )}
             </div>
 
+            {/* Toolbar — view toggle always; writing tools in write mode */}
             <div className="flex flex-wrap items-center gap-2 border-b bg-muted/30 px-4 py-2 text-xs text-muted-foreground">
+              <span
+                className="flex overflow-hidden rounded-md border bg-background"
+                role="group"
+                aria-label="Editor view"
+              >
+                <button
+                  type="button"
+                  onClick={() => switchView("write")}
+                  aria-pressed={view === "write"}
+                  className={cn(
+                    "flex items-center gap-1 px-2.5 py-1 transition-colors",
+                    view === "write"
+                      ? "bg-primary text-primary-foreground"
+                      : "text-muted-foreground hover:text-foreground"
+                  )}
+                >
+                  <PenLine className="h-3.5 w-3.5" aria-hidden="true" />
+                  Write
+                </button>
+                <button
+                  type="button"
+                  onClick={() => switchView("preview")}
+                  aria-pressed={view === "preview"}
+                  className={cn(
+                    "flex items-center gap-1 px-2.5 py-1 transition-colors",
+                    view === "preview"
+                      ? "bg-primary text-primary-foreground"
+                      : "text-muted-foreground hover:text-foreground"
+                  )}
+                >
+                  <BookOpen className="h-3.5 w-3.5" aria-hidden="true" />
+                  Preview
+                </button>
+              </span>
               <span>{formatWordCount(countWords(content))} words</span>
-              {dirty && (
+              {dirty && view === "write" && (
                 <span className="flex items-center gap-1 text-amber-700">
                   <span className="h-1.5 w-1.5 rounded-full bg-amber-500" aria-hidden="true" />
                   Unsaved changes
                 </span>
               )}
-              <span className="ml-auto flex items-center gap-2">
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => setConfirmAbDraft(true)}
-                  disabled={drafting || abDrafting || saving}
-                  aria-label="Generate two AI draft alternatives"
-                >
-                  {abDrafting ? (
-                    <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
-                  ) : (
-                    <SplitSquareHorizontal className="h-4 w-4" aria-hidden="true" />
-                  )}
-                  A/B Draft
-                </Button>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => setConfirmDraft(true)}
-                  disabled={drafting || abDrafting || saving}
-                >
-                  {drafting ? (
-                    <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
-                  ) : (
-                    <Sparkles className="h-4 w-4" aria-hidden="true" />
-                  )}
-                  AI Draft
-                  <span className="sr-only">(experimental)</span>
-                </Button>
-                <Button size="sm" onClick={() => save()} disabled={saving || !dirty}>
-                  {saving && (
-                    <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
-                  )}
-                  Save
-                </Button>
-              </span>
+              {view === "write" && (
+                <span className="ml-auto flex items-center gap-2">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => setConfirmAbDraft(true)}
+                    disabled={drafting || abDrafting || saving}
+                    aria-label="Generate two AI draft alternatives"
+                  >
+                    {abDrafting ? (
+                      <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+                    ) : (
+                      <SplitSquareHorizontal className="h-4 w-4" aria-hidden="true" />
+                    )}
+                    A/B Draft
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => setConfirmDraft(true)}
+                    disabled={drafting || abDrafting || saving}
+                  >
+                    {drafting ? (
+                      <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+                    ) : (
+                      <Sparkles className="h-4 w-4" aria-hidden="true" />
+                    )}
+                    AI Draft
+                    <span className="sr-only">(experimental)</span>
+                  </Button>
+                  <Button size="sm" onClick={() => save()} disabled={saving || !dirty}>
+                    {saving && (
+                      <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+                    )}
+                    Save
+                  </Button>
+                </span>
+              )}
             </div>
 
-            <Textarea
-              value={content}
-              onChange={(e) => {
-                setContent(e.target.value);
-                setDirty(true);
-              }}
-              onBlur={() => {
-                if (dirty && !saving) void save();
-              }}
-              placeholder="Write your chapter here — or click AI Draft to get a grounded first draft."
-              className="nice-scroll min-h-[320px] flex-1 resize-y rounded-none border-0 font-serif text-[15px] leading-7 shadow-none focus-visible:ring-0 lg:min-h-[480px]"
-              aria-label="Chapter content"
-            />
+            {/* Body — textarea while writing, document window while reading */}
+            {view === "write" ? (
+              <Textarea
+                value={content}
+                onChange={(e) => {
+                  setContent(e.target.value);
+                  setDirty(true);
+                }}
+                onBlur={() => {
+                  if (dirty && !saving) void save();
+                }}
+                placeholder="Write your chapter here — or click AI Draft to get a grounded first draft."
+                className="nice-scroll min-h-[320px] flex-1 resize-y rounded-none border-0 font-serif text-[15px] leading-7 shadow-none focus-visible:ring-0 lg:min-h-[480px]"
+                aria-label="Chapter content"
+              />
+            ) : (
+              <div
+                className="nice-scroll max-h-[68vh] min-h-[320px] flex-1 overflow-y-auto px-6 py-5 lg:max-h-none lg:min-h-[480px]"
+                aria-label="Chapter document preview"
+              >
+                {content.trim() ? (
+                  <MarkdownDocument
+                    content={content}
+                    className="mx-auto max-w-prose font-display"
+                  />
+                ) : (
+                  <p className="py-16 text-center text-sm text-muted-foreground">
+                    Nothing to preview yet — switch to Write to start this chapter.
+                  </p>
+                )}
+              </div>
+            )}
             <div className="flex items-center justify-between border-t px-4 py-2 text-xs text-muted-foreground">
               <ChapterStatusBadge status={status} />
-              <span>Autosaves when you click away · Chapter {selected.index}</span>
+              <span>
+                {view === "write"
+                  ? "Autosaves when you click away"
+                  : "Open in Write to edit"}{" "}
+                · Chapter {selected.index}
+              </span>
             </div>
           </div>
         )}

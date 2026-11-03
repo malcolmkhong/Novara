@@ -119,7 +119,13 @@ export function WorkbenchShell({
   const selectedChapterId = useWriterStore(
     (s) => s.selectedChapterByNovel[novel.id] ?? detail.chapters[0]?.id ?? null
   );
+  const selectedBeatId = useWriterStore((s) => s.selectedBeatByNovel[novel.id] ?? null);
+  const selectedCharacterId = useWriterStore((s) => s.selectedCharacterByNovel[novel.id] ?? null);
+  const selectedWorldId = useWriterStore((s) => s.selectedWorldByNovel[novel.id] ?? null);
   const selectChapter = useWriterStore((s) => s.selectChapter);
+  const selectBeat = useWriterStore((s) => s.selectBeat);
+  const selectCharacter = useWriterStore((s) => s.selectCharacter);
+  const selectWorld = useWriterStore((s) => s.selectWorld);
   const setArtifactTab = useWriterStore((s) => s.setArtifactTab);
 
   const [mobileView, setMobileView] = useState<MobileView>("chat");
@@ -161,6 +167,34 @@ export function WorkbenchShell({
       revealArtifacts();
     },
     [novel.id, revealArtifacts, setArtifactTab]
+  );
+
+  /** Tree file → open the owning tab with that asset focused. */
+  const handleOpenBeat = useCallback(
+    (beatId: string) => {
+      selectBeat(novel.id, beatId);
+      setArtifactTab(novel.id, "outline");
+      revealArtifacts();
+    },
+    [novel.id, revealArtifacts, selectBeat, setArtifactTab]
+  );
+
+  const handleOpenCharacter = useCallback(
+    (characterId: string) => {
+      selectCharacter(novel.id, characterId);
+      setArtifactTab(novel.id, "bible");
+      revealArtifacts();
+    },
+    [novel.id, revealArtifacts, selectCharacter, setArtifactTab]
+  );
+
+  const handleOpenWorld = useCallback(
+    (worldId: string) => {
+      selectWorld(novel.id, worldId);
+      setArtifactTab(novel.id, "bible");
+      revealArtifacts();
+    },
+    [novel.id, revealArtifacts, selectWorld, setArtifactTab]
   );
 
   // ---- chapter handlers ----
@@ -305,6 +339,9 @@ export function WorkbenchShell({
   const artifactHandlers = {
     selectedChapterId,
     onSelectChapter: (id: string) => selectChapter(novel.id, id),
+    focusBeatId: selectedBeatId,
+    focusCharacterId: selectedCharacterId,
+    focusWorldId: selectedWorldId,
     onAddChapter: handleAddChapter,
     onDeleteChapter: handleDeleteChapter,
     onSaveChapter: handleSaveChapter,
@@ -346,7 +383,13 @@ export function WorkbenchShell({
           detail={detail}
           tasks={tasks}
           selectedChapterId={selectedChapterId}
+          selectedBeatId={selectedBeatId}
+          selectedCharacterId={selectedCharacterId}
+          selectedWorldId={selectedWorldId}
           onOpenChapter={handleOpenChapter}
+          onOpenBeat={handleOpenBeat}
+          onOpenCharacter={handleOpenCharacter}
+          onOpenWorld={handleOpenWorld}
           onOpenArtifactTab={handleOpenArtifactTab}
           onAddChapter={handleAddChapter}
           onEditDetails={() => setEditOpen(true)}

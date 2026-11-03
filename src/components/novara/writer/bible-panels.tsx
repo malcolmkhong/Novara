@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Loader2, Pencil, Plus, ScrollText, Trash2, Users, Globe2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -32,7 +32,20 @@ import type {
   WorldCategory,
   WorldEntryDTO,
 } from "@/lib/novara/types";
+import { MarkdownDocument } from "./markdown-document";
 import { ConfirmDialog } from "./ui-bits";
+import { cn } from "@/lib/utils";
+
+/** Scrolls the focused card into view when opened from the asset tree. */
+function useFocusScroll(focusId: string | null) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!focusId || !ref.current) return;
+    const el = ref.current.querySelector(`[data-asset-id="${focusId}"]`);
+    el?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }, [focusId]);
+  return ref;
+}
 
 const WORLD_CATEGORIES: { value: WorldCategory; label: string }[] = [
   { value: "location", label: "Location" },
@@ -53,11 +66,14 @@ function categoryLabel(c: WorldCategory): string {
 
 export function CharactersPanel({
   characters,
+  focusCharacterId,
   onAdd,
   onUpdate,
   onDelete,
 }: {
   characters: CharacterDTO[];
+  /** Card highlighted + scrolled into view (opened from the asset tree). */
+  focusCharacterId?: string | null;
   onAdd: (input: { name: string; role: string; description: string }) => Promise<boolean>;
   onUpdate: (id: string, patch: { name?: string; role?: string; description?: string }) => Promise<boolean>;
   onDelete: (c: CharacterDTO) => Promise<void>;
@@ -68,6 +84,7 @@ export function CharactersPanel({
   const [description, setDescription] = useState("");
   const [busy, setBusy] = useState(false);
   const [deleting, setDeleting] = useState<CharacterDTO | null>(null);
+  const focusRef = useFocusScroll(focusCharacterId ?? null);
 
   const openNew = () => {
     setName("");
@@ -106,9 +123,16 @@ export function CharactersPanel({
       onAdd={openNew}
       addLabel="Add character"
       list={
-        <div className="grid gap-4 sm:grid-cols-2">
+        <div ref={focusRef} className="grid gap-4 sm:grid-cols-2">
           {characters.map((c) => (
-        <Card key={c.id}>
+        <Card
+          key={c.id}
+          data-asset-id={c.id}
+          className={cn(
+            "scroll-mt-2 transition-shadow",
+            c.id === focusCharacterId && "border-primary/50 ring-1 ring-primary/30"
+          )}
+        >
           <CardContent className="pt-5">
             <div className="flex items-start justify-between gap-2">
               <div>
@@ -135,9 +159,10 @@ export function CharactersPanel({
               </div>
             </div>
             {c.description && (
-              <p className="mt-2 whitespace-pre-wrap text-sm leading-relaxed text-muted-foreground">
-                {c.description}
-              </p>
+              <MarkdownDocument
+                content={c.description}
+                className="mt-2 text-muted-foreground"
+              />
             )}
           </CardContent>
         </Card>
@@ -198,11 +223,14 @@ export function CharactersPanel({
 
 export function WorldPanel({
   entries,
+  focusWorldId,
   onAdd,
   onUpdate,
   onDelete,
 }: {
   entries: WorldEntryDTO[];
+  /** Card highlighted + scrolled into view (opened from the asset tree). */
+  focusWorldId?: string | null;
   onAdd: (input: { title: string; category: WorldCategory; content: string }) => Promise<boolean>;
   onUpdate: (id: string, patch: { title?: string; category?: WorldCategory; content?: string }) => Promise<boolean>;
   onDelete: (w: WorldEntryDTO) => Promise<void>;
@@ -213,6 +241,7 @@ export function WorldPanel({
   const [content, setContent] = useState("");
   const [busy, setBusy] = useState(false);
   const [deleting, setDeleting] = useState<WorldEntryDTO | null>(null);
+  const focusRef = useFocusScroll(focusWorldId ?? null);
 
   const openNew = () => {
     setTitle("");
@@ -247,9 +276,16 @@ export function WorldPanel({
       onAdd={openNew}
       addLabel="Add entry"
       list={
-        <div className="grid gap-4 sm:grid-cols-2">
+        <div ref={focusRef} className="grid gap-4 sm:grid-cols-2">
           {entries.map((w) => (
-        <Card key={w.id}>
+        <Card
+          key={w.id}
+          data-asset-id={w.id}
+          className={cn(
+            "scroll-mt-2 transition-shadow",
+            w.id === focusWorldId && "border-primary/50 ring-1 ring-primary/30"
+          )}
+        >
           <CardContent className="pt-5">
             <div className="flex items-start justify-between gap-2">
               <div>
@@ -274,9 +310,10 @@ export function WorldPanel({
               </div>
             </div>
             {w.content && (
-              <p className="mt-2 whitespace-pre-wrap text-sm leading-relaxed text-muted-foreground">
-                {w.content}
-              </p>
+              <MarkdownDocument
+                content={w.content}
+                className="mt-2 text-muted-foreground"
+              />
             )}
           </CardContent>
         </Card>
@@ -348,11 +385,14 @@ export function WorldPanel({
 
 export function OutlinePanel({
   beats,
+  focusBeatId,
   onAdd,
   onUpdate,
   onDelete,
 }: {
   beats: OutlineBeatDTO[];
+  /** Beat highlighted + scrolled into view (opened from the asset tree). */
+  focusBeatId?: string | null;
   onAdd: (input: { title: string; summary: string }) => Promise<boolean>;
   onUpdate: (id: string, patch: { title?: string; summary?: string }) => Promise<boolean>;
   onDelete: (b: OutlineBeatDTO) => Promise<void>;
@@ -362,6 +402,7 @@ export function OutlinePanel({
   const [summary, setSummary] = useState("");
   const [busy, setBusy] = useState(false);
   const [deleting, setDeleting] = useState<OutlineBeatDTO | null>(null);
+  const focusRef = useFocusScroll(focusBeatId ?? null);
 
   const openNew = () => {
     setTitle("");
@@ -394,11 +435,15 @@ export function OutlinePanel({
       onAdd={openNew}
       addLabel="Add beat"
       list={
-        <ol className="space-y-2">
+        <ol ref={focusRef} className="space-y-2">
           {beats.map((b, i) => (
             <li
               key={b.id}
-              className="group flex items-start gap-3 rounded-lg border bg-card p-4"
+              data-asset-id={b.id}
+              className={cn(
+                "group flex scroll-mt-2 items-start gap-3 rounded-lg border bg-card p-4 transition-shadow",
+                b.id === focusBeatId && "border-primary/50 ring-1 ring-primary/30"
+              )}
             >
               <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-amber-100 font-display text-xs font-bold text-primary">
                 {i + 1}
@@ -406,9 +451,10 @@ export function OutlinePanel({
               <div className="min-w-0 flex-1">
                 <h3 className="font-medium">{b.title}</h3>
                 {b.summary && (
-                  <p className="mt-1 whitespace-pre-wrap text-sm leading-relaxed text-muted-foreground">
-                    {b.summary}
-                  </p>
+                  <MarkdownDocument
+                    content={b.summary}
+                    className="mt-1 text-muted-foreground"
+                  />
                 )}
               </div>
               <div className="flex shrink-0 gap-1">

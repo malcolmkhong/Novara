@@ -7,12 +7,17 @@
 // via AgentTask.artifactType/artifactLabel, so the author can see which asset
 // the team is touching right now — the "章新区 · 工作中" pattern from the
 // workbench reference design.
+//
+// File-explorer semantics: groups (Chapters/Outline/Characters/World) are
+// expandable/collapsible via a chevron; their children are clickable "files"
+// that open in the right artifact pane.
 // ---------------------------------------------------------------------------
 
 import { useState } from "react";
 import {
   BookOpen,
   Brain,
+  ChevronRight,
   FileSearch,
   FolderTree,
   Globe2,
@@ -129,12 +134,20 @@ function BadgeIcons({ badges }: { badges: NodeBadge[] | undefined }) {
 // AssetTree
 // ---------------------------------------------------------------------------
 
+type ExpandableGroupKey = "chapters" | "outline" | "characters" | "world";
+
 interface AssetTreeProps {
   detail: NovelDetail;
   /** Live agent tasks (may be empty — no active run). */
   tasks: AgentTask[];
   selectedChapterId: string | null;
+  selectedBeatId: string | null;
+  selectedCharacterId: string | null;
+  selectedWorldId: string | null;
   onOpenChapter: (chapterId: string) => void;
+  onOpenBeat: (beatId: string) => void;
+  onOpenCharacter: (characterId: string) => void;
+  onOpenWorld: (worldId: string) => void;
   onOpenArtifactTab: (tab: ArtifactTabId) => void;
   onAddChapter: () => Promise<void>;
   onEditDetails: () => void;
@@ -148,7 +161,13 @@ export function AssetTree({
   detail,
   tasks,
   selectedChapterId,
+  selectedBeatId,
+  selectedCharacterId,
+  selectedWorldId,
   onOpenChapter,
+  onOpenBeat,
+  onOpenCharacter,
+  onOpenWorld,
   onOpenArtifactTab,
   onAddChapter,
   onEditDetails,
@@ -161,6 +180,16 @@ export function AssetTree({
     tasks,
     detail.chapters.map((c) => c.index)
   );
+
+  // Collapse state (file-explorer style). Chapters start open — the primary
+  // asset; the rest start collapsed to keep the rail scannable.
+  const [expanded, setExpanded] = useState<
+    Record<ExpandableGroupKey, boolean>
+  >({ chapters: true, outline: false, characters: false, world: false });
+  const toggle = (key: ExpandableGroupKey) =>
+    setExpanded((s) => ({ ...s, [key]: !s[key] }));
+  const open = (key: ExpandableGroupKey) =>
+    setExpanded((s) => (s[key] ? s : { ...s, [key]: true }));
 
   const totalWords = detail.chapters.reduce((s, c) => s + c.wordCount, 0);
   const pct = novel.targetWords
@@ -226,21 +255,19 @@ export function AssetTree({
         className="nice-scroll min-h-0 flex-1 overflow-y-auto p-2"
       >
         <ul className="space-y-0.5">
-          {/* Chapters — expandable list of chapter rows */}
-          <li>
-            <div className="flex items-center gap-2 rounded-md px-2 py-1.5">
-              <BookOpen className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
-              <button
-                type="button"
-                className="min-w-0 flex-1 text-left text-sm font-medium"
-                onClick={() => onOpenArtifactTab("draft")}
-              >
-                Chapters
-                <span className="ml-1.5 text-xs text-muted-foreground">
-                  ({detail.chapters.length})
-                </span>
-              </button>
-              <BadgeIcons badges={badges.get("group:chapters")} />
+          {/* Chapters — expandable, children open the Draft editor */}
+          <TreeGroup
+            icon={<BookOpen className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />}
+            label="Chapters"
+            count={detail.chapters.length}
+            badges={badges.get("group:chapters")}
+            expanded={expanded.chapters}
+            onToggle={() => toggle("chapters")}
+            onOpen={() => {
+              onOpenArtifactTab("draft");
+              open("chapters");
+            }}
+            action={
               <Button
                 variant="ghost"
                 size="sm"
@@ -255,83 +282,129 @@ export function AssetTree({
                   <Plus className="h-3.5 w-3.5" aria-hidden="true" />
                 )}
               </Button>
-            </div>
-            {detail.chapters.length > 0 && (
-              <ul className="ml-3 border-l pl-2">
-                {detail.chapters.map((ch) => {
-                  const chapterBadges = badges.get(`chapter:${ch.index}`);
-                  return (
-                    <li key={ch.id}>
-                      <button
-                        type="button"
-                        onClick={() => onOpenChapter(ch.id)}
-                        aria-current={ch.id === selectedChapterId ? "true" : undefined}
+            }
+          >
+            {detail.chapters.map((ch) => {
+              const chapterBadges = badges.get(`chapter:${ch.index}`);
+              return (
+                <TreeFile
+                  key={ch.id}
+                  label={ch.title}
+                  prefix={String(ch.index).padStart(2, "0")}
+                  selected={ch.id === selectedChapterId}
+                  onClick={() => onOpenChapter(ch.id)}
+                  badges={chapterBadges}
+                  trailing={
+                    ch.status !== "draft" ? (
+                      <span
                         className={cn(
-                          "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors",
-                          ch.id === selectedChapterId
-                            ? "bg-accent"
-                            : "hover:bg-accent/60"
+                          "h-1.5 w-1.5 shrink-0 rounded-full",
+                          ch.status === "final" ? "bg-emerald-600" : "bg-amber-500"
                         )}
-                      >
-                        <span className="shrink-0 font-mono text-[10px] text-muted-foreground">
-                          {String(ch.index).padStart(2, "0")}
-                        </span>
-                        <span className="min-w-0 flex-1 truncate text-sm">
-                          {ch.title}
-                        </span>
-                        {ch.status !== "draft" && (
-                          <span
-                            className={cn(
-                              "h-1.5 w-1.5 shrink-0 rounded-full",
-                              ch.status === "final" ? "bg-emerald-600" : "bg-amber-500"
-                            )}
-                            aria-label={ch.status}
-                          />
-                        )}
-                        <BadgeIcons badges={chapterBadges} />
-                      </button>
-                    </li>
-                  );
-                })}
-              </ul>
-            )}
-          </li>
+                        aria-label={ch.status}
+                      />
+                    ) : undefined
+                  }
+                />
+              );
+            })}
+          </TreeGroup>
 
+          {/* Outline — expandable, children open the focused beat */}
           <TreeGroup
             icon={<ListTree className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />}
             label="Outline"
             count={detail.outlineBeats.length}
             badges={badges.get("group:outline")}
-            onClick={() => onOpenArtifactTab("outline")}
-          />
+            expanded={expanded.outline}
+            onToggle={() => toggle("outline")}
+            onOpen={() => {
+              onOpenArtifactTab("outline");
+              open("outline");
+            }}
+          >
+            {detail.outlineBeats.map((b, i) => (
+              <TreeFile
+                key={b.id}
+                label={b.title}
+                prefix={String(i + 1).padStart(2, "0")}
+                selected={b.id === selectedBeatId}
+                onClick={() => onOpenBeat(b.id)}
+                badges={badges.get(`beat:${b.id}`)}
+              />
+            ))}
+          </TreeGroup>
+
+          {/* Characters — expandable, children open the focused card */}
           <TreeGroup
             icon={<Users className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />}
             label="Characters"
             count={detail.characters.length}
             badges={badges.get("group:characters")}
-            onClick={() => onOpenArtifactTab("bible")}
-          />
+            expanded={expanded.characters}
+            onToggle={() => toggle("characters")}
+            onOpen={() => {
+              onOpenArtifactTab("bible");
+              open("characters");
+            }}
+          >
+            {detail.characters.map((c) => (
+              <TreeFile
+                key={c.id}
+                label={c.name}
+                selected={c.id === selectedCharacterId}
+                onClick={() => onOpenCharacter(c.id)}
+                badges={badges.get(`character:${c.id}`)}
+                trailing={
+                  c.role ? (
+                    <span className="max-w-24 shrink-0 truncate text-[10px] text-muted-foreground">
+                      {c.role}
+                    </span>
+                  ) : undefined
+                }
+              />
+            ))}
+          </TreeGroup>
+
+          {/* World — expandable, children open the focused entry */}
           <TreeGroup
             icon={<Globe2 className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />}
             label="World"
             count={detail.worldEntries.length}
             badges={badges.get("group:world")}
-            onClick={() => onOpenArtifactTab("bible")}
-          />
+            expanded={expanded.world}
+            onToggle={() => toggle("world")}
+            onOpen={() => {
+              onOpenArtifactTab("bible");
+              open("world");
+            }}
+          >
+            {detail.worldEntries.map((w) => (
+              <TreeFile
+                key={w.id}
+                label={w.title}
+                selected={w.id === selectedWorldId}
+                onClick={() => onOpenWorld(w.id)}
+                badges={badges.get(`world:${w.id}`)}
+              />
+            ))}
+          </TreeGroup>
+
+          {/* Tool views — not files, plain links */}
           <TreeGroup
             icon={<FileSearch className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />}
             label="Review"
-            onClick={() => onOpenArtifactTab("review")}
+            onOpen={() => onOpenArtifactTab("review")}
           />
           <TreeGroup
             icon={<Brain className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />}
             label="Memory"
-            onClick={() => onOpenArtifactTab("memory")}
+            onOpen={() => onOpenArtifactTab("memory")}
           />
           <TreeGroup
             icon={<ShieldCheck className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />}
             label="QC"
-            onClick={() => onOpenArtifactTab("qc")}
+            onOpen={() => onOpenArtifactTab("qc")}
           />
         </ul>
 
@@ -345,7 +418,7 @@ export function AssetTree({
 }
 
 // ---------------------------------------------------------------------------
-// Group row (single-click → artifact tab)
+// Group row — chevron toggles collapse; label opens the artifact view
 // ---------------------------------------------------------------------------
 
 function TreeGroup({
@@ -354,34 +427,118 @@ function TreeGroup({
   count,
   badges,
   phaseTag,
-  onClick,
+  onOpen,
+  expanded,
+  onToggle,
+  action,
+  children,
 }: {
   icon: React.ReactNode;
   label: string;
   count?: number;
   badges?: NodeBadge[];
   phaseTag?: string;
+  /** Label click — opens the group's artifact view. */
+  onOpen: () => void;
+  /** Presence of onToggle makes the group expandable. */
+  expanded?: boolean;
+  onToggle?: () => void;
+  /** Extra trailing control (e.g. the chapter add button). */
+  action?: React.ReactNode;
+  children?: React.ReactNode;
+}) {
+  const expandable = typeof expanded === "boolean" && !!onToggle;
+  return (
+    <li>
+      <div
+        className={cn(
+          "flex items-center gap-1 rounded-md pr-1 transition-colors",
+          "hover:bg-accent/60"
+        )}
+      >
+        {expandable ? (
+          <button
+            type="button"
+            onClick={onToggle}
+            aria-expanded={expanded}
+            aria-label={`${label} — expand or collapse`}
+            className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-muted-foreground hover:text-foreground"
+          >
+            <ChevronRight
+              className={cn("h-4 w-4 transition-transform", expanded && "rotate-90")}
+              aria-hidden="true"
+            />
+          </button>
+        ) : (
+          <span className="h-6 w-6 shrink-0" aria-hidden="true" />
+        )}
+        <button
+          type="button"
+          onClick={onOpen}
+          className="flex min-w-0 flex-1 items-center gap-2 py-1.5 text-left"
+        >
+          {icon}
+          <span className="min-w-0 flex-1 truncate text-sm font-medium">
+            {label}
+            {typeof count === "number" && (
+              <span className="ml-1.5 text-xs text-muted-foreground">({count})</span>
+            )}
+            {phaseTag && (
+              <span className="ml-1.5 rounded bg-muted px-1 py-0.5 text-[10px] font-normal text-muted-foreground">
+                {phaseTag}
+              </span>
+            )}
+          </span>
+          <BadgeIcons badges={badges} />
+        </button>
+        {action}
+      </div>
+      {expandable && expanded && children != null && (
+        <ul className="ml-3 border-l pl-2">{children}</ul>
+      )}
+      {!expandable && children != null && <ul className="ml-3 border-l pl-2">{children}</ul>}
+    </li>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// File row — a clickable child asset (chapter / beat / character / world)
+// ---------------------------------------------------------------------------
+
+function TreeFile({
+  label,
+  prefix,
+  selected,
+  onClick,
+  badges,
+  trailing,
+}: {
+  label: string;
+  /** Mono index prefix, e.g. "03". */
+  prefix?: string;
+  selected?: boolean;
   onClick: () => void;
+  badges?: NodeBadge[];
+  trailing?: React.ReactNode;
 }) {
   return (
     <li>
       <button
         type="button"
         onClick={onClick}
-        className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-accent/60"
+        aria-current={selected ? "true" : undefined}
+        className={cn(
+          "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors",
+          selected ? "bg-accent" : "hover:bg-accent/60"
+        )}
       >
-        {icon}
-        <span className="min-w-0 flex-1 text-sm font-medium">
-          {label}
-          {typeof count === "number" && (
-            <span className="ml-1.5 text-xs text-muted-foreground">({count})</span>
-          )}
-          {phaseTag && (
-            <span className="ml-1.5 rounded bg-muted px-1 py-0.5 text-[10px] font-normal text-muted-foreground">
-              {phaseTag}
-            </span>
-          )}
-        </span>
+        {prefix && (
+          <span className="shrink-0 font-mono text-[10px] text-muted-foreground">
+            {prefix}
+          </span>
+        )}
+        <span className="min-w-0 flex-1 truncate text-sm">{label}</span>
+        {trailing}
         <BadgeIcons badges={badges} />
       </button>
     </li>
