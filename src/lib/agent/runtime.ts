@@ -911,6 +911,18 @@ async function executeTask(params: {
     "STORY SNAPSHOT (measured at run start; use read tools for fresher data):",
     renderSnapshot(snapshot),
   ];
+  if (assignee === "prism" && /certif|finaliz/i.test(`${task.title} ${task.detail ?? ""}`)) {
+    // Phase 6.1 — certify tasks must END in a verified finalize, and the
+    // protocol wording here overrides any inverted phrasing that slips into
+    // a leader-generated brief (e.g. "if blocking issues exist, finalize").
+    envelopeParts.push(
+      "",
+      "CERTIFY PROTOCOL (hard rule — overrides any contrary wording in the brief): " +
+        "review first; if the review finds 0 blocking issues you MUST call finalize_chapter(index) then settle_chapter(index) within this same task — " +
+        "ending with the chapter still draft FAILS verification. " +
+        "If blocking issues exist, do NOT finalize: report them so the leader can dispatch repairs.",
+    );
+  }
   if (assignee === "sage") {
     // Word quota is a writer concern — researchers/analysts don't need it.
     if (targetChapterIndex) {
@@ -1060,6 +1072,40 @@ async function executeTask(params: {
       await runTurns(2);
     }
 
+    // Phase 6.1 — finalize verification for PRISM certify tasks. The sage
+    // write gate above only covers sage; a certify task ("Review and
+    // Certify/Finalize Chapter N") that ends without a verified
+    // finalize_chapter leaves the chapter in draft (no green status) while
+    // the board reports success. Detect that here and run the SAME repair
+    // rounds before marking done.
+    const requiresFinalize =
+      assignee === "prism" &&
+      task.artifactType === "chapter" &&
+      /certif|finaliz/i.test(`${task.title ?? ""}`);
+    while (
+      requiresFinalize &&
+      measuredForTask.chaptersFinalized === 0 &&
+      !blockedReason &&
+      repairRound < budgets.glm.repairRounds &&
+      !signal.aborted
+    ) {
+      repairRound += 1;
+      await emitEvent({
+        ...taskRef,
+        actor: assignee,
+        kind: "error",
+        summary: `Finalize verification failed — chapter is still draft, no verified finalize_chapter. Repair round ${repairRound}/${budgets.glm.repairRounds}.`,
+      });
+      messages.push({
+        role: "user",
+        content:
+          "VERIFY FAILED: this task was expected to certify the chapter but no finalize_chapter was verified — the chapter is still DRAFT. " +
+          "Call finalize_chapter(index) NOW (the E2 gate reads the latest persisted review — 0 blocking passes), then settle_chapter(index) for memory. " +
+          "Skip optional scans; or reply BLOCKED: with the reason. Narration alone will fail again.",
+      });
+      await runTurns(2);
+    }
+
     // Fold this task's measured numbers into the run totals.
     measured.chaptersWritten += measuredForTask.chaptersWritten;
     measured.chaptersUpdated += measuredForTask.chaptersUpdated;
@@ -1082,9 +1128,20 @@ async function executeTask(params: {
       await emitEvent({ ...taskRef, actor: assignee, kind: "task_update", summary: `${task.key} failed — write verification never passed.` });
       params.issues.push(`${task.key} failed: no verified write after ${budgets.glm.repairRounds} repair round(s)`);
       outcome = "failed";
+    } else if (requiresFinalize && measuredForTask.chaptersFinalized === 0) {
+      await db.agentTask.update({ where: { id: task.id }, data: { status: "failed" } });
+      await emitEvent({ ...taskRef, actor: assignee, kind: "task_update", summary: `${task.key} failed — finalize verification never passed (chapter still draft).` });
+      params.issues.push(`${task.key} failed: no verified finalize_chapter after ${budgets.glm.repairRounds} repair round(s) — chapter left in draft`);
+      outcome = "failed";
     } else {
       await db.agentTask.update({ where: { id: task.id }, data: { status: "done" } });
-      await emitEvent({ ...taskRef, actor: assignee, kind: "task_update", summary: `${task.key} done${measuredForTask.chaptersWritten + measuredForTask.chaptersUpdated > 0 ? " (write verified in DB)" : ` (${assignee} work verified)`}.` });
+      const verified =
+        measuredForTask.chaptersFinalized > 0
+          ? ` (finalize verified in DB${measuredForTask.settlesRun > 0 ? ` + ${measuredForTask.settlesRun} memory settle(s)` : ""})`
+          : measuredForTask.chaptersWritten + measuredForTask.chaptersUpdated > 0
+            ? " (write verified in DB)"
+            : ` (${assignee} work verified)`;
+      await emitEvent({ ...taskRef, actor: assignee, kind: "task_update", summary: `${task.key} done${verified}.` });
       outcome = "done";
     }
     return outcome;
