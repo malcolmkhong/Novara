@@ -41,6 +41,7 @@ model Novel {
   chapters      Chapter[]
   characters    Character[]
   worldEntries  WorldEntry[]
+  worldGroups   WorldGroup[]
   outlineBeats  OutlineBeat[]
   volumes       Volume[]
   digests       ChapterDigest[]
@@ -53,6 +54,7 @@ model Novel {
   promises      StoryPromise[]
   clues         StoryClue[]
   packs         ChapterPack[]
+  assetVersions AssetVersion[]
   contract      NovelContract?
   agentRuns     AgentRun[]
 
@@ -160,6 +162,12 @@ model Character {
   // Sediment normalizes STATE names through this map so aliases (林晚/晚姐)
   // no longer split CharacterState snapshots across name keys.
   aliases     String   @default("")
+  // Canon status layer (Phase 9) — non-body assets obey the same write-gate
+  // law as chapters: draft = editable workspace, final = locked canon. Any
+  // mutation of a final asset requires explicit `reopen: true` which archives
+  // the final state into AssetVersion and downgrades status to draft.
+  status      String   @default("draft")
+  finalizedAt DateTime?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
@@ -179,11 +187,40 @@ model WorldEntry {
   // location | faction | item | system | culture | other
   category  String   @default("other")
   content   String   @default("")
+  // Canon status layer (Phase 9) — same write-gate law as Character.
+  status      String    @default("draft")
+  finalizedAt DateTime?
+  // Second-level grouping (Phase 9) — 世界书/世界规则 two-level tree. NULL
+  // entries render in the top "Ungrouped" section so nothing is ever hidden.
+  groupId   String?
+  group     WorldGroup? @relation(fields: [groupId], references: [id], onDelete: SetNull)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   novel Novel @relation(fields: [novelId], references: [id], onDelete: Cascade)
 
+  @@index([novelId])
+  @@index([groupId])
+}
+
+// ---------------------------------------------------------------------------
+// WorldGroup (Phase 9) — second-level grouping inside the world bible
+// (DSH 世界书/世界规则 analog). Ordered per novel; entries nest under their
+// group in the asset tree and Memory tab. Ungrouped entries stay visible.
+// ---------------------------------------------------------------------------
+
+model WorldGroup {
+  id        String   @id @default(cuid())
+  novelId   String
+  name      String
+  order     Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  novel   Novel        @relation(fields: [novelId], references: [id], onDelete: Cascade)
+  entries WorldEntry[]
+
+  @@unique([novelId, name])
   @@index([novelId])
 }
 
@@ -202,6 +239,9 @@ model OutlineBeat {
   summary   String   @default("")
   volumeId  String?
   volume    Volume?  @relation(fields: [volumeId], references: [id], onDelete: SetNull)
+  // Canon status layer (Phase 9) — same write-gate law as Character.
+  status      String    @default("draft")
+  finalizedAt DateTime?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -225,6 +265,9 @@ model Volume {
   title     String
   // Volume plan (卷规划) — markdown: promise of this arc, entry/exit state.
   synopsis  String   @default("")
+  // Canon status layer (Phase 9) — same write-gate law as Character.
+  status      String    @default("draft")
+  finalizedAt DateTime?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -249,8 +292,12 @@ model Storyline {
   novelId   String
   name      String
   summary   String   @default("")
-  // active | dormant | resolved
+  // active | dormant | resolved (thread lifecycle)
   status    String   @default("active")
+  // Canon status layer (Phase 9): draft | final — locks edits via write-gate.
+  // (named differently from thread lifecycle on purpose: lock, not status.)
+  lock      String   @default("draft")
+  finalizedAt DateTime?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -267,6 +314,9 @@ model TimelineEntry {
   label        String
   detail       String   @default("")
   chapterIndex Int?
+  // Canon status layer (Phase 9) — same write-gate law as Character.
+  status       String   @default("draft")
+  finalizedAt  DateTime?
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
@@ -284,6 +334,9 @@ model CharacterArc {
   order         Int
   note          String
   chapterIndex  Int?
+  // Canon status layer (Phase 9) — same write-gate law as Character.
+  status        String   @default("draft")
+  finalizedAt   DateTime?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
@@ -299,10 +352,14 @@ model CharacterArc {
 // ---------------------------------------------------------------------------
 
 model NovelContract {
-  novelId   String   @id
-  content   String   @default("")
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  novelId     String    @id
+  content     String    @default("")
+  // Canon status layer (Phase 9) — a finalized contract is locked canon;
+  // editing requires reopen (write-gate), archive goes to AssetVersion.
+  status      String    @default("draft")
+  finalizedAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
 
   novel Novel @relation(fields: [novelId], references: [id], onDelete: Cascade)
 }
@@ -322,6 +379,9 @@ model StoryPromise {
   content     String
   // open | fulfilled | broken
   status      String   @default("open")
+  // Canon status layer (Phase 9): draft | final — lock, not lifecycle.
+  lock        String   @default("draft")
+  finalizedAt DateTime?
   // Chapter where the promise was made / where it is due.
   madeChapter Int?
   dueChapter  Int?
@@ -339,6 +399,9 @@ model StoryClue {
   content       String
   // planted | surfaced | revealed
   status        String   @default("planted")
+  // Canon status layer (Phase 9): draft | final — lock, not lifecycle.
+  lock          String   @default("draft")
+  finalizedAt   DateTime?
   plantChapter  Int?
   revealChapter Int?
   createdAt     DateTime @default(now())
@@ -536,4 +599,38 @@ model SkillInvocation {
   createdAt DateTime @default(now())
 
   @@index([taskId])
+}
+
+// ---------------------------------------------------------------------------
+// AssetVersion (Phase 9) — the immutable history layer for NON-BODY assets
+// (characters, world entries, outline beats, volumes, ledger rows, contract).
+// Chapters already snapshot via ChapterVersion; everything else snapshots
+// here. Rows are written:
+//   1. when a FINAL asset is reopened (the final state is archived verbatim
+//      before the downgrade — 保留原版);
+//   2. when a finalized asset is locked (the canon state is archived);
+//   3. on explicit manual snapshots from the canon UI.
+// `snapshot` holds the full pre-change field values as a labeled text block
+// (SQLite + Prisma: no JSON columns). 修订走流程并留记录 = status field +
+// these rows; nothing else may mutate canon history.
+// ---------------------------------------------------------------------------
+
+model AssetVersion {
+  id        String   @id @default(cuid())
+  novelId   String
+  // character | world_entry | outline_beat | volume | storyline |
+  // timeline_entry | character_arc | story_promise | story_clue | contract
+  assetType String
+  assetId   String
+  assetLabel String  @default("")
+  // reopen | finalize | manual — why this snapshot exists
+  reason    String   @default("manual")
+  snapshot  String
+  createdBy String   @default("author")
+  createdAt DateTime @default(now())
+
+  novel Novel @relation(fields: [novelId], references: [id], onDelete: Cascade)
+
+  @@index([novelId, assetType, assetId])
+  @@index([assetId, createdAt])
 }

@@ -1290,7 +1290,10 @@ async function executeTask(params: {
     if (stoppedByGate) return "skipped";
 
     // Write verification for SAGE chapter tasks — repair rounds before failure.
-    const requiresWrite = task.artifactType === "chapter" && assignee === "sage";
+    // READ-ONLY tasks (Phase 8 impact assessment) are exempt: their verified
+    // outcome is the analysis itself, never a DB write.
+    const requiresWrite =
+      task.artifactType === "chapter" && assignee === "sage" && params.readOnly !== true;
     while (
       requiresWrite &&
       measuredForTask.chaptersWritten + measuredForTask.chaptersUpdated === 0 &&
