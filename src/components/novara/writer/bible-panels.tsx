@@ -37,9 +37,11 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { addVolume, deleteVolume } from "@/lib/novara/api";
 import type {
   CharacterDTO,
   OutlineBeatDTO,
+  VolumeDTO,
   WorldCategory,
   WorldEntryDTO,
 } from "@/lib/novara/types";
@@ -239,12 +241,13 @@ export function CharacterDocument({
   onBack,
 }: {
   character: CharacterDTO;
-  onUpdate: (id: string, patch: { name?: string; role?: string; description?: string }) => Promise<boolean>;
+  onUpdate: (id: string, patch: { name?: string; role?: string; aliases?: string; description?: string }) => Promise<boolean>;
   onDelete: (c: CharacterDTO) => Promise<void>;
   onBack: () => void;
 }) {
   const [name, setName] = useState(character.name);
   const [role, setRole] = useState(character.role);
+  const [aliases, setAliases] = useState(character.aliases);
   const [description, setDescription] = useState(character.description);
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -261,6 +264,7 @@ export function CharacterDocument({
     setSyncedCharacter(character);
     setName(character.name);
     setRole(character.role);
+    setAliases(character.aliases);
     setDescription(character.description);
     setDirty(false);
     // Opening a file reads like opening a document — non-empty bodies land in
@@ -273,6 +277,7 @@ export function CharacterDocument({
     const ok = await onUpdate(character.id, {
       name: name.trim() || character.name,
       role: role.trim(),
+      aliases,
       description,
     });
     setSaving(false);
@@ -313,16 +318,31 @@ export function CharacterDocument({
               className="min-w-0 sm:w-36"
               aria-label="Role"
             />
+            <Input
+              value={aliases}
+              onChange={(e) => {
+                setAliases(e.target.value);
+                setDirty(true);
+              }}
+              placeholder="Alternate names, comma-separated"
+              className="min-w-0 sm:w-44"
+              aria-label="Aliases"
+            />
           </div>
         ) : (
-          <div className="flex min-w-0 flex-1 items-center gap-2">
-            <h2 className="min-w-0 truncate font-display text-lg font-bold leading-tight">
-              {name || character.name}
-            </h2>
-            {role.trim() && (
-              <Badge variant="outline" className="shrink-0 text-[11px]">
-                {role.trim()}
-              </Badge>
+          <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+            <div className="flex min-w-0 items-center gap-2">
+              <h2 className="min-w-0 truncate font-display text-lg font-bold leading-tight">
+                {name || character.name}
+              </h2>
+              {role.trim() && (
+                <Badge variant="outline" className="shrink-0 text-[11px]">
+                  {role.trim()}
+                </Badge>
+              )}
+            </div>
+            {aliases.trim() && (
+              <p className="truncate text-xs text-muted-foreground">aka: {aliases}</p>
             )}
           </div>
         )}
@@ -698,6 +718,10 @@ export function WorldDocument({
 export function OutlinePanel({
   beats,
   focusBeatId,
+  volumes,
+  novelId,
+  onRefresh,
+  onOpenVolume,
   onAdd,
   onUpdate,
   onDelete,
@@ -705,6 +729,14 @@ export function OutlinePanel({
   beats: OutlineBeatDTO[];
   /** Beat highlighted + scrolled into view (opened from the asset tree). */
   focusBeatId?: string | null;
+  /** Volumes (卷) — present once the outline is grouped into volumes. */
+  volumes?: VolumeDTO[];
+  /** Novel id, needed to create volumes straight from the panel header. */
+  novelId?: string;
+  /** Parent refetch, called after a panel-driven volume create/delete. */
+  onRefresh?: () => Promise<void>;
+  /** Opens the volume plan document (routed by the artifact pane). */
+  onOpenVolume?: (volumeId: string) => void;
   onAdd: (input: { title: string; summary: string }) => Promise<boolean>;
   onUpdate: (id: string, patch: { title?: string; summary?: string }) => Promise<boolean>;
   onDelete: (b: OutlineBeatDTO) => Promise<void>;
@@ -714,7 +746,9 @@ export function OutlinePanel({
   const [summary, setSummary] = useState("");
   const [busy, setBusy] = useState(false);
   const [deleting, setDeleting] = useState<OutlineBeatDTO | null>(null);
-  const focusRef = useFocusScroll<HTMLOListElement>(focusBeatId ?? null);
+  const [addingVolume, setAddingVolume] = useState(false);
+  const [deletingVolume, setDeletingVolume] = useState<VolumeDTO | null>(null);
+  const focusRef = useFocusScroll<HTMLDivElement>(focusBeatId ?? null);
 
   const openNew = () => {
     setTitle("");
@@ -738,6 +772,82 @@ export function OutlinePanel({
     if (ok) setEditing(null);
   };
 
+  // Group beats under their volume; beats without a volume (or pointing at a
+  // missing one) land in a trailing Unsorted section so nothing is ever hidden.
+  const volumeList = volumes ?? [];
+  const sections: { volume: VolumeDTO | null; beats: OutlineBeatDTO[] }[] = [];
+  if (volumeList.length > 0) {
+    const byId = new Map<string, OutlineBeatDTO[]>();
+    for (const v of volumeList) byId.set(v.id, []);
+    const unsorted: OutlineBeatDTO[] = [];
+    for (const b of beats) {
+      const bucket = b.volumeId ? byId.get(b.volumeId) : undefined;
+      if (bucket) bucket.push(b);
+      else unsorted.push(b);
+    }
+    for (const v of volumeList) {
+      sections.push({ volume: v, beats: byId.get(v.id) ?? [] });
+    }
+    if (unsorted.length > 0) sections.push({ volume: null, beats: unsorted });
+  }
+
+  // Beat numbers stay global (matching the tree's positional prefixes) even
+  // when the list is grouped into volume sections.
+  const beatNumbers = new Map<string, number>(beats.map((b, i) => [b.id, i + 1]));
+  const renderBeat = (b: OutlineBeatDTO) => {
+    const no = beatNumbers.get(b.id) ?? 1;
+    return (
+      <li
+        key={b.id}
+        data-asset-id={b.id}
+        className={cn(
+          "group flex scroll-mt-2 items-start gap-3 rounded-lg border bg-card p-4 transition-shadow",
+          b.id === focusBeatId && "border-primary/50 ring-1 ring-primary/30"
+        )}
+      >
+        <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-amber-100 font-display text-xs font-bold text-primary">
+          {no}
+        </span>
+        <div className="min-w-0 flex-1">
+          <h3 className="font-medium">{b.title}</h3>
+          {b.summary && (
+            <MarkdownDocument
+              content={b.summary}
+              className="mt-1 text-muted-foreground"
+            />
+          )}
+        </div>
+        <div className="flex shrink-0 gap-1">
+          <Button variant="ghost" size="icon" onClick={() => openEdit(b)} aria-label={`Edit beat ${no}`}>
+            <Pencil className="h-4 w-4" aria-hidden="true" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => setDeleting(b)}
+            aria-label={`Delete beat ${no}`}
+            className="hover:text-destructive"
+          >
+            <Trash2 className="h-4 w-4" aria-hidden="true" />
+          </Button>
+        </div>
+      </li>
+    );
+  };
+
+  const handleAddVolume = async () => {
+    if (!novelId || !onRefresh) return;
+    setAddingVolume(true);
+    try {
+      await addVolume(novelId, { title: `Volume ${volumeList.length + 1}` });
+      await onRefresh();
+    } catch (e) {
+      console.error("addVolume failed", e);
+    } finally {
+      setAddingVolume(false);
+    }
+  };
+
   return (
     <PanelShell
       icon={<ScrollText className="h-4 w-4" aria-hidden="true" />}
@@ -746,46 +856,77 @@ export function OutlinePanel({
       emptyText="No outline yet. Sketch the story arc beat by beat — the AI drafts follow this."
       onAdd={openNew}
       addLabel="Add beat"
+      headerAction={
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => void handleAddVolume()}
+          disabled={addingVolume || !novelId || !onRefresh}
+        >
+          {addingVolume ? (
+            <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+          ) : (
+            <Plus className="h-4 w-4" aria-hidden="true" />
+          )}
+          Add volume
+        </Button>
+      }
       list={
-        <ol ref={focusRef} className="space-y-2">
-          {beats.map((b, i) => (
-            <li
-              key={b.id}
-              data-asset-id={b.id}
-              className={cn(
-                "group flex scroll-mt-2 items-start gap-3 rounded-lg border bg-card p-4 transition-shadow",
-                b.id === focusBeatId && "border-primary/50 ring-1 ring-primary/30"
-              )}
-            >
-              <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-amber-100 font-display text-xs font-bold text-primary">
-                {i + 1}
-              </span>
-              <div className="min-w-0 flex-1">
-                <h3 className="font-medium">{b.title}</h3>
-                {b.summary && (
-                  <MarkdownDocument
-                    content={b.summary}
-                    className="mt-1 text-muted-foreground"
-                  />
-                )}
-              </div>
-              <div className="flex shrink-0 gap-1">
-                <Button variant="ghost" size="icon" onClick={() => openEdit(b)} aria-label={`Edit beat ${i + 1}`}>
-                  <Pencil className="h-4 w-4" aria-hidden="true" />
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  onClick={() => setDeleting(b)}
-                  aria-label={`Delete beat ${i + 1}`}
-                  className="hover:text-destructive"
-                >
-                  <Trash2 className="h-4 w-4" aria-hidden="true" />
-                </Button>
-              </div>
-            </li>
-          ))}
-        </ol>
+        <div ref={focusRef} className="space-y-4">
+          {sections.length > 0 ? (
+            sections.map((section) => {
+              const v = section.volume;
+              return v ? (
+                <section key={v.id} className="space-y-2">
+                  <div className="flex items-center gap-2 rounded-lg border bg-muted/30 px-3 py-1.5">
+                    <span className="shrink-0 font-mono text-xs text-muted-foreground">
+                      {String(v.index).padStart(2, "0")}
+                    </span>
+                    <h4 className="min-w-0 flex-1 truncate text-sm font-semibold">
+                      {v.title}
+                    </h4>
+                    <span className="shrink-0 text-xs text-muted-foreground">
+                      ({section.beats.length})
+                    </span>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-7 w-7"
+                      onClick={() => onOpenVolume?.(v.id)}
+                      aria-label={`Open volume plan for ${v.title}`}
+                    >
+                      <BookOpen className="h-3.5 w-3.5" aria-hidden="true" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-7 w-7 hover:text-destructive"
+                      onClick={() => setDeletingVolume(v)}
+                      aria-label={`Delete volume ${v.title}`}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+                    </Button>
+                  </div>
+                  <ol className="space-y-2">{section.beats.map(renderBeat)}</ol>
+                </section>
+              ) : (
+                <section key="unsorted" className="space-y-2">
+                  <div className="flex items-center gap-2 rounded-lg border border-dashed bg-muted/30 px-3 py-1.5">
+                    <h4 className="min-w-0 flex-1 truncate text-sm font-medium text-muted-foreground">
+                      Unsorted / 未分组
+                    </h4>
+                    <span className="shrink-0 text-xs text-muted-foreground">
+                      ({section.beats.length})
+                    </span>
+                  </div>
+                  <ol className="space-y-2">{section.beats.map(renderBeat)}</ol>
+                </section>
+              );
+            })
+          ) : (
+            <ol className="space-y-2">{beats.map(renderBeat)}</ol>
+          )}
+        </div>
       }
     >
       <Dialog open={editing !== null} onOpenChange={(v) => !v && setEditing(null)}>
@@ -827,7 +968,159 @@ export function OutlinePanel({
           setDeleting(null);
         }}
       />
+
+      <ConfirmDialog
+        open={deletingVolume !== null}
+        onOpenChange={(v) => !v && setDeletingVolume(null)}
+        title="Delete volume?"
+        description={`“${deletingVolume?.title ?? ""}” will be deleted. Beats in this volume will become unsorted (they are not deleted).`}
+        onConfirm={async () => {
+          const volume = deletingVolume;
+          setDeletingVolume(null);
+          if (!volume) return;
+          try {
+            await deleteVolume(volume.id);
+            await onRefresh?.();
+          } catch (e) {
+            console.error("deleteVolume failed", e);
+          }
+        }}
+      />
     </PanelShell>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Volume document window (卷) — single-volume plan view opened from the outline
+// ---------------------------------------------------------------------------
+
+export function VolumeDocument({
+  volume,
+  onUpdate,
+  onDelete,
+  onBack,
+}: {
+  volume: VolumeDTO;
+  onUpdate: (id: string, patch: { title?: string; synopsis?: string }) => Promise<boolean>;
+  onDelete: (v: VolumeDTO) => Promise<void>;
+  onBack: () => void;
+}) {
+  const [title, setTitle] = useState(volume.title);
+  const [synopsis, setSynopsis] = useState(volume.synopsis);
+  const [dirty, setDirty] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [view, setView] = useState<AssetDocView>(
+    volume.synopsis.trim() ? "preview" : "write"
+  );
+  const [confirmDelete, setConfirmDelete] = useState(false);
+
+  // Resync local state when a different volume is opened (see
+  // CharacterDocument for why this is a render-time adjustment).
+  const [syncedVolume, setSyncedVolume] = useState(volume);
+  if (syncedVolume !== volume) {
+    setSyncedVolume(volume);
+    setTitle(volume.title);
+    setSynopsis(volume.synopsis);
+    setDirty(false);
+    setView(volume.synopsis.trim() ? "preview" : "write");
+  }
+
+  const save = async () => {
+    setSaving(true);
+    const ok = await onUpdate(volume.id, {
+      title: title.trim() || volume.title,
+      synopsis,
+    });
+    setSaving(false);
+    if (ok) setDirty(false);
+  };
+
+  return (
+    <div className="rounded-lg border bg-card">
+      {/* Header — back + title inputs while writing, document title while reading */}
+      <div className="flex flex-col gap-2 border-b p-4 sm:flex-row sm:items-center">
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={onBack}
+          className="-ml-2 shrink-0 self-start text-muted-foreground hover:text-foreground sm:self-auto"
+        >
+          <ChevronLeft className="h-4 w-4" aria-hidden="true" />
+          All volumes
+        </Button>
+        {view === "write" ? (
+          <div className="flex min-w-0 flex-1 items-center gap-2">
+            <Input
+              value={title}
+              onChange={(e) => {
+                setTitle(e.target.value);
+                setDirty(true);
+              }}
+              className="min-w-0 flex-1 font-medium"
+              aria-label="Volume title"
+            />
+            <span className="shrink-0 rounded border bg-muted px-2 py-1 font-mono text-xs text-muted-foreground">
+              Volume {volume.index}
+            </span>
+          </div>
+        ) : (
+          <h2 className="min-w-0 flex-1 truncate font-display text-lg font-bold leading-tight">
+            {title || volume.title}
+          </h2>
+        )}
+      </div>
+
+      <DocToolbar
+        view={view}
+        onViewChange={setView}
+        dirty={dirty}
+        saving={saving}
+        onSave={() => void save()}
+        onDelete={() => setConfirmDelete(true)}
+        deleteAriaLabel="Delete volume"
+      />
+
+      {/* Body — textarea while writing, document window while reading */}
+      {view === "write" ? (
+        <Textarea
+          value={synopsis}
+          onChange={(e) => {
+            setSynopsis(e.target.value);
+            setDirty(true);
+          }}
+          placeholder="The plan for this volume — arc, turning points, how it pays off…"
+          className="nice-scroll min-h-[280px] resize-y rounded-none border-0 font-serif text-[15px] leading-7 shadow-none focus-visible:ring-0"
+          aria-label="Synopsis"
+        />
+      ) : (
+        <div className="px-6 py-5" aria-label="Volume document preview">
+          {synopsis.trim() ? (
+            <>
+              <span className="mb-3 inline-block rounded border bg-muted px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground">
+                Volume {volume.index}
+              </span>
+              <MarkdownDocument content={synopsis} className="mx-auto max-w-prose" />
+            </>
+          ) : (
+            <p className="py-16 text-center text-sm text-muted-foreground">
+              Nothing here yet — switch to Write.
+            </p>
+          )}
+        </div>
+      )}
+
+      <ConfirmDialog
+        open={confirmDelete}
+        onOpenChange={setConfirmDelete}
+        title="Delete volume?"
+        description={`“${volume.title}” will be deleted. Beats in this volume will become unsorted (they are not deleted).`}
+        onConfirm={async () => {
+          setConfirmDelete(false);
+          await onDelete(volume);
+          onBack();
+        }}
+      />
+    </div>
   );
 }
 
@@ -837,12 +1130,15 @@ export function OutlinePanel({
 
 export function BeatDocument({
   beat,
+  volumes,
   onUpdate,
   onDelete,
   onBack,
 }: {
   beat: OutlineBeatDTO;
-  onUpdate: (id: string, patch: { title?: string; summary?: string }) => Promise<boolean>;
+  /** Volumes (卷) for the quick reassignment select — hidden while absent. */
+  volumes?: VolumeDTO[];
+  onUpdate: (id: string, patch: { title?: string; summary?: string; volumeId?: string | null }) => Promise<boolean>;
   onDelete: (b: OutlineBeatDTO) => Promise<void>;
   onBack: () => void;
 }) {
@@ -908,6 +1204,28 @@ export function BeatDocument({
           <h2 className="min-w-0 flex-1 truncate font-display text-lg font-bold leading-tight">
             {title || beat.title}
           </h2>
+        )}
+        {volumes && volumes.length > 0 && (
+          <Select
+            value={beat.volumeId ?? "unsorted"}
+            onValueChange={(value) =>
+              void onUpdate(beat.id, {
+                volumeId: value === "unsorted" ? null : value,
+              })
+            }
+          >
+            <SelectTrigger className="w-full shrink-0 sm:w-40" aria-label="Volume">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="unsorted">Unsorted</SelectItem>
+              {volumes.map((v) => (
+                <SelectItem key={v.id} value={v.id}>
+                  {`V${String(v.index).padStart(2, "0")} · ${v.title}`}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         )}
       </div>
 
@@ -976,6 +1294,7 @@ function PanelShell({
   emptyText,
   onAdd,
   addLabel,
+  headerAction,
   list,
   children,
 }: {
@@ -985,6 +1304,8 @@ function PanelShell({
   emptyText: string;
   onAdd: () => void;
   addLabel: string;
+  /** Extra secondary control beside the add button (e.g. "Add volume"). */
+  headerAction?: React.ReactNode;
   list: React.ReactNode;
   children: React.ReactNode;
 }) {
@@ -998,10 +1319,13 @@ function PanelShell({
             ({count})
           </span>
         </h3>
-        <Button size="sm" onClick={onAdd}>
-          <Plus className="h-4 w-4" aria-hidden="true" />
-          {addLabel}
-        </Button>
+        <div className="flex items-center gap-2">
+          {headerAction}
+          <Button size="sm" onClick={onAdd}>
+            <Plus className="h-4 w-4" aria-hidden="true" />
+            {addLabel}
+          </Button>
+        </div>
       </div>
       {count === 0 ? (
         <p className="rounded-lg border border-dashed p-8 text-center text-sm text-muted-foreground">

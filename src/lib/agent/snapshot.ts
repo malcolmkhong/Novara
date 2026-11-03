@@ -25,12 +25,17 @@ export interface StorySnapshotData {
   nextChapterIndex: number;
   chapters: { index: number; title: string; wordCount: number; status: string }[];
   outline: { index: number; title: string; summary: string }[];
-  cast: { name: string; role: string }[];
+  cast: { name: string; role: string; aliases: string }[];
   world: { title: string; category: string; contentPreview: string }[];
   openForeshadows: { id: string; status: string; content: string; plantChapter: number }[];
   lastDigest: { chapterIndex: number; summary: string } | null;
   /** Phase 4: scored story memory + recent digests, rendered prompt-ready. */
   memoryBlock: string | null;
+  /** Phase 7 (P1) — plan-level ledgers, always in context (not scored). */
+  contract: string | null;
+  storylines: { name: string; status: string; summary: string }[];
+  timeline: { order: number; label: string; detail: string; chapterIndex: number | null }[];
+  arcs: { characterName: string; order: number; note: string }[];
   isChinese: boolean;
   nextQuota: { chapterQuota: number; remainingWords: number; basis: string };
 }
@@ -46,6 +51,14 @@ export async function loadStorySnapshot(novelId: string): Promise<StorySnapshotD
       },
       outlineBeats: { orderBy: { index: "asc" }, take: budgets.glm.snapshotOutlineLimit },
       characters: { orderBy: { createdAt: "asc" }, take: budgets.glm.snapshotCastLimit },
+      contract: true,
+      storylines: {
+        where: { status: { in: ["active", "dormant"] } },
+        orderBy: { createdAt: "asc" },
+        take: 12,
+      },
+      timelineEntries: { orderBy: { order: "asc" }, take: 20 },
+      characterArcs: { orderBy: [{ characterName: "asc" }, { order: "asc" }], take: 24 },
       worldEntries: { orderBy: { createdAt: "asc" }, take: budgets.glm.snapshotCastLimit },
       foreshadows: {
         where: { status: { in: ["open", "advanced"] } },
@@ -108,11 +121,28 @@ export async function loadStorySnapshot(novelId: string): Promise<StorySnapshotD
       status: c.status,
     })),
     outline: novel.outlineBeats.map((b) => ({ index: b.index, title: b.title, summary: b.summary })),
-    cast: novel.characters.map((c) => ({ name: c.name, role: c.role })),
+    cast: novel.characters.map((c) => ({ name: c.name, role: c.role, aliases: c.aliases })),
     world: novel.worldEntries.map((w) => ({
       title: w.title,
       category: w.category,
       contentPreview: w.content.slice(0, 200),
+    })),
+    contract: novel.contract?.content?.trim() || null,
+    storylines: novel.storylines.map((sl) => ({
+      name: sl.name,
+      status: sl.status,
+      summary: sl.summary,
+    })),
+    timeline: novel.timelineEntries.map((t) => ({
+      order: t.order,
+      label: t.label,
+      detail: t.detail,
+      chapterIndex: t.chapterIndex,
+    })),
+    arcs: novel.characterArcs.map((a) => ({
+      characterName: a.characterName,
+      order: a.order,
+      note: a.note,
     })),
     openForeshadows: novel.foreshadows.map((f) => ({
       id: f.id,
@@ -159,11 +189,58 @@ export function renderSnapshot(s: StorySnapshotData): string {
     );
   }
   if (s.cast.length > 0) {
-    lines.push(`CAST:\n${s.cast.map((c) => `- ${c.name}${c.role ? ` (${c.role})` : ""}`).join("\n")}`);
+    lines.push(
+      `CAST:\n${s.cast
+        .map(
+          (c) =>
+            `- ${c.name}${c.role ? ` (${c.role})` : ""}${c.aliases.trim() ? ` — aka: ${c.aliases.trim()}` : ""}`
+        )
+        .join("\n")}`
+    );
   }
   if (s.world.length > 0) {
     lines.push(
       `WORLD:\n${s.world.map((w) => `- ${w.title} (${w.category})${w.contentPreview ? ` — ${w.contentPreview}` : ""}`).join("\n")}`
+    );
+  }
+  if (s.contract) {
+    lines.push(`STORY CONTRACT (作品契约 — the promise this book made; never violate it):\n${s.contract.slice(0, 1500)}`);
+  }
+  if (s.storylines.length > 0) {
+    lines.push(
+      `STORYLINES (named plot threads — keep every active one moving or visibly advancing):\n${s.storylines
+        .map((sl) => `- [${sl.status}] ${sl.name}${sl.summary ? ` — ${sl.summary.slice(0, 220)}` : ""}`)
+        .join("\n")}`
+    );
+  }
+  if (s.timeline.length > 0) {
+    lines.push(
+      `TIMELINE (established in-story events in order — do not contradict):\n${s.timeline
+        .map(
+          (t) =>
+            `- ${t.order}. ${t.label}${t.chapterIndex != null ? ` (ch${t.chapterIndex})` : ""}${t.detail ? ` — ${t.detail.slice(0, 180)}` : ""}`
+        )
+        .join("\n")}`
+    );
+  }
+  if (s.arcs.length > 0) {
+    const byCharacter = new Map<string, { order: number; note: string }[]>();
+    for (const a of s.arcs) {
+      const list = byCharacter.get(a.characterName) ?? [];
+      list.push({ order: a.order, note: a.note });
+      byCharacter.set(a.characterName, list);
+    }
+    lines.push(
+      `CHARACTER ARCS (planned arc stages — write toward the next stage, never skip backwards):\n${[...byCharacter
+        .entries()]
+        .map(
+          ([name, stages]) =>
+            `- ${name}: ${stages
+              .sort((a, b) => a.order - b.order)
+              .map((st) => st.note.slice(0, 120))
+              .join(" → ")} `
+        )
+        .join("\n")}`
     );
   }
   if (s.openForeshadows.length > 0) {

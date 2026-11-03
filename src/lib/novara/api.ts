@@ -9,11 +9,14 @@ import type {
   CharacterDTO,
   ChapterStatus,
   ImportReport,
+  LedgerView,
   NovelBackupFile,
   NovelDetail,
   NovelStatus,
   NovelSummary,
   OutlineBeatDTO,
+  StorylineStatus,
+  VolumeDTO,
   WorldCategory,
   WorldEntryDTO,
 } from "./types";
@@ -108,6 +111,8 @@ export interface UpdateNovelInput {
   synopsis?: string;
   targetWords?: number;
   status?: NovelStatus;
+  /** Story contract (作品契约) — upserted 1:1 (Phase 7 P1). */
+  contract?: string;
 }
 
 export function updateNovel(
@@ -233,6 +238,8 @@ export interface CharacterInput {
   name: string;
   role?: string;
   description?: string;
+  /** Comma-separated alternate names (Phase 7 P1). */
+  aliases?: string;
 }
 
 export function addCharacter(
@@ -300,6 +307,8 @@ export function deleteWorldEntry(id: string): Promise<{ ok: true }> {
 export interface OutlineBeatInput {
   title: string;
   summary?: string;
+  /** Owning volume id (Phase 7 P1) — null unsorts the beat. */
+  volumeId?: string | null;
 }
 
 export function addOutlineBeat(
@@ -324,6 +333,85 @@ export function updateOutlineBeat(
 
 export function deleteOutlineBeat(id: string): Promise<{ ok: true }> {
   return request(`/api/outline-beats/${id}`, { method: "DELETE" });
+}
+
+// ---------------------------------------------------------------------------
+// Volumes (Phase 7 P1) — 卷实体
+// ---------------------------------------------------------------------------
+
+export interface VolumeInput {
+  title: string;
+  synopsis?: string;
+}
+
+export function getVolumes(novelId: string): Promise<{ volumes: VolumeDTO[] }> {
+  return request(`/api/novels/${novelId}/volumes`);
+}
+
+export function addVolume(
+  novelId: string,
+  input: VolumeInput
+): Promise<{ volume: VolumeDTO }> {
+  return request(`/api/novels/${novelId}/volumes`, {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export function updateVolume(
+  id: string,
+  patch: Partial<VolumeInput> & { moveTo?: number }
+): Promise<{ volume: VolumeDTO }> {
+  return request(`/api/volumes/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(patch),
+  });
+}
+
+export function deleteVolume(id: string): Promise<{ ok: true }> {
+  return request(`/api/volumes/${id}`, { method: "DELETE" });
+}
+
+// ---------------------------------------------------------------------------
+// Ledger (Phase 7 P1) — 故事线 / 时间线 / 人物弧线
+// ---------------------------------------------------------------------------
+
+export function getLedger(novelId: string): Promise<LedgerView> {
+  return request(`/api/novels/${novelId}/ledger`);
+}
+
+export type LedgerKind = "storyline" | "timeline" | "arc";
+
+export interface LedgerInput {
+  storyline: { name: string; summary?: string; status?: StorylineStatus };
+  timeline: { label: string; detail?: string; chapterIndex?: number | null };
+  arc: { characterName: string; note: string; chapterIndex?: number | null };
+}
+
+export function addLedgerRow<K extends LedgerKind>(
+  novelId: string,
+  kind: K,
+  data: LedgerInput[K]
+): Promise<{ row: unknown }> {
+  return request(`/api/novels/${novelId}/ledger`, {
+    method: "POST",
+    body: JSON.stringify({ kind, data }),
+  });
+}
+
+export function updateLedgerRow<K extends LedgerKind>(
+  kind: K,
+  id: string,
+  patch: Partial<LedgerInput[K]> & { moveTo?: number }
+): Promise<{ row: unknown }> {
+  return request(`/api/ledger/${kind}/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify({ kind, data: patch }),
+  });
+}
+
+export function deleteLedgerRow(kind: LedgerKind, id: string): Promise<{ ok: true }> {
+  return request(`/api/ledger/${kind}/${id}`, { method: "DELETE" });
 }
 
 // ---------------------------------------------------------------------------

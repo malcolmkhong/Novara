@@ -24,6 +24,7 @@ export async function POST(req: Request, { params }: Params) {
       name: schema.data.name,
       role: schema.data.role ?? "",
       description: schema.data.description ?? "",
+      aliases: schema.data.aliases ?? "",
     },
   });
   await db.novel.update({ where: { id }, data: { updatedAt: new Date() } });

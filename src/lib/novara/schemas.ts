@@ -6,6 +6,9 @@ export const characterSchema = z.object({
   name: z.string().trim().min(1).max(120),
   role: z.string().max(200).optional(),
   description: z.string().max(10000).optional(),
+  // Phase 7 (P1) — comma-separated alternate names; sediment normalizes
+  // STATE names through this map so aliases don't split state snapshots.
+  aliases: z.string().max(400).optional(),
 });
 
 export const characterUpdateSchema = characterSchema.partial();
@@ -23,9 +26,61 @@ export const worldEntryUpdateSchema = worldEntrySchema.partial();
 export const outlineBeatSchema = z.object({
   title: z.string().trim().min(1).max(200),
   summary: z.string().max(10000).optional(),
+  // Phase 7 (P1) — optional volume grouping (DSH 卷规划 analog).
+  volumeId: z.string().cuid().nullable().optional(),
 });
 
 export const outlineBeatUpdateSchema = outlineBeatSchema.partial();
+
+// ---- Phase 7 (P1): volumes (卷) ------------------------------------------
+
+export const createVolumeSchema = z.object({
+  title: z.string().trim().min(1).max(200),
+  synopsis: z.string().max(50000).optional(),
+});
+
+export const updateVolumeSchema = createVolumeSchema.partial().extend({
+  // Reorder support — explicit index move validated server-side.
+  moveTo: z.number().int().min(1).max(99).optional(),
+});
+
+// ---- Phase 7 (P1): ledger (账本三表) --------------------------------------
+
+export const storylineSchema = z.object({
+  name: z.string().trim().min(1).max(200),
+  summary: z.string().max(10000).optional(),
+  status: z.enum(["active", "dormant", "resolved"]).optional(),
+});
+
+export const timelineEntrySchema = z.object({
+  label: z.string().trim().min(1).max(200),
+  detail: z.string().max(10000).optional(),
+  chapterIndex: z.number().int().min(1).nullable().optional(),
+});
+
+export const characterArcSchema = z.object({
+  characterName: z.string().trim().min(1).max(120),
+  note: z.string().trim().min(1).max(10000),
+  chapterIndex: z.number().int().min(1).nullable().optional(),
+});
+
+export const ledgerCreateSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("storyline"), data: storylineSchema }),
+  z.object({ kind: z.literal("timeline"), data: timelineEntrySchema }),
+  z.object({ kind: z.literal("arc"), data: characterArcSchema }),
+]);
+
+export const ledgerUpdateSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("storyline"), data: storylineSchema.partial() }),
+  z.object({
+    kind: z.literal("timeline"),
+    data: timelineEntrySchema.partial().extend({ moveTo: z.number().int().min(1).max(999).optional() }),
+  }),
+  z.object({
+    kind: z.literal("arc"),
+    data: characterArcSchema.partial().extend({ moveTo: z.number().int().min(1).max(999).optional() }),
+  }),
+]);
 
 export const createNovelSchema = z.object({
   title: z.string().trim().min(1).max(200),
@@ -44,6 +99,9 @@ export const updateNovelSchema = createNovelSchema
   .partial()
   .extend({
     status: z.enum(["drafting", "completed", "archived"]).optional(),
+    // Phase 7 (P1) — the story contract (作品契约): promise document the
+    // writing context always reads. Upserted 1:1 by the novel PATCH.
+    contract: z.string().max(50000).optional(),
   });
 
 export const updateChapterSchema = z.object({

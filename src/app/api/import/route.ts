@@ -40,6 +40,22 @@ export async function POST(req: Request) {
     },
   });
 
+  // ---- P1 volumes first (beats reference them) ----
+  const volumeIdByIndex = new Map<number, string>();
+  if (d.volumes && d.volumes.length > 0) {
+    for (const v of [...d.volumes].sort((a, b) => a.index - b.index)) {
+      const created = await db.volume.create({
+        data: {
+          novelId: novel.id,
+          index: v.index,
+          title: v.title,
+          synopsis: v.synopsis ?? "",
+        },
+      });
+      volumeIdByIndex.set(v.index, created.id);
+    }
+  }
+
   await db.$transaction([
     db.chapter.createMany({
       data: d.chapters.map((c, i) => ({
@@ -58,6 +74,7 @@ export async function POST(req: Request) {
         name: c.name,
         role: c.role,
         description: c.description,
+        aliases: c.aliases ?? "",
       })),
     }),
     db.worldEntry.createMany({
@@ -74,9 +91,56 @@ export async function POST(req: Request) {
         index: i + 1,
         title: b.title,
         summary: b.summary,
+        volumeId:
+          b.volumeIndex != null ? (volumeIdByIndex.get(b.volumeIndex) ?? null) : null,
       })),
     }),
   ]);
+
+  // ---- P1 contract + ledger ----
+  let ledgerRestored = { storylines: 0, timeline: 0, arcs: 0 };
+  if (d.contract && d.contract.trim()) {
+    await db.novelContract.create({
+      data: { novelId: novel.id, content: d.contract },
+    });
+  }
+  if (d.ledger) {
+    if (d.ledger.storylines && d.ledger.storylines.length > 0) {
+      const r = await db.storyline.createMany({
+        data: d.ledger.storylines.map((sl) => ({
+          novelId: novel.id,
+          name: sl.name,
+          summary: sl.summary ?? "",
+          status: sl.status ?? "active",
+        })),
+      });
+      ledgerRestored.storylines = r.count;
+    }
+    if (d.ledger.timeline && d.ledger.timeline.length > 0) {
+      const r = await db.timelineEntry.createMany({
+        data: d.ledger.timeline.map((t, i) => ({
+          novelId: novel.id,
+          order: t.order ?? i + 1,
+          label: t.label,
+          detail: t.detail ?? "",
+          chapterIndex: t.chapterIndex ?? null,
+        })),
+      });
+      ledgerRestored.timeline = r.count;
+    }
+    if (d.ledger.arcs && d.ledger.arcs.length > 0) {
+      const r = await db.characterArc.createMany({
+        data: d.ledger.arcs.map((a) => ({
+          novelId: novel.id,
+          characterName: a.characterName,
+          order: a.order,
+          note: a.note,
+          chapterIndex: a.chapterIndex ?? null,
+        })),
+      });
+      ledgerRestored.arcs = r.count;
+    }
+  }
 
   // ---- v2 memory layer — the sediment truth travels with the backup ----
   let memoryRestored = { facts: 0, states: 0, foreshadows: 0, digests: 0, versions: 0 };
@@ -217,6 +281,11 @@ export async function POST(req: Request) {
     }
   } else if (schema.data.version === 2) {
     warnings.push("This v2 backup declared no memory layer — the import has an empty memory.");
+  }
+  if (d.volumes && d.volumes.length > 0) {
+    warnings.push(
+      `Volumes restored — ${volumeIdByIndex.size} volume(s), ${ledgerRestored.storylines} storyline(s), ${ledgerRestored.timeline} timeline event(s), ${ledgerRestored.arcs} arc stage(s)${d.contract?.trim() ? ", story contract" : ""}.`
+    );
   }
 
   const summaryNovel = await db.novel.findUnique({

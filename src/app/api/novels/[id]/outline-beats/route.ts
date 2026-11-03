@@ -18,6 +18,19 @@ export async function POST(req: Request, { params }: Params) {
   const novel = await db.novel.findUnique({ where: { id } });
   if (!novel) return jsonError("Novel not found", 404);
 
+  // Volume grouping (Phase 7 P1): validate the volume belongs to THIS novel.
+  let volumeId: string | null = null;
+  if (schema.data.volumeId) {
+    const volume = await db.volume.findUnique({
+      where: { id: schema.data.volumeId },
+      select: { id: true, novelId: true },
+    });
+    if (!volume || volume.novelId !== id) {
+      return jsonError("Volume does not belong to this novel", 400);
+    }
+    volumeId = volume.id;
+  }
+
   const last = await db.outlineBeat.findFirst({
     where: { novelId: id },
     orderBy: { index: "desc" },
@@ -30,6 +43,7 @@ export async function POST(req: Request, { params }: Params) {
       index: (last?.index ?? 0) + 1,
       title: schema.data.title,
       summary: schema.data.summary ?? "",
+      volumeId,
     },
   });
   await db.novel.update({ where: { id }, data: { updatedAt: new Date() } });

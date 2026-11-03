@@ -25,6 +25,8 @@ interface WriterState {
   selectedCharacterByNovel: Record<string, string | null>;
   /** Tree-opened world entry per novel id (focused card in the Bible view). */
   selectedWorldByNovel: Record<string, string | null>;
+  /** Tree-opened volume per novel id (focused plan in the Outline view). */
+  selectedVolumeByNovel: Record<string, string | null>;
   /** Last execution mode chosen by the author (defaults to approval, D2). */
   lastMode: AgentRunMode;
   setCenterView: (novelId: string, view: CenterView) => void;
@@ -33,6 +35,7 @@ interface WriterState {
   selectBeat: (novelId: string, beatId: string | null) => void;
   selectCharacter: (novelId: string, characterId: string | null) => void;
   selectWorld: (novelId: string, worldId: string | null) => void;
+  selectVolume: (novelId: string, volumeId: string | null) => void;
   setLastMode: (mode: AgentRunMode) => void;
 }
 
@@ -43,6 +46,7 @@ export const useWriterStore = create<WriterState>((set) => ({
   selectedBeatByNovel: {},
   selectedCharacterByNovel: {},
   selectedWorldByNovel: {},
+  selectedVolumeByNovel: {},
   lastMode: "approval",
   setCenterView: (novelId, view) =>
     set((s) => ({ centerViewByNovel: { ...s.centerViewByNovel, [novelId]: view } })),
@@ -63,6 +67,10 @@ export const useWriterStore = create<WriterState>((set) => ({
   selectWorld: (novelId, worldId) =>
     set((s) => ({
       selectedWorldByNovel: { ...s.selectedWorldByNovel, [novelId]: worldId },
+    })),
+  selectVolume: (novelId, volumeId) =>
+    set((s) => ({
+      selectedVolumeByNovel: { ...s.selectedVolumeByNovel, [novelId]: volumeId },
     })),
   setLastMode: (mode) => set({ lastMode: mode }),
 }));

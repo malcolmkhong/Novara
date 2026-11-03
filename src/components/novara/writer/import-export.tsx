@@ -45,6 +45,7 @@ export function ExportDialog({
 }) {
   const { toast } = useToast();
   const [json, setJson] = useState<string | null>(null);
+  const [backupVersion, setBackupVersion] = useState(2);
   const [busy, setBusy] = useState(true);
   const [copied, setCopied] = useState(false);
   const [mdBusy, setMdBusy] = useState(false);
@@ -53,7 +54,10 @@ export function ExportDialog({
     let cancelled = false;
     exportNovelBackup(novel.id)
       .then((backup: NovelBackupFile) => {
-        if (!cancelled) setJson(JSON.stringify(backup, null, 2));
+        if (!cancelled) {
+          setBackupVersion(backup.version);
+          setJson(JSON.stringify(backup, null, 2));
+        }
       })
       .catch((e: Error) => {
         if (!cancelled)
@@ -77,7 +81,7 @@ export function ExportDialog({
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `novara-${novel.title.toLowerCase().replace(/[^a-z0-9]+/gi, "-").replace(/^-+|-+$/g, "") || "novel"}-v1.json`;
+    a.download = `novara-${novel.title.toLowerCase().replace(/[^a-z0-9]+/gi, "-").replace(/^-+|-+$/g, "") || "novel"}-v${backupVersion}.json`;
     document.body.appendChild(a);
     a.click();
     a.remove();
@@ -134,8 +138,10 @@ export function ExportDialog({
         <DialogHeader>
           <DialogTitle>Export “{novel.title}”</DialogTitle>
           <DialogDescription>
-            A portable, versioned JSON backup containing the novel, chapters,
-            characters, worldbuilding and outline. Re-import it any time.
+            A portable, versioned JSON backup: novel, chapters (with briefs
+            and draft history), characters, worldbuilding, outline — plus the
+            memory layer (facts, states, foreshadows, digests). Re-import any
+            time; v1 backups stay importable.
           </DialogDescription>
         </DialogHeader>
 

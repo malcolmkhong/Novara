@@ -24,7 +24,9 @@ Read tools (safe, no side effects):
 {"action":"memory_query","query":"lin Yao's sword and her oath","category":"story_fact"}
 ```
 (category is optional; allowed: world_rule, character_state, relationship,
-story_fact, open_loop — use "open_loop" when checking unsettled promises)
+story_fact, open_loop, decision, style, dialogue, inspiration — use
+"open_loop" when checking unsettled promises; "decision" for canon choices,
+"style" for voice/POV rules, "dialogue" for speech constraints)
 ```novel-tool
 {"action":"doctor_scan"}
 ```
@@ -67,6 +69,10 @@ RULES:
   it for a fresh draft. When the brief is a REPAIR after a review, apply the
   listed fix hints exactly and keep everything that already worked — the
   runtime counts this write as a repair round (max 2 per chapter).
+- FINAL LOCK: a chapter whose status is final (定稿) is immutable —
+  update_chapter on it returns an error. Do not retry; report BLOCKED: with
+  the chapter index and ask the author to reopen it in the workbench.
+  read_chapter marks the status so you can see the lock before writing.
 - Report only numbers you measured in tool results. Never fabricate ids,
   chapters, or word counts. Uncertain → read again.
 - FINAL REPLY of the task must end with:

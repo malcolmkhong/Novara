@@ -18,7 +18,27 @@ export async function PATCH(req: Request, { params }: Params) {
   const existing = await db.outlineBeat.findUnique({ where: { id } });
   if (!existing) return jsonError("Outline beat not found", 404);
 
-  const beat = await db.outlineBeat.update({ where: { id }, data: schema.data });
+  // Volume grouping (Phase 7 P1): validate the volume belongs to THIS novel.
+  let volumeId: string | null | undefined;
+  if (schema.data.volumeId !== undefined) {
+    if (schema.data.volumeId === null) {
+      volumeId = null; // explicit unsort
+    } else {
+      const volume = await db.volume.findUnique({
+        where: { id: schema.data.volumeId },
+        select: { id: true, novelId: true },
+      });
+      if (!volume || volume.novelId !== existing.novelId) {
+        return jsonError("Volume does not belong to this novel", 400);
+      }
+      volumeId = volume.id;
+    }
+  }
+
+  const beat = await db.outlineBeat.update({
+    where: { id },
+    data: { ...schema.data, ...(volumeId !== undefined ? { volumeId } : {}) },
+  });
   return Response.json({ beat });
 }
 

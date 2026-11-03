@@ -53,12 +53,14 @@ import {
   deleteChapter,
   deleteCharacter,
   deleteOutlineBeat,
+  deleteVolume,
   deleteWorldEntry,
   requestAiDraft,
   updateChapter,
   updateCharacter,
   updateNovel,
   updateOutlineBeat,
+  updateVolume,
   updateWorldEntry,
 } from "@/lib/novara/api";
 import type {
@@ -68,6 +70,7 @@ import type {
   CharacterDTO,
   NovelDetail,
   OutlineBeatDTO,
+  VolumeDTO,
   WorldEntryDTO,
 } from "@/lib/novara/types";
 import type { ArtifactTabId } from "@/config/writer";
@@ -122,10 +125,12 @@ export function WorkbenchShell({
   const selectedBeatId = useWriterStore((s) => s.selectedBeatByNovel[novel.id] ?? null);
   const selectedCharacterId = useWriterStore((s) => s.selectedCharacterByNovel[novel.id] ?? null);
   const selectedWorldId = useWriterStore((s) => s.selectedWorldByNovel[novel.id] ?? null);
+  const selectedVolumeId = useWriterStore((s) => s.selectedVolumeByNovel[novel.id] ?? null);
   const selectChapter = useWriterStore((s) => s.selectChapter);
   const selectBeat = useWriterStore((s) => s.selectBeat);
   const selectCharacter = useWriterStore((s) => s.selectCharacter);
   const selectWorld = useWriterStore((s) => s.selectWorld);
+  const selectVolume = useWriterStore((s) => s.selectVolume);
   const setArtifactTab = useWriterStore((s) => s.setArtifactTab);
 
   const [mobileView, setMobileView] = useState<MobileView>("chat");
@@ -142,6 +147,8 @@ export function WorkbenchShell({
   const [formGenre, setFormGenre] = useState(novel.genre);
   const [formSynopsis, setFormSynopsis] = useState(novel.synopsis);
   const [formTarget, setFormTarget] = useState(String(novel.targetWords));
+  // Story contract (作品契约, Phase 7 P1) — the promise document.
+  const [formContract, setFormContract] = useState(detail.contract ?? "");
 
   // ---- cross-pane navigation ----
 
@@ -195,6 +202,16 @@ export function WorkbenchShell({
       revealArtifacts();
     },
     [novel.id, revealArtifacts, selectWorld, setArtifactTab]
+  );
+
+  /** Tree volume row → the volume plan document in the Outline view. */
+  const handleOpenVolume = useCallback(
+    (volumeId: string) => {
+      selectVolume(novel.id, volumeId);
+      setArtifactTab(novel.id, "outline");
+      revealArtifacts();
+    },
+    [novel.id, revealArtifacts, selectVolume, setArtifactTab]
   );
 
   // ---- chapter handlers ----
@@ -342,6 +359,7 @@ export function WorkbenchShell({
           targetWords: Number.isFinite(parsedTarget)
             ? Math.min(Math.max(parsedTarget, 1000), 5000000)
             : undefined,
+          contract: formContract,
         }),
       "Novel details saved"
     );
@@ -364,7 +382,7 @@ export function WorkbenchShell({
     onAiDraft: handleAiDraft,
     onAddCharacter: (input: { name: string; role?: string; description?: string }) =>
       wrap(() => addCharacter(novel.id, input), "Character added"),
-    onUpdateCharacter: (id: string, patch: Partial<{ name: string; role?: string; description?: string }>) =>
+    onUpdateCharacter: (id: string, patch: Partial<{ name: string; role?: string; aliases?: string; description?: string }>) =>
       wrap(() => updateCharacter(id, patch), "Character saved"),
     onDeleteCharacter: (c: CharacterDTO) =>
       wrap(() => deleteCharacter(c.id)).then(() => undefined),
@@ -376,10 +394,18 @@ export function WorkbenchShell({
       wrap(() => deleteWorldEntry(w.id)).then(() => undefined),
     onAddBeat: (input: { title: string; summary?: string }) =>
       wrap(() => addOutlineBeat(novel.id, input), "Beat added"),
-    onUpdateBeat: (id: string, patch: Partial<{ title: string; summary?: string }>) =>
+    onUpdateBeat: (id: string, patch: Partial<{ title: string; summary?: string; volumeId?: string | null }>) =>
       wrap(() => updateOutlineBeat(id, patch), "Beat saved"),
     onDeleteBeat: (b: OutlineBeatDTO) =>
       wrap(() => deleteOutlineBeat(b.id)).then(() => undefined),
+    selectedVolumeId,
+    onOpenVolume: handleOpenVolume,
+    onClearVolume: () => selectVolume(novel.id, null),
+    onUpdateVolume: (id: string, patch: { title?: string; synopsis?: string }) =>
+      wrap(() => updateVolume(id, patch), "Volume saved"),
+    onDeleteVolume: (v: VolumeDTO) =>
+      wrap(() => deleteVolume(v.id)).then(() => undefined),
+    onRefresh: refresh,
   };
 
   const events = run.detail?.events ?? [];
@@ -402,10 +428,12 @@ export function WorkbenchShell({
           selectedBeatId={selectedBeatId}
           selectedCharacterId={selectedCharacterId}
           selectedWorldId={selectedWorldId}
+          selectedVolumeId={selectedVolumeId}
           onOpenChapter={handleOpenChapter}
           onOpenBeat={handleOpenBeat}
           onOpenCharacter={handleOpenCharacter}
           onOpenWorld={handleOpenWorld}
+          onOpenVolume={handleOpenVolume}
           onOpenArtifactTab={handleOpenArtifactTab}
           onAddChapter={handleAddChapter}
           onEditDetails={() => setEditOpen(true)}
@@ -528,6 +556,21 @@ export function WorkbenchShell({
                 onChange={(e) => setFormSynopsis(e.target.value)}
                 rows={4}
               />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="meta-contract">Story contract · 作品契约</Label>
+              <Textarea
+                id="meta-contract"
+                value={formContract}
+                onChange={(e) => setFormContract(e.target.value)}
+                rows={4}
+                placeholder="The promise this book makes: genre expectations, audience, style commitments, hard taboos… Read into every AI writing context."
+                aria-label="Story contract"
+              />
+              <p className="text-[11px] text-muted-foreground">
+                The writing team reads this before every chapter — keep promises
+                explicit (POV, tone, content lines it must never cross).
+              </p>
             </div>
           </div>
           <DialogFooter>

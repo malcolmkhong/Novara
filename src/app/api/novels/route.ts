@@ -56,19 +56,32 @@ export async function POST(req: Request) {
             },
           }
         : {}),
-      ...(outlineBeats && outlineBeats.length > 0
-        ? {
-            outlineBeats: {
-              create: outlineBeats.map((b, i) => ({
-                index: i + 1,
-                title: b.title,
-                summary: b.summary ?? "",
-              })),
-            },
-          }
-        : {}),
     },
     include: { chapters: { select: { wordCount: true } } },
   });
+
+  // Phase 7 (P1) — wizard-seeded beats land in "Volume 1" so new books match
+  // the migrated shape (flat outline = the book's first arc). Two plain
+  // inserts keep the create types unambiguous.
+  if (outlineBeats && outlineBeats.length > 0) {
+    const volume = await db.volume.create({
+      data: {
+        novelId: novel.id,
+        index: 1,
+        title: "Volume 1",
+        synopsis: "",
+      },
+    });
+    await db.outlineBeat.createMany({
+      data: outlineBeats.map((b, i) => ({
+        novelId: novel.id,
+        volumeId: volume.id,
+        index: i + 1,
+        title: b.title,
+        summary: b.summary ?? "",
+      })),
+    });
+  }
+
   return Response.json({ novel: toSummary(novel) }, { status: 201 });
 }

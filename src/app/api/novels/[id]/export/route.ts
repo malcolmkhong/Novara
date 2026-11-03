@@ -24,10 +24,15 @@ export async function GET(_req: Request, { params }: Params) {
       characters: { orderBy: { createdAt: "asc" } },
       worldEntries: { orderBy: { createdAt: "asc" } },
       outlineBeats: { orderBy: { index: "asc" } },
+      volumes: { orderBy: { index: "asc" } },
       digests: true,
       storyFacts: true,
       characterStates: true,
       foreshadows: { orderBy: { createdAt: "asc" } },
+      storylines: { orderBy: { createdAt: "asc" } },
+      timelineEntries: { orderBy: { order: "asc" } },
+      characterArcs: { orderBy: [{ characterName: "asc" }, { order: "asc" }] },
+      contract: true,
     },
   });
   if (!novel) return jsonError("Novel not found", 404);
@@ -37,6 +42,7 @@ export async function GET(_req: Request, { params }: Params) {
     orderBy: [{ draftNo: "asc" }],
   });
   const chapterIndexById = new Map(novel.chapters.map((c) => [c.id, c.index]));
+  const volumeIndexById = new Map(novel.volumes.map((v) => [v.id, v.index]));
 
   const totalWords = novel.chapters.reduce((sum, c) => sum + c.wordCount, 0);
 
@@ -63,6 +69,7 @@ export async function GET(_req: Request, { params }: Params) {
         name: c.name,
         role: c.role,
         description: c.description,
+        aliases: c.aliases,
       })),
       worldEntries: novel.worldEntries.map((w) => ({
         title: w.title,
@@ -72,7 +79,33 @@ export async function GET(_req: Request, { params }: Params) {
       outlineBeats: novel.outlineBeats.map((b) => ({
         title: b.title,
         summary: b.summary,
+        volumeIndex: b.volumeId ? (volumeIndexById.get(b.volumeId) ?? null) : null,
       })),
+      volumes: novel.volumes.map((v) => ({
+        index: v.index,
+        title: v.title,
+        synopsis: v.synopsis,
+      })),
+      contract: novel.contract?.content ?? undefined,
+      ledger: {
+        storylines: novel.storylines.map((sl) => ({
+          name: sl.name,
+          summary: sl.summary,
+          status: sl.status,
+        })),
+        timeline: novel.timelineEntries.map((t) => ({
+          order: t.order,
+          label: t.label,
+          detail: t.detail,
+          chapterIndex: t.chapterIndex,
+        })),
+        arcs: novel.characterArcs.map((a) => ({
+          characterName: a.characterName,
+          order: a.order,
+          note: a.note,
+          chapterIndex: a.chapterIndex,
+        })),
+      },
       memory: {
         storyFacts: novel.storyFacts.map((f) => ({
           category: f.category,

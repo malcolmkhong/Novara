@@ -129,6 +129,37 @@ export interface SedimentOutcome {
 }
 
 /**
+ * Phase 7 (P1) — resolve a STATE name to its canonical bible character.
+ * Without this, "林晚" vs "晚姐" splits CharacterState snapshots across name
+ * keys and the latest-state logic in memory.ts loses track. Exact name match
+ * wins; alias match (comma-separated `Character.aliases`) resolves to the
+ * canonical name. Unknown names pass through unchanged (the doctor flags them).
+ */
+async function normalizeCharacterNames(
+  novelId: string,
+  names: string[]
+): Promise<Map<string, string>> {
+  const characters = await db.character.findMany({
+    where: { novelId },
+    select: { name: true, aliases: true },
+  });
+  const aliasToCanonical = new Map<string, string>();
+  for (const c of characters) {
+    aliasToCanonical.set(c.name.trim().toLowerCase(), c.name);
+    for (const alias of c.aliases.split(/[,，、;]/)) {
+      const a = alias.trim().toLowerCase();
+      if (a) aliasToCanonical.set(a, c.name);
+    }
+  }
+  const resolved = new Map<string, string>();
+  for (const name of names) {
+    const key = name.trim().toLowerCase();
+    resolved.set(name, aliasToCanonical.get(key) ?? name);
+  }
+  return resolved;
+}
+
+/**
  * Settles one chapter into the memory layer. Throws on missing/empty chapter
  * or AI failure — callers map errors to their own transport (404/422/502 vs
  * an error feed).
@@ -187,6 +218,17 @@ export async function sedimentChapterCore(chapterId: string): Promise<{
     throw new Error("The AI sediment output had no summary line. Try again.");
   }
 
+  // Phase 7 (P1) — fold STATE names into canonical bible names via aliases
+  // so snapshots chain per character instead of per name spelling.
+  const nameMap = await normalizeCharacterNames(
+    novel.id,
+    parsed.characterStates.map((cs) => cs.name)
+  );
+  const characterStates = parsed.characterStates.map((cs) => ({
+    ...cs,
+    name: nameMap.get(cs.name) ?? cs.name,
+  }));
+
   // Ledger ids must exist, belong to this novel, and not be paid already.
   const ledgerIds = new Set(openForeshadows.map((f) => f.id));
   const validAdvance = parsed.advanceIds.filter((fid) => ledgerIds.has(fid));
@@ -208,9 +250,9 @@ export async function sedimentChapterCore(chapterId: string): Promise<{
     await tx.characterState.deleteMany({
       where: { novelId: novel.id, chapterIndex: chapter.index },
     });
-    if (parsed.characterStates.length > 0) {
+    if (characterStates.length > 0) {
       await tx.characterState.createMany({
-        data: parsed.characterStates.map((cs) => ({
+        data: characterStates.map((cs) => ({
           novelId: novel.id,
           name: cs.name,
           chapterIndex: chapter.index,
@@ -306,7 +348,7 @@ export async function sedimentChapterCore(chapterId: string): Promise<{
       digestSummary: digest.summary,
       factsCreated,
       factsTouched,
-      characterStates: parsed.characterStates.length,
+      characterStates: characterStates.length,
       plantsCreated,
       advanced,
       paid,

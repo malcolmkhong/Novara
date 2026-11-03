@@ -55,6 +55,8 @@ export interface CharacterDTO {
   name: string;
   role: string;
   description: string;
+  /** Comma-separated alternate names (Phase 7 P1). */
+  aliases: string;
   updatedAt: string;
 }
 
@@ -73,7 +75,58 @@ export interface OutlineBeatDTO {
   index: number;
   title: string;
   summary: string;
+  /** Owning volume (Phase 7 P1) — null = unsorted. */
+  volumeId: string | null;
   updatedAt: string;
+}
+
+// ---- Phase 7 (P1): volumes + ledger + contract ----------------------------
+
+export interface VolumeDTO {
+  id: string;
+  novelId: string;
+  index: number;
+  title: string;
+  /** Volume plan (卷规划) — markdown. */
+  synopsis: string;
+  updatedAt: string;
+}
+
+export type StorylineStatus = "active" | "dormant" | "resolved";
+
+export interface StorylineDTO {
+  id: string;
+  novelId: string;
+  name: string;
+  summary: string;
+  status: StorylineStatus;
+  updatedAt: string;
+}
+
+export interface TimelineEntryDTO {
+  id: string;
+  novelId: string;
+  order: number;
+  label: string;
+  detail: string;
+  chapterIndex: number | null;
+  updatedAt: string;
+}
+
+export interface CharacterArcDTO {
+  id: string;
+  novelId: string;
+  characterName: string;
+  order: number;
+  note: string;
+  chapterIndex: number | null;
+  updatedAt: string;
+}
+
+export interface LedgerView {
+  storylines: StorylineDTO[];
+  timeline: TimelineEntryDTO[];
+  arcs: CharacterArcDTO[];
 }
 
 export interface NovelDetail {
@@ -82,6 +135,9 @@ export interface NovelDetail {
   characters: CharacterDTO[];
   worldEntries: WorldEntryDTO[];
   outlineBeats: OutlineBeatDTO[];
+  volumes: VolumeDTO[];
+  /** Story contract (作品契约) markdown — null when never written. */
+  contract: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -108,6 +164,7 @@ export interface BackupCharacter {
   name: string;
   role: string;
   description: string;
+  aliases?: string;
 }
 
 export interface BackupWorldEntry {
@@ -119,6 +176,30 @@ export interface BackupWorldEntry {
 export interface BackupOutlineBeat {
   title: string;
   summary: string;
+  /** 1-based volume index within data.volumes (P1) — null = unsorted. */
+  volumeIndex?: number | null;
+}
+
+export interface BackupVolume {
+  index: number;
+  title: string;
+  synopsis: string;
+}
+
+export interface BackupLedger {
+  storylines?: { name: string; summary: string; status: string }[];
+  timeline?: {
+    order: number;
+    label: string;
+    detail: string;
+    chapterIndex: number | null;
+  }[];
+  arcs?: {
+    characterName: string;
+    order: number;
+    note: string;
+    chapterIndex: number | null;
+  }[];
 }
 
 export interface BackupIntegrity {
@@ -172,21 +253,26 @@ export interface BackupMemory {
   versions?: BackupVersion[];
 }
 
+export interface BackupData {
+  novel: BackupNovel;
+  chapters: BackupChapter[];
+  characters: BackupCharacter[];
+  worldEntries: BackupWorldEntry[];
+  outlineBeats: BackupOutlineBeat[];
+  /** P1 additions — optional so earlier v2 files keep validating. */
+  volumes?: BackupVolume[];
+  contract?: string;
+  ledger?: BackupLedger;
+  memory?: BackupMemory;
+}
+
 export interface NovelBackupFile {
   format: "novara-novel-backup";
   /** v1 = original five collections; v2 adds briefs + memory layer. */
   version: 1 | 2;
   application: "Novara AI";
   exportedAt: string;
-  data: {
-    novel: BackupNovel;
-    chapters: BackupChapter[];
-    characters: BackupCharacter[];
-    worldEntries: BackupWorldEntry[];
-    outlineBeats: BackupOutlineBeat[];
-    /** Present in v2 backups; v1 imports restore an empty memory layer. */
-    memory?: BackupMemory;
-  };
+  data: BackupData;
   integrity: BackupIntegrity;
 }
 

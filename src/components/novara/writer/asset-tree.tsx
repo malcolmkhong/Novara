@@ -41,7 +41,7 @@ import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
 import type { AgentTask, AgentTaskStatus } from "@/lib/novara/agent-types";
 import type { ArtifactTabId } from "@/config/writer";
-import type { NovelDetail } from "@/lib/novara/types";
+import type { NovelDetail, VolumeDTO } from "@/lib/novara/types";
 import { formatWordCount } from "@/lib/novara/words";
 import { cn } from "@/lib/utils";
 
@@ -141,6 +141,35 @@ function BadgeIcons({ badges }: { badges: NodeBadge[] | undefined }) {
 
 type ExpandableGroupKey = "chapters" | "outline" | "characters" | "world";
 
+const DEFAULT_EXPANDED: Record<ExpandableGroupKey, boolean> = {
+  chapters: true,
+  outline: false,
+  characters: false,
+  world: false,
+};
+
+/** localStorage key so a novel's tree state survives remounts and reloads. */
+function expandStateKey(novelId: string) {
+  return `novara:tree-expanded:${novelId}`;
+}
+
+function loadExpandState(novelId: string): Record<ExpandableGroupKey, boolean> {
+  if (typeof window === "undefined") return DEFAULT_EXPANDED;
+  try {
+    const raw = window.localStorage.getItem(expandStateKey(novelId));
+    if (!raw) return DEFAULT_EXPANDED;
+    const parsed = JSON.parse(raw) as Partial<Record<ExpandableGroupKey, unknown>>;
+    return {
+      chapters: typeof parsed.chapters === "boolean" ? parsed.chapters : DEFAULT_EXPANDED.chapters,
+      outline: typeof parsed.outline === "boolean" ? parsed.outline : DEFAULT_EXPANDED.outline,
+      characters: typeof parsed.characters === "boolean" ? parsed.characters : DEFAULT_EXPANDED.characters,
+      world: typeof parsed.world === "boolean" ? parsed.world : DEFAULT_EXPANDED.world,
+    };
+  } catch {
+    return DEFAULT_EXPANDED;
+  }
+}
+
 interface AssetTreeProps {
   detail: NovelDetail;
   /** Live agent tasks (may be empty — no active run). */
@@ -149,10 +178,14 @@ interface AssetTreeProps {
   selectedBeatId: string | null;
   selectedCharacterId: string | null;
   selectedWorldId: string | null;
+  /** Active volume row in the Outline group (P1) — highlighted like a file. */
+  selectedVolumeId?: string | null;
   onOpenChapter: (chapterId: string) => void;
   onOpenBeat: (beatId: string) => void;
   onOpenCharacter: (characterId: string) => void;
   onOpenWorld: (worldId: string) => void;
+  /** Opens the volume's plan document in the Outline artifact view. */
+  onOpenVolume: (volumeId: string) => void;
   onOpenArtifactTab: (tab: ArtifactTabId) => void;
   onAddChapter: () => Promise<void>;
   onEditDetails: () => void;
@@ -169,10 +202,12 @@ export function AssetTree({
   selectedBeatId,
   selectedCharacterId,
   selectedWorldId,
+  selectedVolumeId,
   onOpenChapter,
   onOpenBeat,
   onOpenCharacter,
   onOpenWorld,
+  onOpenVolume,
   onOpenArtifactTab,
   onAddChapter,
   onEditDetails,
@@ -187,12 +222,22 @@ export function AssetTree({
   );
 
   // Collapse state (file-explorer style). Chapters start open — the primary
-  // asset; the rest start collapsed to keep the rail scannable.
-  const [expanded, setExpanded] = useState<
-    Record<ExpandableGroupKey, boolean>
-  >({ chapters: true, outline: false, characters: false, world: false });
+  // asset; the rest start collapsed to keep the rail scannable. The state
+  // persists per novel in localStorage so the explorer "stays as you left it"
+  // across remounts and reloads.
+  const [expanded, setExpandedState] = useState<Record<ExpandableGroupKey, boolean>>(
+    () => loadExpandState(novel.id)
+  );
+  const setExpanded = (next: Record<ExpandableGroupKey, boolean>) => {
+    setExpandedState(next);
+    try {
+      window.localStorage.setItem(expandStateKey(novel.id), JSON.stringify(next));
+    } catch {
+      // Storage may be unavailable (private mode) — state still works in-memory.
+    }
+  };
   const toggle = (key: ExpandableGroupKey) =>
-    setExpanded((s) => ({ ...s, [key]: !s[key] }));
+    setExpanded({ ...expanded, [key]: !expanded[key] });
 
   // Search — a derived view on top of the tree. While a query is active the
   // groups render force-expanded, but `expanded` itself is never written, so
@@ -215,11 +260,15 @@ export function AssetTree({
   const visibleWorld = searching
     ? detail.worldEntries.filter((w) => matchesQuery(w.title))
     : detail.worldEntries;
+  const visibleVolumes = searching
+    ? detail.volumes.filter((v) => matchesQuery(v.title))
+    : detail.volumes;
   const anyMatch =
     visibleChapters.length > 0 ||
     visibleBeats.length > 0 ||
     visibleCharacters.length > 0 ||
     visibleWorld.length > 0 ||
+    visibleVolumes.length > 0 ||
     matchesQuery("Review") ||
     matchesQuery("Memory") ||
     matchesQuery("QC");
@@ -228,6 +277,14 @@ export function AssetTree({
   const pct = novel.targetWords
     ? Math.min(100, Math.round((totalWords / novel.targetWords) * 100))
     : 0;
+
+  // Live beat counts per volume for the Outline group's volume sub-headers.
+  const beatCountByVolume = new Map<string, number>();
+  for (const b of detail.outlineBeats) {
+    if (b.volumeId) {
+      beatCountByVolume.set(b.volumeId, (beatCountByVolume.get(b.volumeId) ?? 0) + 1);
+    }
+  }
 
   const novelBadges = badges.get("novel");
 
@@ -370,7 +427,7 @@ export function AssetTree({
           )}
 
           {/* Outline — expandable, children open the focused beat */}
-          {(!searching || visibleBeats.length > 0) && (
+          {(!searching || visibleBeats.length > 0 || visibleVolumes.length > 0) && (
             <TreeGroup
               icon={<ListTree className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />}
               label="Outline"
@@ -379,6 +436,18 @@ export function AssetTree({
               expanded={searching ? true : expanded.outline}
               onToggle={searching ? undefined : () => toggle("outline")}
             >
+              {/* Volume sub-headers (P1) — clickable rows open the volume plan.
+                  Beats stay listed below so their positional prefixes never shuffle. */}
+              {detail.volumes.length > 0 &&
+                visibleVolumes.map((v) => (
+                  <TreeVolumeRow
+                    key={v.id}
+                    volume={v}
+                    count={beatCountByVolume.get(v.id) ?? 0}
+                    selected={v.id === selectedVolumeId}
+                    onClick={() => onOpenVolume(v.id)}
+                  />
+                ))}
               {visibleBeats.map(({ beat, index }) => (
                 <TreeFile
                   key={beat.id}
@@ -607,6 +676,45 @@ function TreeFile({
         <span className="min-w-0 flex-1 truncate text-sm">{label}</span>
         {trailing}
         <BadgeIcons badges={badges} />
+      </button>
+    </li>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Volume sub-row — a volume header inside the Outline group (P1). Slightly
+// smaller than a file row: mono "V01" prefix, medium-weight title, beat count.
+// ---------------------------------------------------------------------------
+
+function TreeVolumeRow({
+  volume,
+  count,
+  selected,
+  onClick,
+}: {
+  volume: VolumeDTO;
+  count: number;
+  selected?: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <li>
+      <button
+        type="button"
+        onClick={onClick}
+        aria-current={selected ? "true" : undefined}
+        className={cn(
+          "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors",
+          selected ? "bg-accent" : "hover:bg-accent/60"
+        )}
+      >
+        <span className="shrink-0 font-mono text-[10px] text-muted-foreground">
+          V{String(volume.index).padStart(2, "0")}
+        </span>
+        <span className="min-w-0 flex-1 truncate text-xs font-medium">
+          {volume.title}
+        </span>
+        <span className="shrink-0 text-[10px] text-muted-foreground">({count})</span>
       </button>
     </li>
   );

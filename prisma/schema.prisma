@@ -42,10 +42,15 @@ model Novel {
   characters    Character[]
   worldEntries  WorldEntry[]
   outlineBeats  OutlineBeat[]
+  volumes       Volume[]
   digests       ChapterDigest[]
   storyFacts    StoryFact[]
   characterStates CharacterState[]
   foreshadows   Foreshadow[]
+  storylines    Storyline[]
+  timelineEntries TimelineEntry[]
+  characterArcs CharacterArc[]
+  contract      NovelContract?
   agentRuns     AgentRun[]
 
   @@index([updatedAt])
@@ -143,6 +148,10 @@ model Character {
   name        String
   role        String   @default("")
   description String   @default("")
+  // Phase 7 (P1) — comma-separated alternate names (DSH 人物设定 analog).
+  // Sediment normalizes STATE names through this map so aliases (林晚/晚姐)
+  // no longer split CharacterState snapshots across name keys.
+  aliases     String   @default("")
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
@@ -171,7 +180,10 @@ model WorldEntry {
 }
 
 // ---------------------------------------------------------------------------
-// OutlineBeat — plot outline beats in narrative order.
+// OutlineBeat — plot outline beats in narrative order. Optional volume
+// grouping (DSH 大纲/卷规划 analog): beats with the same volumeId render
+// under that volume in the outline panel and asset tree; unassigned beats
+// render in the top "Unsorted" section so nothing is ever hidden.
 // ---------------------------------------------------------------------------
 
 model OutlineBeat {
@@ -180,6 +192,8 @@ model OutlineBeat {
   index     Int
   title     String
   summary   String   @default("")
+  volumeId  String?
+  volume    Volume?  @relation(fields: [volumeId], references: [id], onDelete: SetNull)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -187,6 +201,102 @@ model OutlineBeat {
 
   @@unique([novelId, index])
   @@index([novelId])
+  @@index([volumeId])
+}
+
+// ---------------------------------------------------------------------------
+// Volume (Phase 7 P1) — story arc partition (DSH 大纲/卷规划.md analog).
+// Holds the volume-level plan (卷规划): what this arc promises, where it
+// starts/ends. Ordered by `index` (1-based) per novel.
+// ---------------------------------------------------------------------------
+
+model Volume {
+  id        String   @id @default(cuid())
+  novelId   String
+  index     Int
+  title     String
+  // Volume plan (卷规划) — markdown: promise of this arc, entry/exit state.
+  synopsis  String   @default("")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  novel Novel      @relation(fields: [novelId], references: [id], onDelete: Cascade)
+  beats OutlineBeat[]
+
+  @@unique([novelId, index])
+  @@index([novelId])
+}
+
+// ---------------------------------------------------------------------------
+// Ledger (Phase 7 P1) — DSH 账本 analogs. Three author-and-agent-maintained
+// ledgers that live beside the memory sediment (NOT merged into it: they are
+// plan-level truth the author curates, while sediment is chapter-derived):
+//   Storyline      — named plot threads and their status (故事线.md)
+//   TimelineEntry  — ordered in-story events (时间线.md)
+//   CharacterArc   — per-character arc stages (人物弧线.md)
+// ---------------------------------------------------------------------------
+
+model Storyline {
+  id        String   @id @default(cuid())
+  novelId   String
+  name      String
+  summary   String   @default("")
+  // active | dormant | resolved
+  status    String   @default("active")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  novel Novel @relation(fields: [novelId], references: [id], onDelete: Cascade)
+
+  @@index([novelId, status])
+}
+
+model TimelineEntry {
+  id           String   @id @default(cuid())
+  novelId      String
+  // Display order (1-based) — narrative order, not chronological order.
+  order        Int
+  label        String
+  detail       String   @default("")
+  chapterIndex Int?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  novel Novel @relation(fields: [novelId], references: [id], onDelete: Cascade)
+
+  @@unique([novelId, order])
+  @@index([novelId])
+}
+
+model CharacterArc {
+  id            String   @id @default(cuid())
+  novelId       String
+  characterName String
+  // Stage order within the character's arc (1-based): 起点 → 转变 → 终点.
+  order         Int
+  note          String
+  chapterIndex  Int?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  novel Novel @relation(fields: [novelId], references: [id], onDelete: Cascade)
+
+  @@index([novelId, characterName])
+}
+
+// ---------------------------------------------------------------------------
+// NovelContract (Phase 7 P1) — DSH 作品契约.md analog: the promise document
+// (genre promise, audience, style commitments, taboos). 1:1 with the novel.
+// Written by the author (Details dialog) and read into writing context.
+// ---------------------------------------------------------------------------
+
+model NovelContract {
+  novelId   String   @id
+  content   String   @default("")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  novel Novel @relation(fields: [novelId], references: [id], onDelete: Cascade)
 }
 
 // ---------------------------------------------------------------------------

@@ -19,6 +19,7 @@ import type {
   CharacterDTO,
   NovelDetail,
   OutlineBeatDTO,
+  VolumeDTO,
   WorldEntryDTO,
 } from "@/lib/novara/types";
 import type { ArtifactTabId } from "@/config/writer";
@@ -30,6 +31,7 @@ import {
   CharacterDocument,
   CharactersPanel,
   OutlinePanel,
+  VolumeDocument,
   WorldDocument,
   WorldPanel,
 } from "./bible-panels";
@@ -162,7 +164,7 @@ export interface ArtifactPaneHandlers {
   onAiDraft: (chapter: ChapterDTO) => Promise<AiDraftResult | null>;
   // characters
   onAddCharacter: (input: { name: string; role?: string; description?: string }) => Promise<boolean>;
-  onUpdateCharacter: (id: string, patch: Partial<{ name: string; role?: string; description?: string }>) => Promise<boolean>;
+  onUpdateCharacter: (id: string, patch: Partial<{ name: string; role?: string; aliases?: string; description?: string }>) => Promise<boolean>;
   onDeleteCharacter: (character: CharacterDTO) => Promise<void>;
   // world
   onAddWorldEntry: (input: { title: string; category?: WorldEntryDTO["category"]; content?: string }) => Promise<boolean>;
@@ -170,8 +172,16 @@ export interface ArtifactPaneHandlers {
   onDeleteWorldEntry: (entry: WorldEntryDTO) => Promise<void>;
   // outline
   onAddBeat: (input: { title: string; summary?: string }) => Promise<boolean>;
-  onUpdateBeat: (id: string, patch: Partial<{ title: string; summary?: string }>) => Promise<boolean>;
+  onUpdateBeat: (id: string, patch: Partial<{ title: string; summary?: string; volumeId?: string | null }>) => Promise<boolean>;
   onDeleteBeat: (beat: OutlineBeatDTO) => Promise<void>;
+  // volumes (卷, P1)
+  selectedVolumeId: string | null;
+  onOpenVolume: (volumeId: string) => void;
+  onClearVolume: () => void;
+  onUpdateVolume: (id: string, patch: { title?: string; synopsis?: string }) => Promise<boolean>;
+  onDeleteVolume: (volume: VolumeDTO) => Promise<void>;
+  /** Parent refetch for panel-driven volume create/delete. */
+  onRefresh: () => Promise<void>;
 }
 
 interface ArtifactPaneProps {
@@ -200,6 +210,8 @@ export function ArtifactPane({
     detail.worldEntries.find((w) => w.id === handlers.focusWorldId) ?? null;
   const focusedBeat =
     detail.outlineBeats.find((b) => b.id === handlers.focusBeatId) ?? null;
+  const focusedVolume =
+    detail.volumes.find((v) => v.id === handlers.selectedVolumeId) ?? null;
 
   return (
     <div className={cn("flex h-full min-h-0 flex-col", className)} aria-label="Artifact pane">
@@ -251,9 +263,17 @@ export function ArtifactPane({
                 warnings={warningsForTab(events, "outline")}
                 working={workingTasksForTab(tasks, "outline")}
               />
-              {focusedBeat ? (
+              {focusedVolume ? (
+                <VolumeDocument
+                  volume={focusedVolume}
+                  onUpdate={handlers.onUpdateVolume}
+                  onDelete={handlers.onDeleteVolume}
+                  onBack={handlers.onClearVolume}
+                />
+              ) : focusedBeat ? (
                 <BeatDocument
                   beat={focusedBeat}
+                  volumes={detail.volumes}
                   onUpdate={handlers.onUpdateBeat}
                   onDelete={handlers.onDeleteBeat}
                   onBack={handlers.onClearBeat}
@@ -262,6 +282,10 @@ export function ArtifactPane({
                 <OutlinePanel
                   beats={detail.outlineBeats}
                   focusBeatId={handlers.focusBeatId}
+                  volumes={detail.volumes}
+                  novelId={novelId}
+                  onRefresh={handlers.onRefresh}
+                  onOpenVolume={handlers.onOpenVolume}
                   onAdd={handlers.onAddBeat}
                   onUpdate={handlers.onUpdateBeat}
                   onDelete={handlers.onDeleteBeat}

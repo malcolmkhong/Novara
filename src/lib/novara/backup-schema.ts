@@ -49,6 +49,7 @@ export const backupFileSchema = z.object({
           name: z.string().trim().min(1).max(120),
           role: z.string().max(200).default(""),
           description: z.string().max(10000).default(""),
+          aliases: z.string().max(400).optional(),
         })
       )
       .max(1000)
@@ -70,10 +71,59 @@ export const backupFileSchema = z.object({
         z.object({
           title: z.string().trim().min(1).max(200),
           summary: z.string().max(10000).default(""),
+          volumeIndex: z.number().int().min(1).max(99).nullable().optional(),
         })
       )
       .max(2000)
       .default([]),
+    // ---- P1 additions (optional so earlier v1/v2 files validate unchanged) ----
+    volumes: z
+      .array(
+        z.object({
+          index: z.number().int().min(1).max(99),
+          title: z.string().trim().min(1).max(200),
+          synopsis: z.string().max(50000).default(""),
+        })
+      )
+      .max(99)
+      .optional(),
+    contract: z.string().max(50000).optional(),
+    ledger: z
+      .object({
+        storylines: z
+          .array(
+            z.object({
+              name: z.string().trim().min(1).max(200),
+              summary: z.string().max(10000).default(""),
+              status: z.enum(["active", "dormant", "resolved"]).default("active"),
+            })
+          )
+          .max(200)
+          .optional(),
+        timeline: z
+          .array(
+            z.object({
+              order: z.number().int().min(1).max(999),
+              label: z.string().trim().min(1).max(200),
+              detail: z.string().max(10000).default(""),
+              chapterIndex: z.number().int().min(1).nullable().optional(),
+            })
+          )
+          .max(999)
+          .optional(),
+        arcs: z
+          .array(
+            z.object({
+              characterName: z.string().trim().min(1).max(120),
+              order: z.number().int().min(1).max(999),
+              note: z.string().min(1).max(10000),
+              chapterIndex: z.number().int().min(1).nullable().optional(),
+            })
+          )
+          .max(2000)
+          .optional(),
+      })
+      .optional(),
     // ---- v2 memory layer (optional so v1 files validate unchanged) ----
     memory: z
       .object({

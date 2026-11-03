@@ -7,6 +7,7 @@ import type {
   CharacterDTO,
   NovelDetail,
   OutlineBeatDTO,
+  VolumeDTO,
   WorldCategory,
   WorldEntryDTO,
 } from "@/lib/novara/types";
@@ -25,6 +26,8 @@ export async function GET(_req: Request, { params }: Params) {
       characters: { orderBy: { createdAt: "asc" } },
       worldEntries: { orderBy: { createdAt: "asc" } },
       outlineBeats: { orderBy: { index: "asc" } },
+      volumes: { orderBy: { index: "asc" } },
+      contract: true,
     },
   });
   if (!novel) return jsonError("Novel not found", 404);
@@ -60,6 +63,7 @@ export async function GET(_req: Request, { params }: Params) {
         name: ch.name,
         role: ch.role,
         description: ch.description,
+        aliases: ch.aliases,
         updatedAt: ch.updatedAt.toISOString(),
       })
     ),
@@ -80,9 +84,21 @@ export async function GET(_req: Request, { params }: Params) {
         index: b.index,
         title: b.title,
         summary: b.summary,
+        volumeId: b.volumeId,
         updatedAt: b.updatedAt.toISOString(),
       })
     ),
+    volumes: novel.volumes.map(
+      (v): VolumeDTO => ({
+        id: v.id,
+        novelId: v.novelId,
+        index: v.index,
+        title: v.title,
+        synopsis: v.synopsis,
+        updatedAt: v.updatedAt.toISOString(),
+      })
+    ),
+    contract: novel.contract?.content ?? null,
   };
   return Response.json(detail);
 }
@@ -99,9 +115,21 @@ export async function PATCH(req: Request, { params }: Params) {
   const existing = await db.novel.findUnique({ where: { id } });
   if (!existing) return jsonError("Novel not found", 404);
 
+  const { contract, ...novelData } = schema.data;
+
+  // Phase 7 (P1) — the story contract (作品契约) upserts 1:1 alongside the
+  // metadata patch. Empty string still writes (an explicit erase).
+  if (contract !== undefined) {
+    await db.novelContract.upsert({
+      where: { novelId: id },
+      create: { novelId: id, content: contract },
+      update: { content: contract },
+    });
+  }
+
   const novel = await db.novel.update({
     where: { id },
-    data: schema.data,
+    data: novelData,
     include: { chapters: { select: { wordCount: true } } },
   });
   return Response.json({ novel: toSummary(novel) });
