@@ -19,6 +19,7 @@ function toDTO(c: {
   content: string;
   wordCount: number;
   status: string;
+  brief: string;
   updatedAt: Date;
 }): ChapterDTO {
   return {
@@ -29,6 +30,7 @@ function toDTO(c: {
     content: c.content,
     wordCount: c.wordCount,
     status: c.status as ChapterDTO["status"],
+    brief: c.brief,
     updatedAt: c.updatedAt.toISOString(),
   };
 }

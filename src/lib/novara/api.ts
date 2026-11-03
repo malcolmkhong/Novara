@@ -142,8 +142,27 @@ export interface UpdateChapterInput {
   title?: string;
   content?: string;
   status?: ChapterStatus;
+  /** Chapter brief (细纲) — author-editable writing brief (Phase 7). */
+  brief?: string;
   /** Explicit confirmation required by the anti-overwrite gate (409). */
   overwrite?: boolean;
+  /** Explicit confirmation required by the final-lock gate (409 requiresReopen). */
+  reopen?: boolean;
+}
+
+export interface ChapterVersionRow {
+  id: string;
+  draftNo: number;
+  wordCount: number;
+  createdBy: "author" | "agent" | "restore";
+  createdAt: string;
+  content: string;
+}
+
+export function getChapterVersions(
+  id: string
+): Promise<{ chapterId: string; index: number; versions: ChapterVersionRow[] }> {
+  return request(`/api/chapters/${id}/versions`, { method: "GET" });
 }
 
 export function updateChapter(

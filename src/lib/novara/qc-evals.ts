@@ -189,8 +189,8 @@ function lineProbes(): Promise<EvalCheck>[] {
         category: "story_fact",
         content: long,
         sourceChapter: 3,
-        firstSeen: new Date("2026-01-01T00:00:00Z"),
-        lastSeen: new Date("2026-01-02T00:00:00Z"),
+        firstSeen: new Date("2026-01-01T00:00:00Z").toISOString(),
+        lastSeen: new Date("2026-01-02T00:00:00Z").toISOString(),
         score: 1,
         lastSeenChapter: 3,
       };

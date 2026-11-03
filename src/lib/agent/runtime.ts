@@ -30,6 +30,7 @@ import { getBudgets, buildSystemPrompt, getSkillEntry } from "@/lib/novara/conte
 import { glmChat } from "@/lib/novara/glm";
 import { countWords } from "@/lib/novara/words";
 import { assessOverwrite } from "@/lib/novara/write-gate";
+import { recordChapterVersion } from "@/lib/novara/versions";
 import { reviewChapter } from "@/lib/novara/review";
 import { sedimentChapterCore, type SedimentOutcome } from "@/lib/novara/sediment";
 import { buildMemoryView, formatMemoryLines, queryMemory } from "@/lib/novara/memory";
@@ -127,6 +128,8 @@ interface PendingWritePayload {
   wordCount: number;
   existingWords: number;
   content: string;
+  /** Chapter brief (细纲) carried through the approval gate (create path). */
+  brief?: string;
 }
 
 type AgentRunRow = {
@@ -361,6 +364,12 @@ export async function decideApproval(
         select: { index: true },
       });
       const index = (last?.index ?? 0) + 1;
+      // Phase 7 — persist the delegating task's brief as the chapter brief.
+      const taskRow = await db.agentTask.findUnique({
+        where: { id: taskId },
+        select: { detail: true },
+      });
+      const brief = (taskRow?.detail ?? "").trim().slice(0, 8000);
       const chapter = await db.chapter.create({
         data: {
           novelId: payload.novelId,
@@ -369,7 +378,14 @@ export async function decideApproval(
           content: payload.content,
           wordCount: countWords(payload.content),
           status: "draft",
+          brief,
         },
+      });
+      await recordChapterVersion({
+        chapterId: chapter.id,
+        novelId: payload.novelId,
+        content: payload.content,
+        createdBy: "agent",
       });
       await db.novel.update({ where: { id: payload.novelId }, data: { updatedAt: new Date() } });
       await emitEvent({
@@ -380,9 +396,34 @@ export async function decideApproval(
         payload: { committed: true, chapterId: chapter.id, index, words: chapter.wordCount },
       });
     } else if (payload.chapterId) {
+      const existing = await db.chapter.findUnique({
+        where: { id: payload.chapterId },
+        select: { status: true, index: true },
+      });
+      // Final lock edge case — the chapter was finalized between gate open
+      // and approval. Refuse the commit honestly instead of overwriting 定稿.
+      if (existing?.status === "final") {
+        await emitEvent({
+          runId,
+          taskId,
+          kind: "error",
+          summary: `Commit refused — Chapter ${existing.index} became final while this write was pending. Reopen it in the workbench, then re-run the task.`,
+        });
+        await db.agentTask.update({ where: { id: taskId }, data: { status: "blocked" } });
+        await db.agentRun.update({ where: { id: runId }, data: { status: "paused" } });
+        const blocked = await getRunDetail(runId);
+        if (!blocked) throw new NotFoundError("Run not found");
+        return blocked;
+      }
       const chapter = await db.chapter.update({
         where: { id: payload.chapterId },
         data: { content: payload.content, wordCount: countWords(payload.content) },
+      });
+      await recordChapterVersion({
+        chapterId: chapter.id,
+        novelId: chapter.novelId,
+        content: payload.content,
+        createdBy: "agent",
       });
       await db.novel.update({ where: { id: payload.novelId }, data: { updatedAt: new Date() } });
       await emitEvent({
@@ -685,6 +726,7 @@ async function leaderLoop(runId: string, goal: string, signal: AbortSignal): Pro
         novelId,
         taskId: null,
         taskKey: "leader",
+        taskBrief: "",
         measured,
         qc,
         signal,
@@ -1002,6 +1044,7 @@ async function executeTask(params: {
           novelId,
           taskId: task.id,
           taskKey: task.key,
+          taskBrief: task.detail ?? "",
           measured: measuredForTask,
           qc: params.qc,
           signal,
@@ -1169,6 +1212,8 @@ interface ExecuteToolParams {
   novelId: string;
   taskId: string | null;
   taskKey: string;
+  /** The executing task's brief (detail) — persisted as the chapter brief. */
+  taskBrief: string;
   measured: Measured;
   /** Run-scoped QC state (Phase 6 E2 gates). */
   qc: QcLedger;
@@ -1200,9 +1245,12 @@ async function executeTool(params: ExecuteToolParams): Promise<ToolResult & { st
         where: { novelId: params.novelId, index: action.index },
       });
       if (!chapter) return { ok: false, feed: `read_chapter(${action.index}) → error: no such chapter` };
+      const briefPart = chapter.brief.trim()
+        ? `\nCHAPTER BRIEF (细纲): ${chapter.brief.slice(0, 2000)}`
+        : "";
       return {
         ok: true,
-        feed: `read_chapter(${action.index}) → ok ("${chapter.title}", ${chapter.wordCount} words)\n${chapter.content.slice(0, budgets.glm.chapterContextChars) || "(empty)"}`,
+        feed: `read_chapter(${action.index}) → ok ("${chapter.title}", ${chapter.wordCount} words, ${chapter.status})${briefPart}\n${chapter.content.slice(0, budgets.glm.chapterContextChars) || "(empty)"}`,
       };
     }
     case "read_outline": {
@@ -1394,6 +1442,8 @@ async function executeTool(params: ExecuteToolParams): Promise<ToolResult & { st
       const index = (last?.index ?? 0) + 1;
       const run = await db.agentRun.findUnique({ where: { id: params.runId }, select: { mode: true } });
       const words = countWords(prose);
+      // Phase 7 — the delegated brief persists as the chapter brief (细纲).
+      const brief = params.taskBrief.trim().slice(0, 8000);
 
       if (run?.mode === "approval") {
         return await pauseForApproval({
@@ -1413,6 +1463,7 @@ async function executeTool(params: ExecuteToolParams): Promise<ToolResult & { st
             wordCount: words,
             existingWords: 0,
             content: prose,
+            brief,
           },
           pendingSummary: `Draft ready (~${words.toLocaleString()} words) — awaiting approval to settle as Chapter ${index}.`,
         });
@@ -1426,7 +1477,14 @@ async function executeTool(params: ExecuteToolParams): Promise<ToolResult & { st
           content: prose,
           wordCount: words,
           status: "draft",
+          brief,
         },
+      });
+      await recordChapterVersion({
+        chapterId: chapter.id,
+        novelId: params.novelId,
+        content: prose,
+        createdBy: "agent",
       });
       await db.novel.update({ where: { id: params.novelId }, data: { updatedAt: new Date() } });
       params.measured.chaptersWritten += 1;
@@ -1449,6 +1507,15 @@ async function executeTool(params: ExecuteToolParams): Promise<ToolResult & { st
         where: { novelId: params.novelId, index: action.index },
       });
       if (!chapter) return { ok: false, feed: `update_chapter(${action.index}) → error: no such chapter` };
+
+      // Phase 7 final lock — 定稿 is immutable to agents. Repairs on a final
+      // chapter require the author to reopen it in the workbench first.
+      if (chapter.status === "final") {
+        return {
+          ok: false,
+          feed: `update_chapter(${action.index}) → error: chapter is FINAL (locked). Final chapters are immutable — ask the author to reopen it in the workbench first.`,
+        };
+      }
 
       // Phase 6 revision budget: a replacement of a chapter whose latest
       // review found blocking issues counts as a REPAIR round — bounded by
@@ -1499,7 +1566,18 @@ async function executeTool(params: ExecuteToolParams): Promise<ToolResult & { st
 
       await db.chapter.update({
         where: { id: chapter.id },
-        data: { content: prose, wordCount: words },
+        data: {
+          content: prose,
+          wordCount: words,
+          // Backfill the brief when the chapter predates brief persistence.
+          ...(chapter.brief.trim() ? {} : { brief: params.taskBrief.trim().slice(0, 8000) }),
+        },
+      });
+      await recordChapterVersion({
+        chapterId: chapter.id,
+        novelId: params.novelId,
+        content: prose,
+        createdBy: "agent",
       });
       await db.novel.update({ where: { id: params.novelId }, data: { updatedAt: new Date() } });
       params.measured.chaptersUpdated += 1;

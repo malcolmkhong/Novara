@@ -12,6 +12,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type {
   AgentRunDetail,
   AgentRunMode,
+  AgentRunStatus,
   ApprovalRequest,
 } from "@/lib/novara/agent-types";
 import { agentGateway, type MockStartOptions } from "@/lib/novara/agent-client";

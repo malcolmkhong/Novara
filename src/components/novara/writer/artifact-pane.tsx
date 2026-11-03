@@ -25,7 +25,14 @@ import type { ArtifactTabId } from "@/config/writer";
 import { ARTIFACT_TABS } from "@/config/writer";
 import { useWriterStore } from "@/hooks/use-writer-store";
 import { cn } from "@/lib/utils";
-import { CharactersPanel, OutlinePanel, WorldPanel } from "./bible-panels";
+import {
+  BeatDocument,
+  CharacterDocument,
+  CharactersPanel,
+  OutlinePanel,
+  WorldDocument,
+  WorldPanel,
+} from "./bible-panels";
 import { ChapterEditor } from "./chapter-editor";
 import { MemoryPanel } from "./memory-panel";
 import { QcPanel } from "./qc-panel";
@@ -142,11 +149,15 @@ export interface ArtifactPaneHandlers {
   focusBeatId: string | null;
   focusCharacterId: string | null;
   focusWorldId: string | null;
+  // back actions for tree-opened single-asset document windows
+  onClearCharacter: () => void;
+  onClearWorld: () => void;
+  onClearBeat: () => void;
   onAddChapter: () => Promise<void>;
   onDeleteChapter: (chapter: ChapterDTO) => Promise<void>;
   onSaveChapter: (
     id: string,
-    patch: { title?: string; content?: string; status?: ChapterStatus }
+    patch: { title?: string; content?: string; status?: ChapterStatus; brief?: string }
   ) => Promise<ChapterDTO | null>;
   onAiDraft: (chapter: ChapterDTO) => Promise<AiDraftResult | null>;
   // characters
@@ -181,6 +192,14 @@ export function ArtifactPane({
   const novelId = detail.novel.id;
   const tab = useWriterStore((s) => s.artifactTabByNovel[novelId] ?? "draft");
   const setTab = useWriterStore((s) => s.setArtifactTab);
+
+  // Tree-opened assets render as single-asset document windows when present.
+  const focusedCharacter =
+    detail.characters.find((c) => c.id === handlers.focusCharacterId) ?? null;
+  const focusedWorld =
+    detail.worldEntries.find((w) => w.id === handlers.focusWorldId) ?? null;
+  const focusedBeat =
+    detail.outlineBeats.find((b) => b.id === handlers.focusBeatId) ?? null;
 
   return (
     <div className={cn("flex h-full min-h-0 flex-col", className)} aria-label="Artifact pane">
@@ -232,13 +251,22 @@ export function ArtifactPane({
                 warnings={warningsForTab(events, "outline")}
                 working={workingTasksForTab(tasks, "outline")}
               />
-              <OutlinePanel
-                beats={detail.outlineBeats}
-                focusBeatId={handlers.focusBeatId}
-                onAdd={handlers.onAddBeat}
-                onUpdate={handlers.onUpdateBeat}
-                onDelete={handlers.onDeleteBeat}
-              />
+              {focusedBeat ? (
+                <BeatDocument
+                  beat={focusedBeat}
+                  onUpdate={handlers.onUpdateBeat}
+                  onDelete={handlers.onDeleteBeat}
+                  onBack={handlers.onClearBeat}
+                />
+              ) : (
+                <OutlinePanel
+                  beats={detail.outlineBeats}
+                  focusBeatId={handlers.focusBeatId}
+                  onAdd={handlers.onAddBeat}
+                  onUpdate={handlers.onUpdateBeat}
+                  onDelete={handlers.onDeleteBeat}
+                />
+              )}
             </div>
           </TabsContent>
 
@@ -248,20 +276,38 @@ export function ArtifactPane({
                 warnings={warningsForTab(events, "bible")}
                 working={workingTasksForTab(tasks, "bible")}
               />
-              <CharactersPanel
-                characters={detail.characters}
-                focusCharacterId={handlers.focusCharacterId}
-                onAdd={handlers.onAddCharacter}
-                onUpdate={handlers.onUpdateCharacter}
-                onDelete={handlers.onDeleteCharacter}
-              />
-              <WorldPanel
-                entries={detail.worldEntries}
-                focusWorldId={handlers.focusWorldId}
-                onAdd={handlers.onAddWorldEntry}
-                onUpdate={handlers.onUpdateWorldEntry}
-                onDelete={handlers.onDeleteWorldEntry}
-              />
+              {focusedCharacter ? (
+                <CharacterDocument
+                  character={focusedCharacter}
+                  onUpdate={handlers.onUpdateCharacter}
+                  onDelete={handlers.onDeleteCharacter}
+                  onBack={handlers.onClearCharacter}
+                />
+              ) : focusedWorld ? (
+                <WorldDocument
+                  entry={focusedWorld}
+                  onUpdate={handlers.onUpdateWorldEntry}
+                  onDelete={handlers.onDeleteWorldEntry}
+                  onBack={handlers.onClearWorld}
+                />
+              ) : (
+                <>
+                  <CharactersPanel
+                    characters={detail.characters}
+                    focusCharacterId={handlers.focusCharacterId}
+                    onAdd={handlers.onAddCharacter}
+                    onUpdate={handlers.onUpdateCharacter}
+                    onDelete={handlers.onDeleteCharacter}
+                  />
+                  <WorldPanel
+                    entries={detail.worldEntries}
+                    focusWorldId={handlers.focusWorldId}
+                    onAdd={handlers.onAddWorldEntry}
+                    onUpdate={handlers.onUpdateWorldEntry}
+                    onDelete={handlers.onDeleteWorldEntry}
+                  />
+                </>
+              )}
             </div>
           </TabsContent>
 

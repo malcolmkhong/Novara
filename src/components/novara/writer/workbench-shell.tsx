@@ -234,20 +234,28 @@ export function WorkbenchShell({
 
   const [pendingOverwrite, setPendingOverwrite] = useState<{
     id: string;
-    patch: { title?: string; content?: string; status?: ChapterStatus };
+    patch: { title?: string; content?: string; status?: ChapterStatus; brief?: string };
     existingWords: number;
     incomingWords: number;
   } | null>(null);
 
+  // Final-lock gate (Phase 7): a final chapter refuses content changes until
+  // the author explicitly reopens it (demotes to revised).
+  const [pendingReopen, setPendingReopen] = useState<{
+    id: string;
+    patch: { title?: string; content?: string; status?: ChapterStatus; brief?: string };
+  } | null>(null);
+
   const handleSaveChapter = async (
     id: string,
-    patch: { title?: string; content?: string; status?: ChapterStatus },
-    opts?: { overwrite?: boolean }
+    patch: { title?: string; content?: string; status?: ChapterStatus; brief?: string },
+    opts?: { overwrite?: boolean; reopen?: boolean }
   ): Promise<ChapterDTO | null> => {
     try {
       const { chapter } = await updateChapter(id, {
         ...patch,
         ...(opts?.overwrite ? { overwrite: true } : {}),
+        ...(opts?.reopen ? { reopen: true } : {}),
       });
       onPatchChapter(chapter);
       toast({ title: "Chapter saved" });
@@ -259,10 +267,15 @@ export function WorkbenchShell({
         status?: number;
         body?: {
           requiresOverwrite?: boolean;
+          requiresReopen?: boolean;
           existingWords?: number;
           incomingWords?: number;
         };
       };
+      if (err.status === 409 && err.body?.requiresReopen) {
+        setPendingReopen({ id, patch });
+        return null;
+      }
       if (err.status === 409 && err.body?.requiresOverwrite) {
         setPendingOverwrite({
           id,
@@ -342,6 +355,9 @@ export function WorkbenchShell({
     focusBeatId: selectedBeatId,
     focusCharacterId: selectedCharacterId,
     focusWorldId: selectedWorldId,
+    onClearCharacter: () => selectCharacter(novel.id, null),
+    onClearWorld: () => selectWorld(novel.id, null),
+    onClearBeat: () => selectBeat(novel.id, null),
     onAddChapter: handleAddChapter,
     onDeleteChapter: handleDeleteChapter,
     onSaveChapter: handleSaveChapter,
@@ -540,6 +556,26 @@ export function WorkbenchShell({
         onConfirm={async () => {
           setDeleteOpen(false);
           await onDelete(novel.id);
+        }}
+      />
+
+      {/* Final-lock gate: explicit confirmation to reopen a final chapter */}
+      <ConfirmDialog
+        open={pendingReopen !== null}
+        onOpenChange={(v) => {
+          if (!v) setPendingReopen(null);
+        }}
+        title="Reopen this final chapter?"
+        description="This chapter is finalized (locked). Reopening demotes it to revised and applies your changes — the final mark will be removed until it is re-finalized."
+        confirmLabel="Reopen & save"
+        onConfirm={async () => {
+          const pending = pendingReopen;
+          setPendingReopen(null);
+          if (!pending) return;
+          await handleSaveChapter(pending.id, pending.patch, {
+            reopen: true,
+            overwrite: true,
+          });
         }}
       />
 

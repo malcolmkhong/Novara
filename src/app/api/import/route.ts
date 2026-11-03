@@ -49,6 +49,7 @@ export async function POST(req: Request) {
         content: c.content,
         wordCount: countWords(c.content),
         status: c.status,
+        brief: c.brief ?? "",
       })),
     }),
     db.character.createMany({
@@ -76,6 +77,78 @@ export async function POST(req: Request) {
       })),
     }),
   ]);
+
+  // ---- v2 memory layer — the sediment truth travels with the backup ----
+  let memoryRestored = { facts: 0, states: 0, foreshadows: 0, digests: 0, versions: 0 };
+  if (d.memory) {
+    const createdChapters = await db.chapter.findMany({
+      where: { novelId: novel.id },
+      select: { id: true, index: true },
+    });
+    const chapterIdByIndex = new Map(createdChapters.map((c) => [c.index, c.id]));
+
+    if (d.memory.storyFacts.length > 0) {
+      const r = await db.storyFact.createMany({
+        data: d.memory.storyFacts.map((f) => ({
+          novelId: novel.id,
+          category: f.category,
+          content: f.content,
+          sourceChapter: f.sourceChapter,
+          lastSeenChapter: f.sourceChapter,
+        })),
+      });
+      memoryRestored.facts = r.count;
+    }
+    if (d.memory.characterStates.length > 0) {
+      const r = await db.characterState.createMany({
+        data: d.memory.characterStates.map((s) => ({
+          novelId: novel.id,
+          name: s.name,
+          chapterIndex: s.chapterIndex,
+          state: s.state,
+        })),
+      });
+      memoryRestored.states = r.count;
+    }
+    if (d.memory.foreshadows.length > 0) {
+      const r = await db.foreshadow.createMany({
+        data: d.memory.foreshadows.map((f) => ({
+          novelId: novel.id,
+          content: f.content,
+          plantChapter: f.plantChapter,
+          payByChapter: f.payByChapter,
+          status: f.status,
+          lastChapter: f.lastChapter,
+        })),
+      });
+      memoryRestored.foreshadows = r.count;
+    }
+    const validDigests = d.memory.digests.filter((dg) => chapterIdByIndex.has(dg.chapterIndex));
+    if (validDigests.length > 0) {
+      const r = await db.chapterDigest.createMany({
+        data: validDigests.map((dg) => ({
+          novelId: novel.id,
+          chapterId: chapterIdByIndex.get(dg.chapterIndex) as string,
+          summary: dg.summary,
+        })),
+      });
+      memoryRestored.digests = r.count;
+    }
+    const validVersions = d.memory.versions.filter((v) => chapterIdByIndex.has(v.chapterIndex));
+    if (validVersions.length > 0) {
+      const r = await db.chapterVersion.createMany({
+        data: validVersions.map((v) => ({
+          novelId: novel.id,
+          chapterId: chapterIdByIndex.get(v.chapterIndex) as string,
+          draftNo: v.draftNo,
+          content: v.content,
+          wordCount: v.wordCount,
+          createdBy: v.createdBy,
+        })),
+      });
+      memoryRestored.versions = r.count;
+    }
+  }
 
   // ---- Integrity verification: re-read what actually landed in the DB ----
   const imported = await db.novel.findUnique({
@@ -128,6 +201,22 @@ export async function POST(req: Request) {
   }
   if (counts.outlineBeats === 0) {
     warnings.push("The backup contains no outline beats.");
+  }
+
+  // v2 memory-layer report — informational plus mismatch diagnostics.
+  if (d.memory) {
+    warnings.push(
+      `Memory layer restored — ${memoryRestored.facts} fact(s), ${memoryRestored.states} state snapshot(s), ${memoryRestored.foreshadows} foreshadow(s), ${memoryRestored.digests} digest(s), ${memoryRestored.versions} draft version(s).`
+    );
+    const skippedDigests = d.memory.digests.length - memoryRestored.digests;
+    const skippedVersions = d.memory.versions.length - memoryRestored.versions;
+    if (skippedDigests > 0 || skippedVersions > 0) {
+      warnings.push(
+        `Some memory rows referenced chapters missing from the backup and were skipped (digests: ${skippedDigests}, versions: ${skippedVersions}).`
+      );
+    }
+  } else if (schema.data.version === 2) {
+    warnings.push("This v2 backup declared no memory layer — the import has an empty memory.");
   }
 
   const summaryNovel = await db.novel.findUnique({

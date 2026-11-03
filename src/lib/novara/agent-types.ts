@@ -176,7 +176,12 @@ export type MemoryCategory =
   | "character_state"
   | "relationship"
   | "story_fact"
-  | "open_loop";
+  | "open_loop"
+  // Phase 7 — webnovel-writer 本书记忆 analogs (决策/文风/对话/灵感).
+  | "decision"
+  | "style"
+  | "dialogue"
+  | "inspiration";
 
 export interface MemoryItem {
   id: string;

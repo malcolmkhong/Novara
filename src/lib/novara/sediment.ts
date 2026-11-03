@@ -25,6 +25,10 @@ const MEMORY_CATEGORIES = [
   "relationship",
   "story_fact",
   "open_loop",
+  "decision",
+  "style",
+  "dialogue",
+  "inspiration",
 ] as const;
 
 const SEDIMENT_SPEC_ZH = `输出格式：纯文本行，每行一条记录，严格遵守（不要 JSON、不要 Markdown、文本内不要用竖线 | 字符，引号用单引号）
@@ -34,7 +38,8 @@ STATE: <角色名> | <本章结束时的状态/处境/认知>
 PLANT: <本章新埋的伏笔，需要日后回收>
 ADVANCE: <台账中伏笔的 id>
 PAID: <本章兑现了承诺的伏笔 id>
-category 只能取：world_rule / character_state / relationship / story_fact / open_loop
+category 只能取：world_rule / character_state / relationship / story_fact / open_loop / decision / style / dialogue / inspiration
+  world_rule=世界与背景的硬规则；character_state=角色的处境变化；relationship=人物关系变化；story_fact=剧情事实；open_loop=未了结的悬念/承诺；decision=本章做出的影响后续走向的关键决策（选了什么、放弃什么）；style=本章确立或遵循的文风/叙事规则（节奏、视角、句式偏好）；dialogue=角色说话方式的约束（口癖、语气、称呼）；inspiration=值得日后记住的点子。
 规则：facts 每条都要能独立被 AI 日后引用（含上下文，不要代词指代）；只记录本章确立或变化的事实；ADVANCE/PAID 只能引用上面台账里存在的 id；没有就省略该行。`;
 const SEDIMENT_SPEC_EN = `Output format: plain text lines, one record per line, strictly (no JSON, no markdown, never use the | pipe character inside text, use single quotes for quotations):
 SUMMARY: chapter summary in one line, 100-200 words
@@ -43,7 +48,8 @@ STATE: <character name> | <their situation/knowledge at chapter end>
 PLANT: <a new hook deliberately planted, needs future payoff>
 ADVANCE: <id of a ledger foreshadow advanced this chapter>
 PAID: <id of a ledger foreshadow whose promise was fulfilled>
-category must be one of: world_rule / character_state / relationship / story_fact / open_loop
+category must be one of: world_rule / character_state / relationship / story_fact / open_loop / decision / style / dialogue / inspiration
+  world_rule=hard world/background rules; character_state=a character's situation shift; relationship=relationship changes; story_fact=plot facts; open_loop=unresolved suspense/promises; decision=key choices made this chapter that steer what follows (what was chosen, what was abandoned); style=narrative/style rules established or followed (pacing, POV, sentence habits); dialogue=speech constraints for characters (verbal tics, tone, forms of address); inspiration=ideas worth remembering later.
 Rules: each fact must be independently quotable later (no pronoun references); record only facts established or changed here; ADVANCE/PAID must reference ids from the ledger above; omit lines when there is nothing.`;
 
 export interface ParsedSediment {

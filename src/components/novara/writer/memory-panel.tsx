@@ -50,15 +50,23 @@ const CATEGORY_LABELS: Record<MemoryCategory, string> = {
   relationship: "Relationship",
   story_fact: "Story fact",
   open_loop: "Open loop",
+  decision: "Decision",
+  style: "Style",
+  dialogue: "Dialogue",
+  inspiration: "Inspiration",
 };
 
 const CATEGORY_ORDER: (MemoryCategory | "all")[] = [
   "all",
   "open_loop",
+  "decision",
   "character_state",
   "relationship",
   "world_rule",
+  "style",
+  "dialogue",
   "story_fact",
+  "inspiration",
 ];
 
 const LOOP_STATUS_META: Record<

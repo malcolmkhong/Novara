@@ -34,7 +34,17 @@ export const toolActionSchema = z.discriminatedUnion("action", [
     action: z.literal("memory_query"),
     query: z.string().trim().min(1).max(500),
     category: z
-      .enum(["world_rule", "character_state", "relationship", "story_fact", "open_loop"])
+      .enum([
+        "world_rule",
+        "character_state",
+        "relationship",
+        "story_fact",
+        "open_loop",
+        "decision",
+        "style",
+        "dialogue",
+        "inspiration",
+      ])
       .optional(),
   }),
   z.object({ action: z.literal("doctor_scan") }),

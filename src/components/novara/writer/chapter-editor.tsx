@@ -1,7 +1,22 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { BookOpen, Loader2, PenLine, Plus, Sparkles, SplitSquareHorizontal, Trash2 } from "lucide-react";
+import {
+  BookOpen,
+  ChevronDown,
+  ChevronUp,
+  History,
+  Loader2,
+  Lock,
+  PenLine,
+  Plus,
+  RotateCcw,
+  ScrollText,
+  Sparkles,
+  SplitSquareHorizontal,
+  Trash2,
+} from "lucide-react";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -21,6 +36,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
+import { getChapterVersions, type ChapterVersionRow } from "@/lib/novara/api";
 import type { AiDraftResult, ChapterDTO, ChapterStatus } from "@/lib/novara/types";
 import { countWords, formatWordCount } from "@/lib/novara/words";
 import { cn } from "@/lib/utils";
@@ -38,7 +54,7 @@ interface ChapterEditorProps {
   onDelete: (chapter: ChapterDTO) => Promise<void>;
   onSave: (
     id: string,
-    patch: { title?: string; content?: string; status?: ChapterStatus }
+    patch: { title?: string; content?: string; status?: ChapterStatus; brief?: string }
   ) => Promise<ChapterDTO | null>;
   onAiDraft: (
     chapter: ChapterDTO,
@@ -77,6 +93,15 @@ export function ChapterEditor({
   const [confirmAbDraft, setConfirmAbDraft] = useState(false);
   const [adding, setAdding] = useState(false);
   const [view, setView] = useState<ChapterView>("preview");
+  const [brief, setBrief] = useState("");
+  const [briefOpen, setBriefOpen] = useState(true);
+  const [reopening, setReopening] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [versions, setVersions] = useState<ChapterVersionRow[] | null>(null);
+  const [versionsLoading, setVersionsLoading] = useState(false);
+  const [versionsError, setVersionsError] = useState<string | null>(null);
+  const [activeVersion, setActiveVersion] = useState<ChapterVersionRow | null>(null);
+  const [restoring, setRestoring] = useState(false);
 
   // Sync local editor state when a different chapter is selected.
   useEffect(() => {
@@ -84,6 +109,7 @@ export function ChapterEditor({
       setTitle(selected.title);
       setContent(selected.content);
       setStatus(selected.status);
+      setBrief(selected.brief);
       setDirty(false);
       // Opening a file reads like opening a document — chapters with content
       // land in the rendered preview; empty ones go straight to writing.
@@ -91,16 +117,20 @@ export function ChapterEditor({
     }
   }, [selectedId]);
 
+  const isFinal = selected?.status === "final";
+
   const save = async (patch?: {
     title?: string;
     content?: string;
     status?: ChapterStatus;
+    brief?: string;
   }) => {
     if (!selected) return null;
     const payload = patch ?? {
       title: title.trim() || selected.title,
       content,
       status,
+      brief,
     };
     setSaving(true);
     try {
@@ -109,6 +139,7 @@ export function ChapterEditor({
         setTitle(next.title);
         setContent(next.content);
         setStatus(next.status);
+        setBrief(next.brief);
         setDirty(false);
       }
       return next;
@@ -220,6 +251,58 @@ export function ChapterEditor({
     if (next === view) return;
     if (next === "preview" && dirty && !saving) void save();
     setView(next);
+  };
+
+  /** Status-only demotion — the server allows this without confirmation. */
+  const reopenChapter = async () => {
+    setReopening(true);
+    try {
+      await save({ status: "revised" });
+    } finally {
+      setReopening(false);
+    }
+  };
+
+  const openHistory = async () => {
+    if (!selected) return;
+    setHistoryOpen(true);
+    setVersionsLoading(true);
+    setVersionsError(null);
+    setVersions(null);
+    setActiveVersion(null);
+    try {
+      const result = await getChapterVersions(selected.id);
+      setVersions(result.versions);
+    } catch (e) {
+      setVersionsError(e instanceof Error ? e.message : "Unknown error");
+    } finally {
+      setVersionsLoading(false);
+    }
+  };
+
+  /** Restores a historical draft through the normal save flow (parent gates 409s). */
+  const restoreVersion = async (version: ChapterVersionRow) => {
+    if (!selected) return;
+    setRestoring(true);
+    try {
+      const next = await onSave(selected.id, { content: version.content });
+      if (next) {
+        setTitle(next.title);
+        setContent(next.content);
+        setStatus(next.status);
+        setBrief(next.brief);
+        setDirty(false);
+        setHistoryOpen(false);
+      }
+    } catch (e) {
+      toast({
+        title: "Restore failed",
+        description: e instanceof Error ? e.message : "Unknown error",
+        variant: "destructive",
+      });
+    } finally {
+      setRestoring(false);
+    }
   };
 
   if (hideList) {
@@ -532,6 +615,7 @@ export function ChapterEditor({
                   />
                   <Select
                     value={status}
+                    disabled={isFinal}
                     onValueChange={(v) => {
                       setStatus(v as ChapterStatus);
                       setDirty(true);
@@ -546,6 +630,28 @@ export function ChapterEditor({
                       <SelectItem value="final">Final</SelectItem>
                     </SelectContent>
                   </Select>
+                  {isFinal && (
+                    <span className="flex shrink-0 items-center gap-2">
+                      <span className="flex items-center gap-1 text-xs text-muted-foreground">
+                        <Lock className="h-3.5 w-3.5" aria-hidden="true" />
+                        Final — locked
+                      </span>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => void reopenChapter()}
+                        disabled={reopening}
+                        aria-label="Reopen chapter for editing"
+                      >
+                        {reopening ? (
+                          <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+                        ) : (
+                          <RotateCcw className="h-4 w-4" aria-hidden="true" />
+                        )}
+                        Reopen
+                      </Button>
+                    </span>
+                  )}
                 </>
               ) : (
                 <div className="flex min-w-0 flex-1 items-center justify-between gap-3">
@@ -595,6 +701,15 @@ export function ChapterEditor({
                   Preview
                 </button>
               </span>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => void openHistory()}
+                disabled={drafting || abDrafting || saving}
+              >
+                <History className="h-4 w-4" aria-hidden="true" />
+                History
+              </Button>
               <span>{formatWordCount(countWords(content))} words</span>
               {dirty && view === "write" && (
                 <span className="flex items-center gap-1 text-amber-700">
@@ -644,24 +759,70 @@ export function ChapterEditor({
 
             {/* Body — textarea while writing, document window while reading */}
             {view === "write" ? (
-              <Textarea
-                value={content}
-                onChange={(e) => {
-                  setContent(e.target.value);
-                  setDirty(true);
-                }}
-                onBlur={() => {
-                  if (dirty && !saving) void save();
-                }}
-                placeholder="Write your chapter here — or click AI Draft to get a grounded first draft."
-                className="nice-scroll min-h-[320px] flex-1 resize-y rounded-none border-0 font-serif text-[15px] leading-7 shadow-none focus-visible:ring-0 lg:min-h-[480px]"
-                aria-label="Chapter content"
-              />
+              <div className="flex min-h-0 flex-1 flex-col">
+                <button
+                  type="button"
+                  onClick={() => setBriefOpen((v) => !v)}
+                  aria-expanded={briefOpen}
+                  className="flex w-full items-center gap-1.5 border-b bg-muted/20 px-4 py-1.5 text-left text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
+                >
+                  <ScrollText className="h-3.5 w-3.5" aria-hidden="true" />
+                  Brief / 细纲
+                  {briefOpen ? (
+                    <ChevronUp className="ml-auto h-3.5 w-3.5" aria-hidden="true" />
+                  ) : (
+                    <ChevronDown className="ml-auto h-3.5 w-3.5" aria-hidden="true" />
+                  )}
+                </button>
+                {briefOpen && (
+                  <div className="border-b px-4 py-3">
+                    <Textarea
+                      value={brief}
+                      rows={3}
+                      onChange={(e) => {
+                        setBrief(e.target.value);
+                        setDirty(true);
+                      }}
+                      onBlur={() => {
+                        if (dirty && !saving) void save();
+                      }}
+                      placeholder="Outline beats, goals, must-hit moments for this chapter…"
+                      className="resize-y bg-muted/40 text-sm text-muted-foreground placeholder:text-muted-foreground/70"
+                      aria-label="Chapter brief"
+                    />
+                  </div>
+                )}
+                <Textarea
+                  value={content}
+                  onChange={(e) => {
+                    setContent(e.target.value);
+                    setDirty(true);
+                  }}
+                  onBlur={() => {
+                    if (dirty && !saving) void save();
+                  }}
+                  placeholder="Write your chapter here — or click AI Draft to get a grounded first draft."
+                  className="nice-scroll min-h-[320px] flex-1 resize-y rounded-none border-0 font-serif text-[15px] leading-7 shadow-none focus-visible:ring-0 lg:min-h-[480px]"
+                  aria-label="Chapter content"
+                />
+              </div>
             ) : (
               <div
                 className="nice-scroll max-h-[68vh] min-h-[320px] flex-1 overflow-y-auto px-6 py-5 lg:max-h-none lg:min-h-[480px]"
                 aria-label="Chapter document preview"
               >
+                {brief.trim() ? (
+                  <div className="mx-auto mb-6 max-w-prose rounded-md border bg-muted/30 px-4 py-3">
+                    <p className="mb-1.5 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+                      <ScrollText className="h-3.5 w-3.5" aria-hidden="true" />
+                      Brief / 细纲
+                    </p>
+                    <MarkdownDocument
+                      content={brief}
+                      className="text-sm text-muted-foreground"
+                    />
+                  </div>
+                ) : null}
                 {content.trim() ? (
                   <MarkdownDocument
                     content={content}
@@ -685,7 +846,121 @@ export function ChapterEditor({
             </div>
           </div>
         )}
+        {renderHistoryDialog()}
       </div>
+    );
+  }
+
+  function renderHistoryDialog() {
+    return (
+      <Dialog open={historyOpen} onOpenChange={setHistoryOpen}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Version history — {selected?.title ?? ""}</DialogTitle>
+            <DialogDescription>
+              Every save records a draft. Select one to preview it, then
+              restore if it is the text you want back.
+            </DialogDescription>
+          </DialogHeader>
+          {versionsLoading ? (
+            <div
+              className="flex items-center justify-center gap-2 py-10 text-sm text-muted-foreground"
+              role="status"
+            >
+              <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+              Loading versions…
+            </div>
+          ) : versionsError ? (
+            <p className="py-4 text-sm text-destructive" role="alert">
+              Failed to load versions: {versionsError}
+            </p>
+          ) : !versions || versions.length === 0 ? (
+            <p className="py-10 text-center text-sm text-muted-foreground">
+              No versions yet — every save records one.
+            </p>
+          ) : (
+            <div className="flex flex-col gap-3">
+              <ul className="nice-scroll max-h-64 overflow-y-auto rounded-md border">
+                {versions.map((version) => {
+                  const active = activeVersion?.id === version.id;
+                  return (
+                    <li
+                      key={version.id}
+                      className={cn(
+                        "flex items-center gap-3 border-b px-3 py-2 text-sm last:border-b-0",
+                        active && "bg-accent/40"
+                      )}
+                    >
+                      <span className="font-mono text-xs">
+                        稿{version.draftNo}
+                      </span>
+                      <span className="shrink-0 text-xs text-muted-foreground">
+                        {formatWordCount(version.wordCount)} words
+                      </span>
+                      <Badge
+                        variant={
+                          version.createdBy === "author"
+                            ? "outline"
+                            : version.createdBy === "agent"
+                              ? "default"
+                              : "secondary"
+                        }
+                        className="text-[11px]"
+                      >
+                        {version.createdBy}
+                      </Badge>
+                      <span className="ml-auto truncate text-xs text-muted-foreground">
+                        {new Date(version.createdAt).toLocaleString()}
+                      </span>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() =>
+                          setActiveVersion(active ? null : version)
+                        }
+                        aria-pressed={active}
+                      >
+                        View
+                      </Button>
+                    </li>
+                  );
+                })}
+              </ul>
+              {activeVersion && (
+                <div className="rounded-md border">
+                  <div className="flex items-center justify-between gap-2 border-b px-3 py-2">
+                    <span className="text-xs font-medium text-muted-foreground">
+                      稿{activeVersion.draftNo} preview
+                    </span>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => void restoreVersion(activeVersion)}
+                      disabled={restoring}
+                    >
+                      {restoring ? (
+                        <Loader2
+                          className="h-4 w-4 animate-spin"
+                          aria-hidden="true"
+                        />
+                      ) : (
+                        <RotateCcw className="h-4 w-4" aria-hidden="true" />
+                      )}
+                      Restore this draft
+                    </Button>
+                  </div>
+                  <div className="nice-scroll max-h-64 overflow-y-auto px-3 py-2">
+                    <MarkdownDocument
+                      content={activeVersion.content}
+                      className="text-sm"
+                    />
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     );
   }
 }

@@ -9,8 +9,10 @@
 // workbench reference design.
 //
 // File-explorer semantics: groups (Chapters/Outline/Characters/World) are
-// expandable/collapsible via a chevron; their children are clickable "files"
-// that open in the right artifact pane.
+// expandable/collapsible via the chevron OR by clicking the group label;
+// their children are clickable "files" that open in the right artifact pane.
+// A search box filters the tree by file label while the query is active;
+// clearing it restores the exact previous expand/collapse state.
 // ---------------------------------------------------------------------------
 
 import { useState } from "react";
@@ -26,13 +28,16 @@ import {
   Loader2,
   Pencil,
   Plus,
+  Search,
   ShieldCheck,
   Trash2,
   Upload,
   Users,
+  X,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
 import type { AgentTask, AgentTaskStatus } from "@/lib/novara/agent-types";
 import type { ArtifactTabId } from "@/config/writer";
@@ -188,8 +193,36 @@ export function AssetTree({
   >({ chapters: true, outline: false, characters: false, world: false });
   const toggle = (key: ExpandableGroupKey) =>
     setExpanded((s) => ({ ...s, [key]: !s[key] }));
-  const open = (key: ExpandableGroupKey) =>
-    setExpanded((s) => (s[key] ? s : { ...s, [key]: true }));
+
+  // Search — a derived view on top of the tree. While a query is active the
+  // groups render force-expanded, but `expanded` itself is never written, so
+  // clearing the query restores the exact previous expand/collapse state.
+  const [query, setQuery] = useState("");
+  const q = query.trim().toLowerCase();
+  const searching = q.length > 0;
+  const matchesQuery = (text: string) => text.toLowerCase().includes(q);
+  const visibleChapters = searching
+    ? detail.chapters.filter((ch) => matchesQuery(ch.title))
+    : detail.chapters;
+  // Beats keep their original positional index so "NN" prefixes stay stable.
+  const beatEntries = detail.outlineBeats.map((beat, index) => ({ beat, index }));
+  const visibleBeats = searching
+    ? beatEntries.filter(({ beat }) => matchesQuery(beat.title))
+    : beatEntries;
+  const visibleCharacters = searching
+    ? detail.characters.filter((c) => matchesQuery(c.name))
+    : detail.characters;
+  const visibleWorld = searching
+    ? detail.worldEntries.filter((w) => matchesQuery(w.title))
+    : detail.worldEntries;
+  const anyMatch =
+    visibleChapters.length > 0 ||
+    visibleBeats.length > 0 ||
+    visibleCharacters.length > 0 ||
+    visibleWorld.length > 0 ||
+    matchesQuery("Review") ||
+    matchesQuery("Memory") ||
+    matchesQuery("QC");
 
   const totalWords = detail.chapters.reduce((s, c) => s + c.wordCount, 0);
   const pct = novel.targetWords
@@ -254,159 +287,191 @@ export function AssetTree({
         aria-label="Novel assets"
         className="nice-scroll min-h-0 flex-1 overflow-y-auto p-2"
       >
+        {/* Search — filters the tree below while the query is active. */}
+        <div className="relative mb-2">
+          <Search
+            className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground"
+            aria-hidden="true"
+          />
+          <Input
+            type="text"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            aria-label="Search assets"
+            placeholder="Search files…"
+            className="h-8 bg-background pl-8 pr-8"
+          />
+          {query.length > 0 && (
+            <button
+              type="button"
+              onClick={() => setQuery("")}
+              aria-label="Clear search"
+              className="absolute right-1 top-1/2 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded text-muted-foreground transition-colors hover:text-foreground"
+            >
+              <X className="h-3.5 w-3.5" aria-hidden="true" />
+            </button>
+          )}
+        </div>
+
         <ul className="space-y-0.5">
+          {/* While searching, matching groups render force-expanded with no
+              toggle, so the `expanded` map is never mutated by a search. */}
           {/* Chapters — expandable, children open the Draft editor */}
-          <TreeGroup
-            icon={<BookOpen className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />}
-            label="Chapters"
-            count={detail.chapters.length}
-            badges={badges.get("group:chapters")}
-            expanded={expanded.chapters}
-            onToggle={() => toggle("chapters")}
-            onOpen={() => {
-              onOpenArtifactTab("draft");
-              open("chapters");
-            }}
-            action={
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-6 w-6 p-0"
-                onClick={() => void onAddChapter()}
-                disabled={addingChapter}
-                aria-label="Add chapter"
-              >
-                {addingChapter ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
-                ) : (
-                  <Plus className="h-3.5 w-3.5" aria-hidden="true" />
-                )}
-              </Button>
-            }
-          >
-            {detail.chapters.map((ch) => {
-              const chapterBadges = badges.get(`chapter:${ch.index}`);
-              return (
+          {(!searching || visibleChapters.length > 0) && (
+            <TreeGroup
+              icon={<BookOpen className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />}
+              label="Chapters"
+              count={detail.chapters.length}
+              badges={badges.get("group:chapters")}
+              expanded={searching ? true : expanded.chapters}
+              onToggle={searching ? undefined : () => toggle("chapters")}
+              action={
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-6 w-6 p-0"
+                  onClick={() => void onAddChapter()}
+                  disabled={addingChapter}
+                  aria-label="Add chapter"
+                >
+                  {addingChapter ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+                  ) : (
+                    <Plus className="h-3.5 w-3.5" aria-hidden="true" />
+                  )}
+                </Button>
+              }
+            >
+              {visibleChapters.map((ch) => {
+                const chapterBadges = badges.get(`chapter:${ch.index}`);
+                return (
+                  <TreeFile
+                    key={ch.id}
+                    label={ch.title}
+                    prefix={String(ch.index).padStart(2, "0")}
+                    selected={ch.id === selectedChapterId}
+                    onClick={() => onOpenChapter(ch.id)}
+                    badges={chapterBadges}
+                    trailing={
+                      ch.status !== "draft" ? (
+                        <span
+                          className={cn(
+                            "h-1.5 w-1.5 shrink-0 rounded-full",
+                            ch.status === "final" ? "bg-emerald-600" : "bg-amber-500"
+                          )}
+                          aria-label={ch.status}
+                        />
+                      ) : undefined
+                    }
+                  />
+                );
+              })}
+            </TreeGroup>
+          )}
+
+          {/* Outline — expandable, children open the focused beat */}
+          {(!searching || visibleBeats.length > 0) && (
+            <TreeGroup
+              icon={<ListTree className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />}
+              label="Outline"
+              count={detail.outlineBeats.length}
+              badges={badges.get("group:outline")}
+              expanded={searching ? true : expanded.outline}
+              onToggle={searching ? undefined : () => toggle("outline")}
+            >
+              {visibleBeats.map(({ beat, index }) => (
                 <TreeFile
-                  key={ch.id}
-                  label={ch.title}
-                  prefix={String(ch.index).padStart(2, "0")}
-                  selected={ch.id === selectedChapterId}
-                  onClick={() => onOpenChapter(ch.id)}
-                  badges={chapterBadges}
+                  key={beat.id}
+                  label={beat.title}
+                  prefix={String(index + 1).padStart(2, "0")}
+                  selected={beat.id === selectedBeatId}
+                  onClick={() => onOpenBeat(beat.id)}
+                  badges={badges.get(`beat:${beat.id}`)}
+                />
+              ))}
+            </TreeGroup>
+          )}
+
+          {/* Characters — expandable, children open the focused card */}
+          {(!searching || visibleCharacters.length > 0) && (
+            <TreeGroup
+              icon={<Users className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />}
+              label="Characters"
+              count={detail.characters.length}
+              badges={badges.get("group:characters")}
+              expanded={searching ? true : expanded.characters}
+              onToggle={searching ? undefined : () => toggle("characters")}
+            >
+              {visibleCharacters.map((c) => (
+                <TreeFile
+                  key={c.id}
+                  label={c.name}
+                  selected={c.id === selectedCharacterId}
+                  onClick={() => onOpenCharacter(c.id)}
+                  badges={badges.get(`character:${c.id}`)}
                   trailing={
-                    ch.status !== "draft" ? (
-                      <span
-                        className={cn(
-                          "h-1.5 w-1.5 shrink-0 rounded-full",
-                          ch.status === "final" ? "bg-emerald-600" : "bg-amber-500"
-                        )}
-                        aria-label={ch.status}
-                      />
+                    c.role ? (
+                      <span className="max-w-24 shrink-0 truncate text-[10px] text-muted-foreground">
+                        {c.role}
+                      </span>
                     ) : undefined
                   }
                 />
-              );
-            })}
-          </TreeGroup>
-
-          {/* Outline — expandable, children open the focused beat */}
-          <TreeGroup
-            icon={<ListTree className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />}
-            label="Outline"
-            count={detail.outlineBeats.length}
-            badges={badges.get("group:outline")}
-            expanded={expanded.outline}
-            onToggle={() => toggle("outline")}
-            onOpen={() => {
-              onOpenArtifactTab("outline");
-              open("outline");
-            }}
-          >
-            {detail.outlineBeats.map((b, i) => (
-              <TreeFile
-                key={b.id}
-                label={b.title}
-                prefix={String(i + 1).padStart(2, "0")}
-                selected={b.id === selectedBeatId}
-                onClick={() => onOpenBeat(b.id)}
-                badges={badges.get(`beat:${b.id}`)}
-              />
-            ))}
-          </TreeGroup>
-
-          {/* Characters — expandable, children open the focused card */}
-          <TreeGroup
-            icon={<Users className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />}
-            label="Characters"
-            count={detail.characters.length}
-            badges={badges.get("group:characters")}
-            expanded={expanded.characters}
-            onToggle={() => toggle("characters")}
-            onOpen={() => {
-              onOpenArtifactTab("bible");
-              open("characters");
-            }}
-          >
-            {detail.characters.map((c) => (
-              <TreeFile
-                key={c.id}
-                label={c.name}
-                selected={c.id === selectedCharacterId}
-                onClick={() => onOpenCharacter(c.id)}
-                badges={badges.get(`character:${c.id}`)}
-                trailing={
-                  c.role ? (
-                    <span className="max-w-24 shrink-0 truncate text-[10px] text-muted-foreground">
-                      {c.role}
-                    </span>
-                  ) : undefined
-                }
-              />
-            ))}
-          </TreeGroup>
+              ))}
+            </TreeGroup>
+          )}
 
           {/* World — expandable, children open the focused entry */}
-          <TreeGroup
-            icon={<Globe2 className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />}
-            label="World"
-            count={detail.worldEntries.length}
-            badges={badges.get("group:world")}
-            expanded={expanded.world}
-            onToggle={() => toggle("world")}
-            onOpen={() => {
-              onOpenArtifactTab("bible");
-              open("world");
-            }}
-          >
-            {detail.worldEntries.map((w) => (
-              <TreeFile
-                key={w.id}
-                label={w.title}
-                selected={w.id === selectedWorldId}
-                onClick={() => onOpenWorld(w.id)}
-                badges={badges.get(`world:${w.id}`)}
-              />
-            ))}
-          </TreeGroup>
+          {(!searching || visibleWorld.length > 0) && (
+            <TreeGroup
+              icon={<Globe2 className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />}
+              label="World"
+              count={detail.worldEntries.length}
+              badges={badges.get("group:world")}
+              expanded={searching ? true : expanded.world}
+              onToggle={searching ? undefined : () => toggle("world")}
+            >
+              {visibleWorld.map((w) => (
+                <TreeFile
+                  key={w.id}
+                  label={w.title}
+                  selected={w.id === selectedWorldId}
+                  onClick={() => onOpenWorld(w.id)}
+                  badges={badges.get(`world:${w.id}`)}
+                />
+              ))}
+            </TreeGroup>
+          )}
 
           {/* Tool views — not files, plain links */}
-          <TreeGroup
-            icon={<FileSearch className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />}
-            label="Review"
-            onOpen={() => onOpenArtifactTab("review")}
-          />
-          <TreeGroup
-            icon={<Brain className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />}
-            label="Memory"
-            onOpen={() => onOpenArtifactTab("memory")}
-          />
-          <TreeGroup
-            icon={<ShieldCheck className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />}
-            label="QC"
-            onOpen={() => onOpenArtifactTab("qc")}
-          />
+          {(!searching || matchesQuery("Review")) && (
+            <TreeGroup
+              icon={<FileSearch className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />}
+              label="Review"
+              onOpen={() => onOpenArtifactTab("review")}
+            />
+          )}
+          {(!searching || matchesQuery("Memory")) && (
+            <TreeGroup
+              icon={<Brain className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />}
+              label="Memory"
+              onOpen={() => onOpenArtifactTab("memory")}
+            />
+          )}
+          {(!searching || matchesQuery("QC")) && (
+            <TreeGroup
+              icon={<ShieldCheck className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />}
+              label="QC"
+              onOpen={() => onOpenArtifactTab("qc")}
+            />
+          )}
         </ul>
+
+        {searching && !anyMatch && (
+          <p className="mt-4 px-2 text-center text-xs text-muted-foreground">
+            No files match your search.
+          </p>
+        )}
 
         <p className="mt-4 flex items-center gap-1.5 px-2 text-[11px] text-muted-foreground">
           <FolderTree className="h-3 w-3 shrink-0" aria-hidden="true" />
@@ -418,7 +483,8 @@ export function AssetTree({
 }
 
 // ---------------------------------------------------------------------------
-// Group row — chevron toggles collapse; label opens the artifact view
+// Group row — expandable groups toggle collapse via chevron or label click;
+// plain rows (Review/Memory/QC) open their artifact view when clicked
 // ---------------------------------------------------------------------------
 
 function TreeGroup({
@@ -438,9 +504,10 @@ function TreeGroup({
   count?: number;
   badges?: NodeBadge[];
   phaseTag?: string;
-  /** Label click — opens the group's artifact view. */
-  onOpen: () => void;
-  /** Presence of onToggle makes the group expandable. */
+  /** Label click for plain (non-expandable) rows — opens the artifact view. */
+  onOpen?: () => void;
+  /** Presence of onToggle makes the group expandable: both the chevron and
+   * the label toggle collapse; the label never opens the artifact view. */
   expanded?: boolean;
   onToggle?: () => void;
   /** Extra trailing control (e.g. the chapter add button). */
@@ -462,19 +529,19 @@ function TreeGroup({
             onClick={onToggle}
             aria-expanded={expanded}
             aria-label={`${label} — expand or collapse`}
-            className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-muted-foreground hover:text-foreground"
+            className="flex h-7 w-7 shrink-0 items-center justify-center rounded text-muted-foreground hover:text-foreground"
           >
             <ChevronRight
-              className={cn("h-4 w-4 transition-transform", expanded && "rotate-90")}
+              className={cn("h-5 w-5 transition-transform", expanded && "rotate-90")}
               aria-hidden="true"
             />
           </button>
         ) : (
-          <span className="h-6 w-6 shrink-0" aria-hidden="true" />
+          <span className="h-7 w-7 shrink-0" aria-hidden="true" />
         )}
         <button
           type="button"
-          onClick={onOpen}
+          onClick={expandable ? onToggle : onOpen}
           className="flex min-w-0 flex-1 items-center gap-2 py-1.5 text-left"
         >
           {icon}

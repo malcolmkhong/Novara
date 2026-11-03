@@ -65,14 +65,47 @@ model Chapter {
   wordCount Int      @default(0)
   // draft | revised | final
   status    String   @default("draft")
+  // Chapter brief (细纲) — the writing brief for this chapter. Persisted so
+  // briefs survive the run that created them (webnovel-writer 章细纲 analog).
+  // Written by the runtime when a chapter task is delegated/created, and
+  // editable by the author via PATCH.
+  brief     String   @default("")
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   novel Novel @relation(fields: [novelId], references: [id], onDelete: Cascade)
   digest ChapterDigest?
   reviews ChapterReview[]
+  versions ChapterVersion[]
 
   @@unique([novelId, index])
+  @@index([novelId])
+}
+
+// ---------------------------------------------------------------------------
+// ChapterVersion (Phase 7) — draft history (webnovel-writer 稿1~稿N analog).
+// A row is recorded on EVERY committed content change (author PATCH, agent
+// write, approval commit, import). `content` snapshots the INCOMING state,
+// so the version list is the full history of committed text states and the
+// live Chapter.content column is always the newest working copy. Final
+// (定稿) chapters are locked at the API/runtime level — history never
+// silently diverges from the canonical text.
+// ---------------------------------------------------------------------------
+
+model ChapterVersion {
+  id        String   @id @default(cuid())
+  chapterId String
+  chapter   Chapter  @relation(fields: [chapterId], references: [id], onDelete: Cascade)
+  novelId   String
+  // 1-based, per-chapter monotonic (稿1, 稿2, …)
+  draftNo   Int
+  content   String
+  wordCount Int
+  // author | agent | restore — who committed this state
+  createdBy String   @default("author")
+  createdAt DateTime @default(now())
+
+  @@unique([chapterId, draftNo])
   @@index([novelId])
 }
 
@@ -183,6 +216,7 @@ model StoryFact {
   id            String   @id @default(cuid())
   novelId       String
   // world_rule | character_state | relationship | story_fact | open_loop
+  // | decision | style | dialogue | inspiration   (Phase 7: 5 -> 9)
   category      String
   content       String
   sourceChapter Int?

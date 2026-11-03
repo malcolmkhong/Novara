@@ -34,8 +34,12 @@ const CATEGORY_WEIGHT: Record<MemoryCategory, number> = {
   open_loop: 3.0,
   character_state: 2.5,
   relationship: 2.2,
+  decision: 2.4, // Phase 7 — canon choices steer everything after them
   world_rule: 2.0,
+  style: 2.0, // Phase 7 — voice/POV rules matter at draft time
+  dialogue: 1.8, // Phase 7 — speech constraints keep characters in character
   story_fact: 1.5,
+  inspiration: 1.2, // Phase 7 — nice to resurface, never blocking
 };
 
 const STOPWORDS = new Set([

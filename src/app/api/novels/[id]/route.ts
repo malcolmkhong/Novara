@@ -49,6 +49,7 @@ export async function GET(_req: Request, { params }: Params) {
         content: c.content,
         wordCount: c.wordCount,
         status: c.status as ChapterDTO["status"],
+        brief: c.brief,
         updatedAt: c.updatedAt.toISOString(),
       })
     ),

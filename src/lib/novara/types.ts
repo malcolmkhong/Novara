@@ -44,6 +44,8 @@ export interface ChapterDTO {
   content: string;
   wordCount: number;
   status: ChapterStatus;
+  /** Chapter brief (细纲) — writing brief persisted per chapter (Phase 7). */
+  brief: string;
   updatedAt: string;
 }
 
@@ -98,6 +100,8 @@ export interface BackupChapter {
   title: string;
   content: string;
   status: ChapterStatus;
+  /** Chapter brief (细纲) — present in v2 backups. */
+  brief?: string;
 }
 
 export interface BackupCharacter {
@@ -125,9 +129,53 @@ export interface BackupIntegrity {
   totalWords: number;
 }
 
+// ---- v2 memory-layer collections (Phase 7 — export keeps the truth) ----
+
+export interface BackupStoryFact {
+  category: string;
+  content: string;
+  sourceChapter?: number | null;
+}
+
+export interface BackupCharacterState {
+  name: string;
+  chapterIndex: number;
+  state: string;
+}
+
+export interface BackupForeshadow {
+  content: string;
+  plantChapter: number;
+  payByChapter?: number | null;
+  status: string;
+  lastChapter?: number | null;
+}
+
+export interface BackupDigest {
+  chapterIndex: number;
+  summary: string;
+}
+
+export interface BackupVersion {
+  chapterIndex: number;
+  draftNo: number;
+  content: string;
+  wordCount: number;
+  createdBy?: string;
+}
+
+export interface BackupMemory {
+  storyFacts?: BackupStoryFact[];
+  characterStates?: BackupCharacterState[];
+  foreshadows?: BackupForeshadow[];
+  digests?: BackupDigest[];
+  versions?: BackupVersion[];
+}
+
 export interface NovelBackupFile {
   format: "novara-novel-backup";
-  version: 1;
+  /** v1 = original five collections; v2 adds briefs + memory layer. */
+  version: 1 | 2;
   application: "Novara AI";
   exportedAt: string;
   data: {
@@ -136,6 +184,8 @@ export interface NovelBackupFile {
     characters: BackupCharacter[];
     worldEntries: BackupWorldEntry[];
     outlineBeats: BackupOutlineBeat[];
+    /** Present in v2 backups; v1 imports restore an empty memory layer. */
+    memory?: BackupMemory;
   };
   integrity: BackupIntegrity;
 }
