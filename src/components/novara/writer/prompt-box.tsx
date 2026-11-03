@@ -56,7 +56,7 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
-import type { AgentRunMode, PinnedRef, PinnedRefType } from "@/lib/novara/agent-types";
+import type { AgentEvent, AgentRunMode, PinnedRef, PinnedRefType } from "@/lib/novara/agent-types";
 import type { ModelSelection } from "@/lib/novara/models";
 import type { NovelDetail } from "@/lib/novara/types";
 import {
@@ -64,6 +64,7 @@ import {
   filterSlashCommands,
   type SlashCommand,
 } from "./slash-commands";
+import { ContextUsageButton } from "./context-usage-panel";
 import { ModelPicker } from "./model-picker";
 import { cn } from "@/lib/utils";
 
@@ -199,6 +200,8 @@ export function PromptBox({
   onTogglePin,
   onClearPins,
   pinOptions,
+  novelId,
+  usageEvents,
 }: {
   value: string;
   onChange: (next: string) => void;
@@ -213,6 +216,10 @@ export function PromptBox({
   onTogglePin: (ref: PinnedRef) => void;
   onClearPins: () => void;
   pinOptions: PinOption[];
+  /** Context Usage lives on the toolbar's left cluster (next to +). */
+  novelId: string;
+  /** The displayed run's events — powers the live/last-measured usage. */
+  usageEvents: AgentEvent[];
 }) {
   const [pinOpen, setPinOpen] = useState(false);
   const [token, setToken] = useState<TokenState | null>(null);
@@ -489,54 +496,63 @@ export function PromptBox({
 
       {/* Toolbar */}
       <div className="flex flex-wrap items-center justify-between gap-2 px-3 pb-3 pt-1.5">
-        {/* Left — pin menu (click-first palette with its own search input) */}
-        <Popover open={pinOpen} onOpenChange={setPinOpen}>
-          <PopoverTrigger asChild>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              className="h-8 w-8 rounded-full text-muted-foreground hover:text-foreground"
-              aria-label="Pin context — attach chapters, characters, world entries"
-              title="Pin context — or type @ in the composer"
-            >
-              <Plus className="h-4.5 w-4.5" aria-hidden="true" />
-            </Button>
-          </PopoverTrigger>
-          <PopoverContent align="start" className="w-80 p-0">
-            <Command>
-              <CommandInput placeholder="Search chapters, characters, world…" />
-              <CommandList className="max-h-72 overflow-y-auto">
-                <CommandEmpty>Nothing matches in this novel.</CommandEmpty>
-                {[...grouped.entries()].map(([group, options]) => (
-                  <CommandGroup key={group} heading={group}>
-                    {options.map((opt) => {
-                      const pinned = pinnedKeys.has(`${opt.type}:${opt.id}`);
-                      return (
-                        <CommandItem
-                          key={`${opt.type}:${opt.id}`}
-                          value={`${opt.label} ${group}`}
-                          onSelect={() =>
-                            onTogglePin({ type: opt.type, id: opt.id, label: opt.label })
-                          }
-                        >
-                          <Check
-                            className={cn(
-                              "mr-2 h-4 w-4 shrink-0",
-                              pinned ? "opacity-100" : "opacity-0"
-                            )}
-                            aria-hidden="true"
-                          />
-                          <span className="truncate">{opt.label}</span>
-                        </CommandItem>
-                      );
-                    })}
-                  </CommandGroup>
-                ))}
-              </CommandList>
-            </Command>
-          </PopoverContent>
-        </Popover>
+        {/* Left — pin menu + context usage. The gauge sits exactly between
+            the + button and the model picker: run parameters share one row. */}
+        <div className="flex items-center gap-1.5">
+          <Popover open={pinOpen} onOpenChange={setPinOpen}>
+            <PopoverTrigger asChild>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8 rounded-full text-muted-foreground hover:text-foreground"
+                aria-label="Pin context — attach chapters, characters, world entries"
+                title="Pin context — or type @ in the composer"
+              >
+                <Plus className="h-4.5 w-4.5" aria-hidden="true" />
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent align="start" className="w-80 p-0">
+              <Command>
+                <CommandInput placeholder="Search chapters, characters, world…" />
+                <CommandList className="max-h-72 overflow-y-auto">
+                  <CommandEmpty>Nothing matches in this novel.</CommandEmpty>
+                  {[...grouped.entries()].map(([group, options]) => (
+                    <CommandGroup key={group} heading={group}>
+                      {options.map((opt) => {
+                        const pinned = pinnedKeys.has(`${opt.type}:${opt.id}`);
+                        return (
+                          <CommandItem
+                            key={`${opt.type}:${opt.id}`}
+                            value={`${opt.label} ${group}`}
+                            onSelect={() =>
+                              onTogglePin({ type: opt.type, id: opt.id, label: opt.label })
+                            }
+                          >
+                            <Check
+                              className={cn(
+                                "mr-2 h-4 w-4 shrink-0",
+                                pinned ? "opacity-100" : "opacity-0"
+                              )}
+                              aria-hidden="true"
+                            />
+                            <span className="truncate">{opt.label}</span>
+                          </CommandItem>
+                        );
+                      })}
+                    </CommandGroup>
+                  ))}
+                </CommandList>
+              </Command>
+            </PopoverContent>
+          </Popover>
+
+          <ContextUsageButton
+            novelId={novelId}
+            modelId={modelSelection.modelId}
+            events={usageEvents}
+          />
+        </div>
 
         {/* Right — model picker · permissions · voice · send */}
         <div className="flex items-center gap-1.5">

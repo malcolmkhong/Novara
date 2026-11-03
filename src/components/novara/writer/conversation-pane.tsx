@@ -600,23 +600,11 @@ export function ConversationPane({
               {getModelDefinition(detail.run.modelId).label}
               {detail.run.thinkingLevel !== "off" && ` · thinking`}
             </Badge>
-            <ContextUsageButton
-              novelId={novel.id}
-              modelId={modelSelection.modelId}
-              events={detail.events}
-            />
           </>
         ) : (
-          <>
-            <Badge variant="outline" className="text-muted-foreground">
-              Idle
-            </Badge>
-            <ContextUsageButton
-              novelId={novel.id}
-              modelId={modelSelection.modelId}
-              events={[]}
-            />
-          </>
+          <Badge variant="outline" className="text-muted-foreground">
+            Idle
+          </Badge>
         )}
         <div className="ml-auto flex items-center gap-1">
           {history.length > 0 && (
@@ -790,6 +778,12 @@ export function ConversationPane({
             onChange={handleRunModeChange}
             showHint={false}
           />
+          {/* Live per-call context usage stays visible while the run produces it. */}
+          <ContextUsageButton
+            novelId={novel.id}
+            modelId={detail.run.modelId}
+            events={detail.events}
+          />
           <p className="min-w-0 flex-1 truncate border-l-2 border-primary/40 pl-2 text-xs text-muted-foreground">
             “{detail.run.goal}”
           </p>
@@ -813,6 +807,8 @@ export function ConversationPane({
             onTogglePin={(ref) => togglePin(novel.id, ref)}
             onClearPins={() => clearPins(novel.id)}
             pinOptions={pinOptions}
+            novelId={novel.id}
+            usageEvents={detail?.events ?? []}
           />
         </div>
       )}

@@ -18,6 +18,11 @@
 // this system's equivalent of external knowledge (story snapshot + pinned
 // refs). Token counts are estimates (cl100k for latin, 0.7 tok/char for CJK)
 // and the footer says so.
+//
+// Placement: the COMPOSER TOOLBAR, left cluster (next to the + pin button) —
+// run parameters live on the composer row, not in the pane header. The same
+// button also appears in the run control bar while a run is active, so the
+// live per-call numbers stay visible exactly when they are being produced.
 // ---------------------------------------------------------------------------
 
 import { useEffect, useMemo, useState } from "react";
@@ -111,7 +116,7 @@ export function ContextUsageButton({
           type="button"
           variant="outline"
           size="sm"
-          className="h-7 gap-1.5 rounded-full px-2.5 text-[11px] font-medium"
+          className="h-8 gap-1.5 rounded-full px-2.5 text-[11px] font-medium"
           aria-label="Context usage"
           title="Context usage — what each team call sends to the model"
         >
@@ -121,7 +126,7 @@ export function ContextUsageButton({
           </span>
         </Button>
       </PopoverTrigger>
-      <PopoverContent align="end" className="w-72 rounded-xl p-4">
+      <PopoverContent align="start" className="w-72 rounded-xl p-4">
         <div className="flex items-baseline justify-between gap-2">
           <p className="text-xs font-semibold">Context Usage</p>
           <p className="text-[10px] text-muted-foreground">{model.label}</p>
