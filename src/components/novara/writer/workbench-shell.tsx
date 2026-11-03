@@ -53,6 +53,7 @@ import {
   deleteChapter,
   deleteCharacter,
   deleteOutlineBeat,
+  deletePack,
   deleteVolume,
   deleteWorldEntry,
   requestAiDraft,
@@ -60,12 +61,16 @@ import {
   updateCharacter,
   updateNovel,
   updateOutlineBeat,
+  updatePack,
   updateVolume,
   updateWorldEntry,
+  upsertPack,
 } from "@/lib/novara/api";
 import type {
   AiDraftResult,
   ChapterDTO,
+  ChapterPackDTO,
+  ChapterPackKind,
   ChapterStatus,
   CharacterDTO,
   NovelDetail,
@@ -126,11 +131,13 @@ export function WorkbenchShell({
   const selectedCharacterId = useWriterStore((s) => s.selectedCharacterByNovel[novel.id] ?? null);
   const selectedWorldId = useWriterStore((s) => s.selectedWorldByNovel[novel.id] ?? null);
   const selectedVolumeId = useWriterStore((s) => s.selectedVolumeByNovel[novel.id] ?? null);
+  const selectedPackKey = useWriterStore((s) => s.selectedPackKeyByNovel[novel.id] ?? null);
   const selectChapter = useWriterStore((s) => s.selectChapter);
   const selectBeat = useWriterStore((s) => s.selectBeat);
   const selectCharacter = useWriterStore((s) => s.selectCharacter);
   const selectWorld = useWriterStore((s) => s.selectWorld);
   const selectVolume = useWriterStore((s) => s.selectVolume);
+  const selectPack = useWriterStore((s) => s.selectPack);
   const setArtifactTab = useWriterStore((s) => s.setArtifactTab);
 
   const [mobileView, setMobileView] = useState<MobileView>("chat");
@@ -213,6 +220,43 @@ export function WorkbenchShell({
     },
     [novel.id, revealArtifacts, selectVolume, setArtifactTab]
   );
+
+  /** Tree canon row → the read-only final-chapter document (定稿区). */
+  const handleOpenCanonChapter = useCallback(
+    (chapterId: string) => {
+      selectChapter(novel.id, chapterId);
+      setArtifactTab(novel.id, "canon");
+      revealArtifacts();
+    },
+    [novel.id, revealArtifacts, selectChapter, setArtifactTab]
+  );
+
+  /** Tree pack row → the focused pack document in the Packs view. */
+  const handleOpenPack = useCallback(
+    (kind: ChapterPackKind, chapterIndex: number) => {
+      selectPack(novel.id, `${kind}:${chapterIndex}`);
+      setArtifactTab(novel.id, "packs");
+      revealArtifacts();
+    },
+    [novel.id, revealArtifacts, selectPack, setArtifactTab]
+  );
+
+  /** Tree "+" button in a pack group → create/replace a pack for the next chapter. */
+  const handleAddPack = async (kind: ChapterPackKind) => {
+    const nextIndex = detail.chapters.length + 1;
+    const ok = await wrap(() =>
+      upsertPack(novel.id, {
+        kind,
+        chapterIndex: nextIndex,
+        title: `Chapter ${nextIndex}`,
+      })
+    );
+    if (ok) {
+      selectPack(novel.id, `${kind}:${nextIndex}`);
+      setArtifactTab(novel.id, "packs");
+      revealArtifacts();
+    }
+  };
 
   // ---- chapter handlers ----
 
@@ -406,6 +450,26 @@ export function WorkbenchShell({
     onDeleteVolume: (v: VolumeDTO) =>
       wrap(() => deleteVolume(v.id)).then(() => undefined),
     onRefresh: refresh,
+    // ---- Phase 8: packs ----
+    selectedPackKey,
+    onSelectPack: (key: string | null) => selectPack(novel.id, key),
+    onUpsertPack: (kind: ChapterPackKind, chapterIndex: number) =>
+      wrap(() => upsertPack(novel.id, { kind, chapterIndex }), "Pack created"),
+    onUpdatePack: (id: string, patch: { title?: string; content?: string }) =>
+      wrap(() => updatePack(id, patch), "Pack saved"),
+    onDeletePack: (p: ChapterPackDTO) =>
+      wrap(() => deletePack(p.id)).then(() => undefined),
+    // ---- Phase 8: contract + concept documents ----
+    onSaveContract: (content: string) =>
+      wrap(() => updateNovel(novel.id, { contract: content }), "Story contract saved"),
+    onSaveConcept: (content: string) =>
+      wrap(() => updateNovel(novel.id, { conceptSnapshot: content }), "Concept snapshot saved"),
+    // ---- Phase 8: canon ----
+    onOpenChapterInEditor: (chapterId: string) => {
+      selectChapter(novel.id, chapterId);
+      setArtifactTab(novel.id, "draft");
+      revealArtifacts();
+    },
   };
 
   const events = run.detail?.events ?? [];
@@ -429,11 +493,15 @@ export function WorkbenchShell({
           selectedCharacterId={selectedCharacterId}
           selectedWorldId={selectedWorldId}
           selectedVolumeId={selectedVolumeId}
+          selectedPackKey={selectedPackKey}
           onOpenChapter={handleOpenChapter}
           onOpenBeat={handleOpenBeat}
           onOpenCharacter={handleOpenCharacter}
           onOpenWorld={handleOpenWorld}
           onOpenVolume={handleOpenVolume}
+          onOpenPack={handleOpenPack}
+          onAddPack={handleAddPack}
+          onOpenCanonChapter={handleOpenCanonChapter}
           onOpenArtifactTab={handleOpenArtifactTab}
           onAddChapter={handleAddChapter}
           onEditDetails={() => setEditOpen(true)}
@@ -450,6 +518,9 @@ export function WorkbenchShell({
           chapterCount={detail.chapters.length}
           run={run}
           onOpenPreview={() => setPreviewOpen(true)}
+          activeChapter={
+            detail.chapters.find((c) => c.id === selectedChapterId) ?? null
+          }
         />
       </section>
 

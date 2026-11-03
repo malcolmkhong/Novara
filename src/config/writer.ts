@@ -115,7 +115,20 @@ export const REVIEW_SEVERITY_META: Record<
 export type CenterView = "chat" | "board";
 
 /** Right pane artifact views. */
-export type ArtifactTabId = "draft" | "outline" | "bible" | "review" | "memory" | "qc";
+export type ArtifactTabId =
+  // workspace + plan zones
+  | "draft"
+  | "packs"
+  | "outline"
+  | "canon"
+  // information zones
+  | "bible"
+  | "contract"
+  | "ledger"
+  | "memory"
+  // verification zones
+  | "review"
+  | "qc";
 
 export interface ArtifactTabDef {
   id: ArtifactTabId;
@@ -124,12 +137,21 @@ export interface ArtifactTabDef {
   phaseTag?: string;
 }
 
+/**
+ * Tab order mirrors the repository zones (Phase 8): workspace (Draft/Packs),
+ * plan (Outline/Canon), information (Bible/Contract/Ledger/Memory), then
+ * verification (Review/QC). The strip scrolls horizontally on narrow panes.
+ */
 export const ARTIFACT_TABS: ArtifactTabDef[] = [
   { id: "draft", label: "Draft" },
+  { id: "packs", label: "Packs" },
   { id: "outline", label: "Outline" },
+  { id: "canon", label: "Canon" },
   { id: "bible", label: "Bible" },
-  { id: "review", label: "Review" },
+  { id: "contract", label: "Contract" },
+  { id: "ledger", label: "Ledger" },
   { id: "memory", label: "Memory" },
+  { id: "review", label: "Review" },
   { id: "qc", label: "QC" },
 ];
 

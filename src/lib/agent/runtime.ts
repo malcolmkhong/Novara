@@ -50,6 +50,7 @@ import type {
   AgentRunStatus,
   AgentTask,
   ApprovalKind,
+  PinnedRef,
   RunFinalReport,
 } from "@/lib/novara/agent-types";
 import { parseAgentTurn, type DelegateOrder } from "./tool-protocol";
@@ -139,6 +140,7 @@ type AgentRunRow = {
   mode: string;
   status: string;
   finalReport: string | null;
+  pinnedJson: string | null;
   error: string | null;
   createdAt: Date;
   updatedAt: Date;
@@ -152,6 +154,7 @@ function serializeRun(run: AgentRunRow): AgentRun {
     mode: run.mode as AgentRunMode,
     status: run.status as AgentRunStatus,
     finalReport: parseJsonSafe<RunFinalReport | null>(run.finalReport, null),
+    pinned: parseJsonSafe<PinnedRef[]>(run.pinnedJson, []),
     createdAt: run.createdAt.toISOString(),
     updatedAt: run.updatedAt.toISOString(),
   };
@@ -291,6 +294,7 @@ export async function createRun(params: {
   novelId: string;
   goal: string;
   mode: AgentRunMode;
+  pinned?: PinnedRef[];
 }): Promise<AgentRunDetail> {
   const novel = await db.novel.findUnique({ where: { id: params.novelId }, select: { id: true } });
   if (!novel) throw new NotFoundError("Novel not found");
@@ -303,17 +307,115 @@ export async function createRun(params: {
     throw new ConflictError("This novel already has an active run. Cancel or finish it first.");
   }
 
+  const pinned = (params.pinned ?? []).slice(0, 12);
   const run = await db.agentRun.create({
-    data: { novelId: params.novelId, goal: params.goal, mode: params.mode, status: "running" },
+    data: {
+      novelId: params.novelId,
+      goal: params.goal,
+      mode: params.mode,
+      status: "running",
+      pinnedJson: pinned.length > 0 ? JSON.stringify(pinned) : null,
+    },
   });
   await emitEvent({
     runId: run.id,
     kind: "message",
-    summary: `Leader received the goal: “${truncate(params.goal, 200)}”`,
+    summary: `Leader received the goal: “${truncate(params.goal, 200)}”${
+      pinned.length > 0 ? ` — ${pinned.length} pinned context ref(s) attached` : ""
+    }`,
   });
   const detail = await getRunDetail(run.id);
   if (!detail) throw new Error("Run vanished right after creation");
   return detail;
+}
+
+// ---------------------------------------------------------------------------
+// Pinned context (Phase 8 — Pin-to-Chat). The runtime RESOLVES each pinned
+// ref against the DB — client labels are display-only, client content is
+// never trusted. Missing/deleted refs are skipped with a note.
+// ---------------------------------------------------------------------------
+
+const PINNED_CHAR_CAP = 6000;
+
+async function buildPinnedContext(
+  novelId: string,
+  refs: PinnedRef[]
+): Promise<string | null> {
+  if (refs.length === 0) return null;
+  const blocks: string[] = [];
+  const skipped: string[] = [];
+
+  for (const ref of refs) {
+    const cap = (text: string) => truncate(text, PINNED_CHAR_CAP);
+    try {
+      if (ref.type === "chapter") {
+        const ch = await db.chapter.findFirst({ where: { id: ref.id, novelId } });
+        if (ch) {
+          blocks.push(
+            `[PINNED CHAPTER] 第${ch.index}章 ${ch.title} (status: ${ch.status}, ${ch.wordCount} words)\n${cap(ch.content)}`
+          );
+        } else skipped.push(ref.label);
+      } else if (ref.type === "character") {
+        const c = await db.character.findFirst({ where: { id: ref.id, novelId } });
+        if (c) {
+          blocks.push(
+            `[PINNED CHARACTER] ${c.name} (${c.role || "role unspecified"})\n${cap(c.description)}`
+          );
+        } else skipped.push(ref.label);
+      } else if (ref.type === "world_entry") {
+        const w = await db.worldEntry.findFirst({ where: { id: ref.id, novelId } });
+        if (w) {
+          blocks.push(`[PINNED WORLD RULE] ${w.title} (${w.category})\n${cap(w.content)}`);
+        } else skipped.push(ref.label);
+      } else if (ref.type === "outline_beat") {
+        const b = await db.outlineBeat.findFirst({ where: { id: ref.id, novelId } });
+        if (b) {
+          blocks.push(`[PINNED OUTLINE BEAT] #${b.index} ${b.title}\n${cap(b.summary)}`);
+        } else skipped.push(ref.label);
+      } else if (ref.type === "volume") {
+        const v = await db.volume.findFirst({ where: { id: ref.id, novelId } });
+        if (v) {
+          blocks.push(`[PINNED VOLUME PLAN] 卷${String(v.index).padStart(2, "0")} ${v.title}\n${cap(v.synopsis)}`);
+        } else skipped.push(ref.label);
+      } else if (ref.type === "pack") {
+        const p = await db.chapterPack.findFirst({ where: { id: ref.id, novelId } });
+        if (p) {
+          blocks.push(
+            `[PINNED ${p.kind === "prep" ? "PREP PACK" : "MATERIAL PACK"}] 第${p.chapterIndex}章 ${p.title}\n${cap(p.content)}`
+          );
+        } else skipped.push(ref.label);
+      } else if (ref.type === "contract") {
+        const c = await db.novelContract.findUnique({ where: { novelId } });
+        if (c?.content) {
+          blocks.push(`[PINNED STORY CONTRACT 作品契约]\n${cap(c.content)}`);
+        } else skipped.push(ref.label);
+      } else if (ref.type === "concept") {
+        const n = await db.novel.findUnique({ where: { id: novelId }, select: { conceptSnapshot: true } });
+        if (n?.conceptSnapshot) {
+          blocks.push(`[PINNED CONCEPT SNAPSHOT 构想快照]\n${cap(n.conceptSnapshot)}`);
+        } else skipped.push(ref.label);
+      } else if (ref.type === "digest") {
+        const d = await db.chapterDigest.findFirst({ where: { chapterId: ref.id, novelId } });
+        if (d) {
+          blocks.push(`[PINNED CHAPTER DIGEST 章摘要]\n${cap(d.summary)}`);
+        } else skipped.push(ref.label);
+      } else {
+        skipped.push(ref.label);
+      }
+    } catch {
+      skipped.push(ref.label);
+    }
+  }
+
+  if (blocks.length === 0) return null;
+  const lines = [
+    "PINNED CONTEXT (the author explicitly attached these — treat them as authoritative material for this run):",
+    ...blocks.map((b) => `---\n${b}`),
+  ];
+  if (skipped.length > 0) {
+    lines.push(`(unresolved pins skipped: ${skipped.join(", ")})`);
+  }
+  return lines.join("\n");
 }
 
 // ---------------------------------------------------------------------------
@@ -651,18 +753,85 @@ async function leaderLoop(runId: string, goal: string, signal: AbortSignal): Pro
   const snapshot = await loadStorySnapshot(novelId);
   await emitEvent({ runId, kind: "message", summary: "Atlas is reading the story state and assembling the team…" });
 
+  // Phase 8 — resolve the author's pinned refs against the DB. When a
+  // chapter is pinned, run a deterministic read-only impact assessment
+  // BEFORE the leader loop so the plan is grounded in an impact report
+  // (user flow step 5: check what the change would affect).
+  const pinnedRefs = parseJsonSafe<PinnedRef[]>(run.pinnedJson, []);
+  const pinnedContext = await buildPinnedContext(novelId, pinnedRefs);
+  let impactReport: string | null = null;
+  if (pinnedRefs.some((r) => r.type === "chapter")) {
+    const impactTask = await db.agentTask.create({
+      data: {
+        runId,
+        key: "Task 0",
+        parallelGroup: null,
+        assignee: "sage",
+        title: "Impact assessment (auto — chapter pinned)",
+        detail:
+          "The author pinned chapter material for this run. Produce a concise IMPACT ASSESSMENT before any edits happen: " +
+          "(1) summarize what the pinned chapter(s) establish; (2) list which chapters, characters, timeline events, " +
+          "promises and clues could be affected by the author's goal; (3) flag continuity risks; (4) recommend an " +
+          "execution order. READ-ONLY: do not write or finalize anything.",
+        status: "pending",
+        artifactType: "chapter",
+        artifactId: null,
+        artifactLabel: pinnedRefs.find((r) => r.type === "chapter")?.label ?? null,
+        order: 0,
+      },
+    });
+    await emitEvent({
+      runId,
+      taskId: impactTask.id,
+      actor: "atlas",
+      kind: "task_update",
+      summary: "Task 0 — impact assessment dispatched (read-only, before any edits)",
+    });
+    await executeTask({
+      runId,
+      novelId,
+      task: impactTask,
+      snapshot,
+      signal,
+      measured: { ...ZERO_MEASURED },
+      claimed: {},
+      issues: [],
+      qc: newQcLedger(),
+      extraSkills: [],
+      pinnedContext,
+      readOnly: true,
+      onNarration: (text) => {
+        if (!impactReport) impactReport = text;
+      },
+    });
+    if (signal.aborted) return;
+  }
+
   const atlasSystem = buildSystemPrompt("atlas").prompt;
-  const envelope = [
+  const envelopeParts = [
     `AUTHOR GOAL: ${goal}`,
     "",
+  ];
+  if (impactReport) {
+    envelopeParts.push(
+      "IMPACT ASSESSMENT (Task 0, verified read-only — plan around this):",
+      truncate(impactReport, 2400),
+      ""
+    );
+  }
+  if (pinnedContext) {
+    envelopeParts.push(pinnedContext, "");
+  }
+  envelopeParts.push(
     "STORY SNAPSHOT (measured now):",
     renderSnapshot(snapshot),
     "",
     "LEAD THE TEAM: read what you need, then dispatch work with ```team-delegate",
     "blocks (JSON array of orders). Each executed order's VERIFIED outcome comes",
     "back to you as a tool result — decide the next step from those, never from",
-    "the member's narration alone. Finish with a tool-free reply.",
-  ].join("\n");
+    "the member's narration alone. Finish with a tool-free reply."
+  );
+  const envelope = envelopeParts.join("\n");
 
   type ChatMessage = { role: "assistant" | "user"; content: string };
   const messages: ChatMessage[] = [
@@ -783,6 +952,7 @@ async function leaderLoop(runId: string, goal: string, signal: AbortSignal): Pro
         issues,
         qc,
         extraSkills: d.order.skills ?? [],
+        pinnedContext,
       });
       if (outcome === "skipped") return; // gate stop — handlers own status
       feeds.push(
@@ -908,6 +1078,15 @@ async function executeTask(params: {
   qc: QcLedger;
   /** delegate-supplied skill ids appended after the role's defaults (P5). */
   extraSkills: string[];
+  /** Author-pinned context (Phase 8) appended after the story snapshot. */
+  pinnedContext?: string | null;
+  /** Narration tap — lets the leader capture a member's report text. */
+  onNarration?: (text: string) => void;
+  /**
+   * READ-ONLY task (Phase 8 impact assessment): write/finalize actions are
+   * rejected at the tool gate, not merely discouraged in the brief.
+   */
+  readOnly?: boolean;
 }): Promise<TaskOutcome> {
   const budgets = getBudgets();
   const { runId, novelId, task, snapshot, signal, measured } = params;
@@ -953,6 +1132,9 @@ async function executeTask(params: {
     "STORY SNAPSHOT (measured at run start; use read tools for fresher data):",
     renderSnapshot(snapshot),
   ];
+  if (params.pinnedContext) {
+    envelopeParts.push("", params.pinnedContext);
+  }
   if (assignee === "prism" && /certif|finaliz/i.test(`${task.title} ${task.detail ?? ""}`)) {
     // Phase 6.1 — certify tasks must END in a verified finalize, and the
     // protocol wording here overrides any inverted phrasing that slips into
@@ -965,13 +1147,19 @@ async function executeTask(params: {
         "If blocking issues exist, do NOT finalize: report them so the leader can dispatch repairs.",
     );
   }
-  if (assignee === "sage") {
+  if (assignee === "sage" && !params.readOnly) {
     // Word quota is a writer concern — researchers/analysts don't need it.
     if (targetChapterIndex) {
       envelopeParts.push("", quotaForChapter(snapshot, targetChapterIndex));
     } else {
       envelopeParts.push("", quotaForChapter(snapshot, snapshot.nextChapterIndex));
     }
+  }
+  if (params.readOnly) {
+    envelopeParts.push(
+      "",
+      "READ-ONLY TASK: write, update, finalize and settle actions are DISABLED for this task at the tool gate. Produce your analysis as your final message."
+    );
   }
   envelopeParts.push("", languageDirective(snapshot));
 
@@ -998,11 +1186,13 @@ async function executeTask(params: {
       const parsed = parseAgentTurn(reply);
 
       if (parsed.narration) {
+        const clean = parsed.narration.replace(/BLOCKED[:：][\s\S]*/g, "").trim() || parsed.narration;
+        params.onNarration?.(clean);
         await emitEvent({
           ...taskRef,
           actor: assignee,
           kind: "message",
-          summary: truncate(parsed.narration.replace(/BLOCKED[:：][\s\S]*/g, "").trim() || parsed.narration, 280),
+          summary: truncate(clean, 280),
         });
       }
       if (parsed.blockedReason) {
@@ -1035,6 +1225,16 @@ async function executeTask(params: {
         }
         if (!toolAllowedFor(assignee, call.action.action)) {
           feeds.push(`${i + 1}. [error] ${call.action.action} is not available to your role (${assignee}). Use one of: ${MEMBER_TOOLS[assignee].join(", ")}.`);
+          continue;
+        }
+        if (
+          params.readOnly &&
+          !READ_ACTIONS.has(call.action.action) &&
+          call.action.action !== "finish"
+        ) {
+          feeds.push(
+            `${i + 1}. [rejected] ${call.action.action} is a write action — this task is READ-ONLY (impact assessment). Read, analyze, and report your findings.`
+          );
           continue;
         }
         const result = await executeTool({

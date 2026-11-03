@@ -333,6 +333,7 @@ export const mockAgentRuntime = {
           mode: parsed.mode,
           status: "running",
           finalReport: null,
+          pinned: parsed.pinned ?? [],
           createdAt: now(),
           updatedAt: now(),
         },

@@ -10,11 +10,20 @@
 // ---------------------------------------------------------------------------
 
 import { AlertTriangle, Info, Loader2 } from "lucide-react";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type { AgentEvent, AgentTask } from "@/lib/novara/agent-types";
 import type {
   AiDraftResult,
   ChapterDTO,
+  ChapterPackDTO,
+  ChapterPackKind,
   ChapterStatus,
   CharacterDTO,
   NovelDetail,
@@ -26,6 +35,8 @@ import type { ArtifactTabId } from "@/config/writer";
 import { ARTIFACT_TABS } from "@/config/writer";
 import { useWriterStore } from "@/hooks/use-writer-store";
 import { cn } from "@/lib/utils";
+import { CanonPanel } from "./canon-panel";
+import { ContractPanel } from "./contract-panel";
 import {
   BeatDocument,
   CharacterDocument,
@@ -36,7 +47,9 @@ import {
   WorldPanel,
 } from "./bible-panels";
 import { ChapterEditor } from "./chapter-editor";
+import { LedgerPanel } from "./ledger-panel";
 import { MemoryPanel } from "./memory-panel";
+import { PacksPanel } from "./packs-panel";
 import { QcPanel } from "./qc-panel";
 import { ReviewPanel } from "./review-panel";
 
@@ -49,6 +62,7 @@ type ArtifactScope = "chapter" | "outline_beat" | "world_entry" | "character";
 function scopeForTab(tab: ArtifactTabId): ArtifactScope[] {
   switch (tab) {
     case "draft":
+    case "canon":
       return ["chapter"];
     case "outline":
       return ["outline_beat"];
@@ -91,6 +105,56 @@ function workingTasksForTab(tasks: AgentTask[], tab: ArtifactTabId): AgentTask[]
       t.status === "in_progress" &&
       t.artifactType != null &&
       scopes.includes(t.artifactType)
+  );
+}
+
+// ---------------------------------------------------------------------------
+// 章摘要 (Phase 8) — read-only digest list settled by Review → Settle.
+// ---------------------------------------------------------------------------
+
+function DigestsCard({
+  digests,
+  chapters,
+}: {
+  digests: NovelDetail["digests"];
+  chapters: ChapterDTO[];
+}) {
+  const sorted = [...digests].sort((a, b) => a.chapterIndex - b.chapterIndex);
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <CardTitle className="font-display text-sm">章摘要 · Chapter digests</CardTitle>
+        <CardDescription>
+          Per-chapter recaps the AI chains continuity from (大纲/卷规划/章摘要).
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        {sorted.length === 0 ? (
+          <p className="text-xs text-muted-foreground">
+            No chapter digests yet — run Review → Settle to settle a chapter.
+          </p>
+        ) : (
+          <ul className="nice-scroll max-h-72 space-y-2 overflow-y-auto pr-1">
+            {sorted.map((d) => {
+              const chapter = chapters.find((c) => c.id === d.chapterId);
+              return (
+                <li key={d.chapterId} className="border-b pb-2 last:border-0">
+                  <p className="text-xs font-medium">
+                    第{d.chapterIndex}章
+                    {chapter ? ` · ${chapter.title}` : ""}
+                  </p>
+                  {d.summary && (
+                    <p className="mt-0.5 whitespace-pre-wrap text-xs leading-5 text-muted-foreground">
+                      {d.summary}
+                    </p>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 
@@ -182,6 +246,17 @@ export interface ArtifactPaneHandlers {
   onDeleteVolume: (volume: VolumeDTO) => Promise<void>;
   /** Parent refetch for panel-driven volume create/delete. */
   onRefresh: () => Promise<void>;
+  // ---- Phase 8: packs (草稿区 workspace) ----
+  selectedPackKey: string | null;
+  onSelectPack: (key: string | null) => void;
+  onUpsertPack: (kind: ChapterPackKind, chapterIndex: number) => Promise<boolean>;
+  onUpdatePack: (id: string, patch: { title?: string; content?: string }) => Promise<boolean>;
+  onDeletePack: (pack: ChapterPackDTO) => Promise<void>;
+  // ---- Phase 8: contract + concept documents ----
+  onSaveContract: (content: string) => Promise<boolean>;
+  onSaveConcept: (content: string) => Promise<boolean>;
+  // ---- Phase 8: canon (定稿区 read-only) ----
+  onOpenChapterInEditor: (chapterId: string) => void;
 }
 
 interface ArtifactPaneProps {
@@ -291,6 +366,8 @@ export function ArtifactPane({
                   onDelete={handlers.onDeleteBeat}
                 />
               )}
+              {/* 章摘要 (Phase 8) — chapter digests settled by the pipeline. */}
+              <DigestsCard digests={detail.digests} chapters={detail.chapters} />
             </div>
           </TabsContent>
 
@@ -333,6 +410,47 @@ export function ArtifactPane({
                 </>
               )}
             </div>
+          </TabsContent>
+
+          <TabsContent value="packs" className="mt-0">
+            <PacksPanel
+              packs={detail.packs}
+              chapters={detail.chapters}
+              selectedPackKey={handlers.selectedPackKey}
+              onSelectPack={handlers.onSelectPack}
+              onUpsertPack={handlers.onUpsertPack}
+              onUpdatePack={handlers.onUpdatePack}
+              onDeletePack={handlers.onDeletePack}
+            />
+          </TabsContent>
+
+          <TabsContent value="canon" className="mt-0">
+            <div className="space-y-3">
+              <TabNotices
+                warnings={warningsForTab(events, "canon")}
+                working={workingTasksForTab(tasks, "canon")}
+              />
+              <CanonPanel
+                chapters={detail.chapters}
+                selectedChapterId={handlers.selectedChapterId}
+                onSelectChapter={handlers.onSelectChapter}
+                onOpenChapterInEditor={handlers.onOpenChapterInEditor}
+              />
+            </div>
+          </TabsContent>
+
+          <TabsContent value="contract" className="mt-0">
+            <ContractPanel
+              novelId={novelId}
+              contract={detail.contract}
+              conceptSnapshot={detail.novel.conceptSnapshot}
+              onSaveContract={handlers.onSaveContract}
+              onSaveConcept={handlers.onSaveConcept}
+            />
+          </TabsContent>
+
+          <TabsContent value="ledger" className="mt-0">
+            <LedgerPanel novelId={novelId} />
           </TabsContent>
 
           <TabsContent value="review" className="mt-0">

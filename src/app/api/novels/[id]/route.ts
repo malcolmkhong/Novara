@@ -4,7 +4,9 @@ import { jsonError, parseBody, validationError } from "@/lib/novara/api-helpers"
 import { toSummary } from "@/lib/novara/summary";
 import type {
   ChapterDTO,
+  ChapterPackDTO,
   CharacterDTO,
+  DigestDTO,
   NovelDetail,
   OutlineBeatDTO,
   VolumeDTO,
@@ -28,6 +30,9 @@ export async function GET(_req: Request, { params }: Params) {
       outlineBeats: { orderBy: { index: "asc" } },
       volumes: { orderBy: { index: "asc" } },
       contract: true,
+      // Phase 8 — the 草稿区 workspace documents + 章摘要 (tree-visible).
+      packs: { orderBy: [{ chapterIndex: "asc" }, { kind: "asc" }] },
+      digests: { orderBy: { updatedAt: "desc" } },
     },
   });
   if (!novel) return jsonError("Novel not found", 404);
@@ -40,6 +45,8 @@ export async function GET(_req: Request, { params }: Params) {
       synopsis: novel.synopsis,
       targetWords: novel.targetWords,
       status: novel.status as NovelDetail["novel"]["status"],
+      // Phase 8 — 构想快照 rides on NovelMeta so the tree can open it.
+      conceptSnapshot: novel.conceptSnapshot,
       createdAt: novel.createdAt.toISOString(),
       updatedAt: novel.updatedAt.toISOString(),
     },
@@ -99,6 +106,25 @@ export async function GET(_req: Request, { params }: Params) {
       })
     ),
     contract: novel.contract?.content ?? null,
+    packs: novel.packs.map(
+      (p): ChapterPackDTO => ({
+        id: p.id,
+        novelId: p.novelId,
+        kind: p.kind as ChapterPackDTO["kind"],
+        chapterIndex: p.chapterIndex,
+        title: p.title,
+        content: p.content,
+        updatedAt: p.updatedAt.toISOString(),
+      })
+    ),
+    digests: novel.digests.map(
+      (d): DigestDTO => ({
+        chapterId: d.chapterId,
+        chapterIndex: d.novelId ? novel.chapters.find((c) => c.id === d.chapterId)?.index ?? 0 : 0,
+        summary: d.summary,
+        updatedAt: d.updatedAt.toISOString(),
+      })
+    ),
   };
   return Response.json(detail);
 }
@@ -132,7 +158,7 @@ export async function PATCH(req: Request, { params }: Params) {
     data: novelData,
     include: { chapters: { select: { wordCount: true } } },
   });
-  return Response.json({ novel: toSummary(novel) });
+  return Response.json({ novel: { ...toSummary(novel), conceptSnapshot: novel.conceptSnapshot } });
 }
 
 // DELETE /api/novels/[id] — delete novel and (cascade) all its content

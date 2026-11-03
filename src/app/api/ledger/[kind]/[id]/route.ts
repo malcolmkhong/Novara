@@ -6,7 +6,7 @@ export const dynamic = "force-dynamic";
 
 type Params = { params: Promise<{ id: string; kind: string }> };
 
-const KINDS = new Set(["storyline", "timeline", "arc"]);
+const KINDS = new Set(["storyline", "timeline", "arc", "promise", "clue"]);
 
 // PATCH /api/ledger/[kind]/[id] — update one ledger row.
 // timeline/arc rows support moveTo (renumber the sibling sequence server-side).
@@ -71,33 +71,72 @@ export async function PATCH(req: Request, { params }: Params) {
   }
 
   // schema.data.kind === "arc"
-  const existing = await db.characterArc.findUnique({ where: { id } });
-  if (!existing) return jsonError("Character arc not found", 404);
-  const { moveTo, characterName, note, chapterIndex } = schema.data.data;
-  if (moveTo !== undefined && moveTo !== existing.order) {
-    const siblings = await db.characterArc.findMany({
-      where: { novelId: existing.novelId, characterName: existing.characterName },
-      orderBy: { order: "asc" },
-      select: { id: true },
+  if (schema.data.kind === "arc") {
+    const existing = await db.characterArc.findUnique({ where: { id } });
+    if (!existing) return jsonError("Character arc not found", 404);
+    const { moveTo, characterName, note, chapterIndex } = schema.data.data;
+    if (moveTo !== undefined && moveTo !== existing.order) {
+      const siblings = await db.characterArc.findMany({
+        where: { novelId: existing.novelId, characterName: existing.characterName },
+        orderBy: { order: "asc" },
+        select: { id: true },
+      });
+      const clamped = Math.max(1, Math.min(moveTo, siblings.length));
+      const without = siblings.filter((a) => a.id !== id);
+      without.splice(clamped - 1, 0, { id });
+      await db.$transaction(
+        without.map((a, i) =>
+          db.characterArc.update({ where: { id: a.id }, data: { order: i + 1 } })
+        )
+      );
+    }
+    const row = await db.characterArc.update({
+      where: { id },
+      data: {
+        ...(characterName !== undefined ? { characterName } : {}),
+        ...(note !== undefined ? { note } : {}),
+        ...(chapterIndex !== undefined ? { chapterIndex } : {}),
+      },
     });
-    const clamped = Math.max(1, Math.min(moveTo, siblings.length));
-    const without = siblings.filter((a) => a.id !== id);
-    without.splice(clamped - 1, 0, { id });
-    await db.$transaction(
-      without.map((a, i) =>
-        db.characterArc.update({ where: { id: a.id }, data: { order: i + 1 } })
-      )
-    );
+    return Response.json({ row });
   }
-  const row = await db.characterArc.update({
+
+  // Phase 8 — promise rows are flat updates (no ordering). Status moves are
+  // plain writes: the ledger is plan-level truth curated by author and agent.
+if (schema.data.kind === "promise") {
+  const existing = await db.storyPromise.findUnique({ where: { id } });
+  if (!existing) return jsonError("Promise not found", 404);
+  const { content, status, madeChapter, dueChapter } = schema.data.data;
+  const row = await db.storyPromise.update({
     where: { id },
     data: {
-      ...(characterName !== undefined ? { characterName } : {}),
-      ...(note !== undefined ? { note } : {}),
-      ...(chapterIndex !== undefined ? { chapterIndex } : {}),
+      ...(content !== undefined ? { content } : {}),
+      ...(status !== undefined ? { status } : {}),
+      ...(madeChapter !== undefined ? { madeChapter } : {}),
+      ...(dueChapter !== undefined ? { dueChapter } : {}),
     },
   });
   return Response.json({ row });
+}
+
+// schema.data.kind === "clue"
+if (schema.data.kind === "clue") {
+  const existingClue = await db.storyClue.findUnique({ where: { id } });
+  if (!existingClue) return jsonError("Clue not found", 404);
+  const clueData = schema.data.data;
+  const clueRow = await db.storyClue.update({
+    where: { id },
+    data: {
+      ...(clueData.content !== undefined ? { content: clueData.content } : {}),
+      ...(clueData.status !== undefined ? { status: clueData.status } : {}),
+      ...(clueData.plantChapter !== undefined ? { plantChapter: clueData.plantChapter } : {}),
+      ...(clueData.revealChapter !== undefined ? { revealChapter: clueData.revealChapter } : {}),
+    },
+  });
+  return Response.json({ row: clueRow });
+}
+
+return jsonError(`Unknown ledger kind: ${kind}`, 404);
 }
 
 // DELETE /api/ledger/[kind]/[id] — remove one ledger row and close the gap.
@@ -133,25 +172,41 @@ export async function DELETE(_req: Request, { params }: Params) {
   }
 
   // kind === "arc"
-  const existing = await db.characterArc.findUnique({ where: { id } });
-  if (!existing) return jsonError("Character arc not found", 404);
-  const later = await db.characterArc.findMany({
-    where: {
-      novelId: existing.novelId,
-      characterName: existing.characterName,
-      order: { gt: existing.order },
-    },
-    orderBy: { order: "asc" },
-    select: { id: true },
-  });
-  await db.$transaction([
-    db.characterArc.delete({ where: { id } }),
-    ...later.map((a, i) =>
-      db.characterArc.update({
-        where: { id: a.id },
-        data: { order: existing.order + i },
-      })
-    ),
-  ]);
+  if (kind === "arc") {
+    const existing = await db.characterArc.findUnique({ where: { id } });
+    if (!existing) return jsonError("Character arc not found", 404);
+    const later = await db.characterArc.findMany({
+      where: {
+        novelId: existing.novelId,
+        characterName: existing.characterName,
+        order: { gt: existing.order },
+      },
+      orderBy: { order: "asc" },
+      select: { id: true },
+    });
+    await db.$transaction([
+      db.characterArc.delete({ where: { id } }),
+      ...later.map((a, i) =>
+        db.characterArc.update({
+          where: { id: a.id },
+          data: { order: existing.order + i },
+        })
+      ),
+    ]);
+    return Response.json({ ok: true });
+  }
+
+  // Phase 8 — promise / clue rows delete flat (no ordering to repair).
+  if (kind === "promise") {
+    const existing = await db.storyPromise.findUnique({ where: { id } });
+    if (!existing) return jsonError("Promise not found", 404);
+    await db.storyPromise.delete({ where: { id } });
+    return Response.json({ ok: true });
+  }
+
+  // kind === "clue"
+  const existingClue = await db.storyClue.findUnique({ where: { id } });
+  if (!existingClue) return jsonError("Clue not found", 404);
+  await db.storyClue.delete({ where: { id } });
   return Response.json({ ok: true });
 }

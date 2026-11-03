@@ -59,6 +59,7 @@ export async function POST(req: Request) {
       novelId: schema.data.novelId,
       goal: schema.data.goal,
       mode: schema.data.mode,
+      pinned: schema.data.pinned,
     });
     // Execute in the background — the board fills in via SSE.
     after(async () => {

@@ -101,6 +101,7 @@ export const liveAgentGateway: AgentGateway = {
         novelId: options.novelId,
         goal: options.goal,
         mode: options.mode,
+        ...(options.pinned && options.pinned.length > 0 ? { pinned: options.pinned } : {}),
       }),
     });
     return res.detail;

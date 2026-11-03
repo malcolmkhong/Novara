@@ -32,6 +32,8 @@ export interface NovelMeta {
   synopsis: string;
   targetWords: number;
   status: NovelStatus;
+  /** 构想快照 (Phase 8) — initial creative vision markdown; empty when absent. */
+  conceptSnapshot: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -94,6 +96,53 @@ export interface VolumeDTO {
 
 export type StorylineStatus = "active" | "dormant" | "resolved";
 
+// ---- Phase 8: ledger completion (承诺 / 线索) ------------------------------
+
+export type PromiseStatus = "open" | "fulfilled" | "broken";
+
+export interface StoryPromiseDTO {
+  id: string;
+  novelId: string;
+  content: string;
+  status: PromiseStatus;
+  madeChapter: number | null;
+  dueChapter: number | null;
+  updatedAt: string;
+}
+
+export type ClueStatus = "planted" | "surfaced" | "revealed";
+
+export interface StoryClueDTO {
+  id: string;
+  novelId: string;
+  content: string;
+  status: ClueStatus;
+  plantChapter: number | null;
+  revealChapter: number | null;
+  updatedAt: string;
+}
+
+// ---- Phase 8: 草稿区 workspace (材料包 / 定稿准备包 / 章摘要) --------------
+
+export type ChapterPackKind = "material" | "prep";
+
+export interface ChapterPackDTO {
+  id: string;
+  novelId: string;
+  kind: ChapterPackKind;
+  chapterIndex: number;
+  title: string;
+  content: string;
+  updatedAt: string;
+}
+
+export interface DigestDTO {
+  chapterId: string;
+  chapterIndex: number;
+  summary: string;
+  updatedAt: string;
+}
+
 export interface StorylineDTO {
   id: string;
   novelId: string;
@@ -127,6 +176,8 @@ export interface LedgerView {
   storylines: StorylineDTO[];
   timeline: TimelineEntryDTO[];
   arcs: CharacterArcDTO[];
+  promises: StoryPromiseDTO[];
+  clues: StoryClueDTO[];
 }
 
 export interface NovelDetail {
@@ -138,6 +189,10 @@ export interface NovelDetail {
   volumes: VolumeDTO[];
   /** Story contract (作品契约) markdown — null when never written. */
   contract: string | null;
+  /** 草稿区 workspace documents (材料包 + 定稿准备包) — Phase 8. */
+  packs: ChapterPackDTO[];
+  /** 章摘要 (chapter digests) — tree-visible under 卷规划. */
+  digests: DigestDTO[];
 }
 
 // ---------------------------------------------------------------------------

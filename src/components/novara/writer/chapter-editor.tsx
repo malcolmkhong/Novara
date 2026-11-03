@@ -40,7 +40,7 @@ import { getChapterVersions, type ChapterVersionRow } from "@/lib/novara/api";
 import type { AiDraftResult, ChapterDTO, ChapterStatus } from "@/lib/novara/types";
 import { countWords, formatWordCount } from "@/lib/novara/words";
 import { cn } from "@/lib/utils";
-import { ChapterStatusBadge, ConfirmDialog } from "./ui-bits";
+import { ChapterStatusBadge, ConfirmDialog, PinButton } from "./ui-bits";
 import { MarkdownDocument } from "./markdown-document";
 
 /** Editor surface: raw writing vs rendered document window. */
@@ -710,6 +710,15 @@ export function ChapterEditor({
                 <History className="h-4 w-4" aria-hidden="true" />
                 History
               </Button>
+              <PinButton
+                novelId={selected.novelId}
+                target={{
+                  type: "chapter",
+                  id: selected.id,
+                  label: `第${selected.index}章 ${selected.title}`,
+                }}
+                label="Pin to chat"
+              />
               <span>{formatWordCount(countWords(content))} words</span>
               {dirty && view === "write" && (
                 <span className="flex items-center gap-1 text-amber-700">

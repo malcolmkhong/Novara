@@ -9,7 +9,7 @@
 // ---------------------------------------------------------------------------
 
 import { create } from "zustand";
-import type { AgentRunMode } from "@/lib/novara/agent-types";
+import type { AgentRunMode, PinnedRef } from "@/lib/novara/agent-types";
 import type { ArtifactTabId, CenterView } from "@/config/writer";
 
 interface WriterState {
@@ -27,6 +27,16 @@ interface WriterState {
   selectedWorldByNovel: Record<string, string | null>;
   /** Tree-opened volume per novel id (focused plan in the Outline view). */
   selectedVolumeByNovel: Record<string, string | null>;
+  /**
+   * Tree-opened chapter pack per novel id (focused document in the Packs
+   * view). Key shape: `${kind}:${chapterIndex}` (e.g. "material:9").
+   */
+  selectedPackKeyByNovel: Record<string, string | null>;
+  /**
+   * Pinned context refs per novel id (Phase 8 Pin-to-Chat) — shown as chips
+   * in the conversation composer and resolved server-side at run start.
+   */
+  pinnedByNovel: Record<string, PinnedRef[]>;
   /** Last execution mode chosen by the author (defaults to approval, D2). */
   lastMode: AgentRunMode;
   setCenterView: (novelId: string, view: CenterView) => void;
@@ -36,6 +46,9 @@ interface WriterState {
   selectCharacter: (novelId: string, characterId: string | null) => void;
   selectWorld: (novelId: string, worldId: string | null) => void;
   selectVolume: (novelId: string, volumeId: string | null) => void;
+  selectPack: (novelId: string, key: string | null) => void;
+  togglePin: (novelId: string, ref: PinnedRef) => void;
+  clearPins: (novelId: string) => void;
   setLastMode: (mode: AgentRunMode) => void;
 }
 
@@ -47,6 +60,8 @@ export const useWriterStore = create<WriterState>((set) => ({
   selectedCharacterByNovel: {},
   selectedWorldByNovel: {},
   selectedVolumeByNovel: {},
+  selectedPackKeyByNovel: {},
+  pinnedByNovel: {},
   lastMode: "approval",
   setCenterView: (novelId, view) =>
     set((s) => ({ centerViewByNovel: { ...s.centerViewByNovel, [novelId]: view } })),
@@ -72,5 +87,20 @@ export const useWriterStore = create<WriterState>((set) => ({
     set((s) => ({
       selectedVolumeByNovel: { ...s.selectedVolumeByNovel, [novelId]: volumeId },
     })),
+  selectPack: (novelId, key) =>
+    set((s) => ({
+      selectedPackKeyByNovel: { ...s.selectedPackKeyByNovel, [novelId]: key },
+    })),
+  togglePin: (novelId, ref) =>
+    set((s) => {
+      const current = s.pinnedByNovel[novelId] ?? [];
+      const exists = current.some((p) => p.type === ref.type && p.id === ref.id);
+      const next = exists
+        ? current.filter((p) => !(p.type === ref.type && p.id === ref.id))
+        : [...current, ref].slice(-12);
+      return { pinnedByNovel: { ...s.pinnedByNovel, [novelId]: next } };
+    }),
+  clearPins: (novelId) =>
+    set((s) => ({ pinnedByNovel: { ...s.pinnedByNovel, [novelId]: [] } })),
   setLastMode: (mode) => set({ lastMode: mode }),
 }));

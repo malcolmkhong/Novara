@@ -16,6 +16,7 @@
 import { useEffect, useRef, useState } from "react";
 import {
   AlertTriangle,
+  BookOpenText,
   CheckCircle2,
   ChevronDown,
   ChevronRight,
@@ -25,6 +26,7 @@ import {
   PanelRight,
   PauseCircle,
   PenLine,
+  Pin,
   ShieldCheck,
   Sparkles,
   Wrench,
@@ -393,6 +395,7 @@ export function ConversationPane({
   chapterCount,
   run,
   onOpenPreview,
+  activeChapter,
 }: {
   novel: NovelMeta;
   /** Real chapter count, so mock gate labels name the next chapter. */
@@ -401,12 +404,21 @@ export function ConversationPane({
   run: UseAgentRunResult;
   /** Open the artifact pane as an overlay (screens narrower than xl). */
   onOpenPreview?: () => void;
+  /**
+   * Currently open chapter (Phase 8 quick actions: 审读/定稿/续写 presets).
+   * Null when no chapter is selected.
+   */
+  activeChapter?: { index: number; title: string } | null;
 }) {
   const { toast } = useToast();
   const view = useWriterStore((s) => s.centerViewByNovel[novel.id] ?? "chat");
   const setView = useWriterStore((s) => s.setCenterView);
   const lastMode = useWriterStore((s) => s.lastMode);
   const setLastMode = useWriterStore((s) => s.setLastMode);
+  const pinnedOrUndef = useWriterStore((s) => s.pinnedByNovel[novel.id]);
+  const pinned = pinnedOrUndef ?? [];
+  const togglePin = useWriterStore((s) => s.togglePin);
+  const clearPins = useWriterStore((s) => s.clearPins);
 
   const [goal, setGoal] = useState("");
   const [mode, setMode] = useState<AgentRunMode>(lastMode);
@@ -470,8 +482,33 @@ export function ConversationPane({
         chapterCount,
         goal: goal.trim(),
         mode,
+        pinned,
       });
       setGoal("");
+    } catch (e) {
+      toast({
+        title: "Could not start run",
+        description: e instanceof Error ? e.message : "Unknown error",
+        variant: "destructive",
+      });
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  /** Quick action (Phase 8): start a run with a preset goal + the current pins. */
+  const handleQuickAction = async (presetGoal: string) => {
+    if (submitting || isActive) return;
+    setSubmitting(true);
+    try {
+      await run.start({
+        novelId: novel.id,
+        novelTitle: novel.title,
+        chapterCount,
+        goal: presetGoal,
+        mode,
+        pinned,
+      });
     } catch (e) {
       toast({
         title: "Could not start run",
@@ -741,6 +778,91 @@ export function ConversationPane({
         </div>
       ) : (
         <div className="border-t bg-card/60 p-3">
+          {/* Quick actions (Phase 8) — one-click agent flows on the active chapter */}
+          {activeChapter && (
+            <div className="mb-2 flex flex-wrap items-center gap-1.5">
+              <span className="flex items-center gap-1 text-[11px] text-muted-foreground">
+                <Zap className="h-3 w-3" aria-hidden="true" />
+                Quick actions
+              </span>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-7 gap-1 px-2 text-[11px]"
+                disabled={submitting}
+                onClick={() =>
+                  void handleQuickAction(
+                    `Review 第${activeChapter.index}章 "${activeChapter.title}". Run the review core, report every finding, and dispatch repairs for blocking issues.`
+                  )
+                }
+              >
+                <ShieldCheck className="h-3 w-3" aria-hidden="true" />
+                审读本章
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-7 gap-1 px-2 text-[11px]"
+                disabled={submitting}
+                onClick={() =>
+                  void handleQuickAction(
+                    `Certify and finalize 第${activeChapter.index}章 "${activeChapter.title}". Review first; if 0 blocking issues, finalize the chapter and settle its memory.`
+                  )
+                }
+              >
+                <BookOpenText className="h-3 w-3" aria-hidden="true" />
+                定稿本章
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-7 gap-1 px-2 text-[11px]"
+                disabled={submitting}
+                onClick={() =>
+                  void handleQuickAction(
+                    `Draft 第${chapterCount + 1}章 from the outline beats, volume plan and story memory — continue the story faithfully.`
+                  )
+                }
+              >
+                <PenLine className="h-3 w-3" aria-hidden="true" />
+                续写下一章
+              </Button>
+            </div>
+          )}
+
+          {/* Pinned context chips (Phase 8 Pin-to-Chat) */}
+          {pinned.length > 0 && (
+            <div
+              className="mb-2 flex flex-wrap items-center gap-1.5 rounded-md border border-dashed bg-background px-2 py-1.5"
+              aria-label="Pinned context"
+            >
+              <span className="flex items-center gap-1 text-[11px] text-muted-foreground">
+                <Pin className="h-3 w-3" aria-hidden="true" />
+                Pinned ({pinned.length}) — attached to the next run:
+              </span>
+              {pinned.map((ref) => (
+                <button
+                  key={`${ref.type}:${ref.id}`}
+                  type="button"
+                  onClick={() => togglePin(novel.id, ref)}
+                  className="flex max-w-[220px] items-center gap-1 rounded-full border bg-muted px-2 py-0.5 text-[11px] text-foreground transition-colors hover:bg-muted/60"
+                  aria-label={`Unpin ${ref.label}`}
+                  title="Click to unpin"
+                >
+                  <span className="truncate">{ref.label}</span>
+                  <X className="h-3 w-3 shrink-0 text-muted-foreground" aria-hidden="true" />
+                </button>
+              ))}
+              <button
+                type="button"
+                onClick={() => clearPins(novel.id)}
+                className="ml-1 text-[11px] text-muted-foreground underline-offset-2 hover:underline"
+              >
+                Clear all
+              </button>
+            </div>
+          )}
+
           <div className="space-y-1.5">
             <Label htmlFor="agent-goal" className="sr-only">
               Run goal

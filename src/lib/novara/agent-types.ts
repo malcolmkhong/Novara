@@ -52,8 +52,38 @@ export interface AgentRun {
   mode: AgentRunMode;
   status: AgentRunStatus;
   finalReport: RunFinalReport | null;
+  /** Pinned context refs the author attached in the chat composer (Phase 8). */
+  pinned: PinnedRef[];
   createdAt: string;
   updatedAt: string;
+}
+
+// ---------------------------------------------------------------------------
+// Pinned context (Phase 8 — Pin-to-Chat)
+// ---------------------------------------------------------------------------
+
+/**
+ * A reference the author pinned into the chat composer before starting a
+ * run. The runtime RESOLVES each ref against the DB (never trusts client
+ * content) and injects the material into the leader + member envelopes.
+ */
+export type PinnedRefType =
+  | "chapter"
+  | "character"
+  | "world_entry"
+  | "outline_beat"
+  | "volume"
+  | "pack"
+  | "contract"
+  | "concept"
+  | "digest";
+
+export interface PinnedRef {
+  type: PinnedRefType;
+  /** DB id of the target (empty for novel-level docs like contract). */
+  id: string;
+  /** Display label for the chip tray (e.g. "第8章 · The Inspection"). */
+  label: string;
 }
 
 // ---------------------------------------------------------------------------

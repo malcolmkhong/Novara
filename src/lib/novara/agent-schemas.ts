@@ -8,10 +8,29 @@ import { z } from "zod";
 
 export const agentRunModeSchema = z.enum(["approval", "full_access"]);
 
+// Phase 8 — Pin-to-Chat: refs the author attached in the composer. The
+// runtime resolves ids against the DB; labels are display-only.
+export const pinnedRefSchema = z.object({
+  type: z.enum([
+    "chapter",
+    "character",
+    "world_entry",
+    "outline_beat",
+    "volume",
+    "pack",
+    "contract",
+    "concept",
+    "digest",
+  ]),
+  id: z.string().max(64),
+  label: z.string().max(200),
+});
+
 export const startRunInputSchema = z.object({
   novelId: z.string().min(1),
   goal: z.string().trim().min(3, "Describe the goal (at least 3 characters)").max(2000),
   mode: agentRunModeSchema,
+  pinned: z.array(pinnedRefSchema).max(12).optional(),
 });
 export type StartRunInput = z.infer<typeof startRunInputSchema>;
 

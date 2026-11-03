@@ -38,6 +38,7 @@ import {
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { addVolume, deleteVolume } from "@/lib/novara/api";
+import type { PinnedRef } from "@/lib/novara/agent-types";
 import type {
   CharacterDTO,
   OutlineBeatDTO,
@@ -46,7 +47,7 @@ import type {
   WorldEntryDTO,
 } from "@/lib/novara/types";
 import { MarkdownDocument } from "./markdown-document";
-import { ConfirmDialog } from "./ui-bits";
+import { ConfirmDialog, PinButton } from "./ui-bits";
 import { cn } from "@/lib/utils";
 
 /** Scrolls the focused card into view when opened from the asset tree. */
@@ -356,6 +357,12 @@ export function CharacterDocument({
         onSave={() => void save()}
         onDelete={() => setConfirmDelete(true)}
         deleteAriaLabel="Delete character"
+        novelId={character.novelId}
+        pinTarget={{
+          type: "character",
+          id: character.id,
+          label: `人物档案 · ${character.name}`,
+        }}
       />
 
       {/* Body — textarea while writing, document window while reading */}
@@ -670,6 +677,12 @@ export function WorldDocument({
         onSave={() => void save()}
         onDelete={() => setConfirmDelete(true)}
         deleteAriaLabel="Delete world entry"
+        novelId={entry.novelId}
+        pinTarget={{
+          type: "world_entry",
+          id: entry.id,
+          label: `世界规则 · ${entry.title}`,
+        }}
       />
 
       {/* Body — textarea while writing, document window while reading */}
@@ -1078,6 +1091,12 @@ export function VolumeDocument({
         onSave={() => void save()}
         onDelete={() => setConfirmDelete(true)}
         deleteAriaLabel="Delete volume"
+        novelId={volume.novelId}
+        pinTarget={{
+          type: "volume",
+          id: volume.id,
+          label: `卷${String(volume.index).padStart(2, "0")} · ${volume.title}`,
+        }}
       />
 
       {/* Body — textarea while writing, document window while reading */}
@@ -1237,6 +1256,12 @@ export function BeatDocument({
         onSave={() => void save()}
         onDelete={() => setConfirmDelete(true)}
         deleteAriaLabel="Delete outline beat"
+        novelId={beat.novelId}
+        pinTarget={{
+          type: "outline_beat",
+          id: beat.id,
+          label: `故事骨架 · ${beat.title}`,
+        }}
       />
 
       {/* Body — textarea while writing, document window while reading */}
@@ -1399,6 +1424,8 @@ function DocToolbar({
   onSave,
   onDelete,
   deleteAriaLabel,
+  novelId,
+  pinTarget,
 }: {
   view: AssetDocView;
   onViewChange: (v: AssetDocView) => void;
@@ -1407,6 +1434,9 @@ function DocToolbar({
   onSave: () => void;
   onDelete: () => void;
   deleteAriaLabel: string;
+  /** Phase 8 Pin-to-Chat — optional pin toggle rendered before Save. */
+  novelId?: string;
+  pinTarget?: PinnedRef;
 }) {
   return (
     <div className="flex flex-wrap items-center gap-2 border-b bg-muted/30 px-4 py-2 text-xs text-muted-foreground">
@@ -1418,6 +1448,9 @@ function DocToolbar({
         </span>
       )}
       <span className="ml-auto flex items-center gap-1">
+        {novelId && pinTarget && (
+          <PinButton novelId={novelId} target={pinTarget} label="Pin" />
+        )}
         <Button size="sm" onClick={onSave} disabled={saving || !dirty}>
           {saving && <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />}
           Save

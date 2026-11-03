@@ -50,8 +50,16 @@ model Novel {
   storylines    Storyline[]
   timelineEntries TimelineEntry[]
   characterArcs CharacterArc[]
+  promises      StoryPromise[]
+  clues         StoryClue[]
+  packs         ChapterPack[]
   contract      NovelContract?
   agentRuns     AgentRun[]
+
+  // 构想快照 (Phase 8) — the initial creative vision snapshot (构想/构想快照.md
+  // analog): what the book was imagined to be at creation, kept verbatim so
+  // later drift between plan and promise stays auditable.
+  conceptSnapshot String @default("")
 
   @@index([updatedAt])
 }
@@ -300,6 +308,73 @@ model NovelContract {
 }
 
 // ---------------------------------------------------------------------------
+// Ledger (Phase 8) — the two remaining 账本 analogs, completing the five-file
+// ledger: Storyline/TimelineEntry/CharacterArc (Phase 7 P1) + these two.
+//   StoryPromise   — promises made to the reader (承诺.md)
+//   StoryClue      — clue/evidence threads and their reveal state (线索.md)
+// Both are plan-level truth curated by author and agent; the Foreshadow
+// sediment table stays chapter-derived and separate.
+// ---------------------------------------------------------------------------
+
+model StoryPromise {
+  id          String   @id @default(cuid())
+  novelId     String
+  content     String
+  // open | fulfilled | broken
+  status      String   @default("open")
+  // Chapter where the promise was made / where it is due.
+  madeChapter Int?
+  dueChapter  Int?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  novel Novel @relation(fields: [novelId], references: [id], onDelete: Cascade)
+
+  @@index([novelId, status])
+}
+
+model StoryClue {
+  id            String   @id @default(cuid())
+  novelId       String
+  content       String
+  // planted | surfaced | revealed
+  status        String   @default("planted")
+  plantChapter  Int?
+  revealChapter Int?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  novel Novel @relation(fields: [novelId], references: [id], onDelete: Cascade)
+
+  @@index([novelId, status])
+}
+
+// ---------------------------------------------------------------------------
+// ChapterPack (Phase 8) — 草稿区 workspace documents, one per chapter per kind:
+//   material (材料包)  — pre-draft background/evidence the writer assembles
+//   prep     (定稿准备) — pre-finalize atomic pack (review verdicts, fixes)
+// Keyed by chapterIndex (not chapterId) so a pack can exist BEFORE the
+// chapter itself — the 草稿区 packs chapters not yet drafted.
+// ---------------------------------------------------------------------------
+
+model ChapterPack {
+  id           String   @id @default(cuid())
+  novelId      String
+  // material | prep
+  kind         String   @default("material")
+  chapterIndex Int
+  title        String
+  content      String   @default("")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  novel Novel @relation(fields: [novelId], references: [id], onDelete: Cascade)
+
+  @@unique([novelId, kind, chapterIndex])
+  @@index([novelId])
+}
+
+// ---------------------------------------------------------------------------
 // Sediment layer (Phase 2) — written ONLY by the sediment pipeline
 // (POST /api/chapters/[id]/sediment) after a blocking-free review.
 // Single source of truth: each fact type has exactly one writable home.
@@ -394,6 +469,8 @@ model AgentRun {
   status   String   @default("running")
   // RunFinalReport JSON (reported vs verified numbers) — null until finished
   finalReport String?
+  // PinnedRef[] JSON — author-pinned context refs resolved at execution time
+  pinnedJson String?
   error    String?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

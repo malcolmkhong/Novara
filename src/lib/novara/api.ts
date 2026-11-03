@@ -6,8 +6,11 @@
 import type {
   AiDraftResult,
   ChapterDTO,
+  ChapterPackDTO,
+  ChapterPackKind,
   CharacterDTO,
   ChapterStatus,
+  ClueStatus,
   ImportReport,
   LedgerView,
   NovelBackupFile,
@@ -15,6 +18,7 @@ import type {
   NovelStatus,
   NovelSummary,
   OutlineBeatDTO,
+  PromiseStatus,
   StorylineStatus,
   VolumeDTO,
   WorldCategory,
@@ -113,6 +117,8 @@ export interface UpdateNovelInput {
   status?: NovelStatus;
   /** Story contract (作品契约) — upserted 1:1 (Phase 7 P1). */
   contract?: string;
+  /** 构想快照 — initial creative vision snapshot (Phase 8). */
+  conceptSnapshot?: string;
 }
 
 export function updateNovel(
@@ -373,19 +379,31 @@ export function deleteVolume(id: string): Promise<{ ok: true }> {
 }
 
 // ---------------------------------------------------------------------------
-// Ledger (Phase 7 P1) — 故事线 / 时间线 / 人物弧线
+// Ledger (Phase 7 P1 + Phase 8) — 故事线 / 时间线 / 人物弧线 / 承诺 / 线索
 // ---------------------------------------------------------------------------
 
 export function getLedger(novelId: string): Promise<LedgerView> {
   return request(`/api/novels/${novelId}/ledger`);
 }
 
-export type LedgerKind = "storyline" | "timeline" | "arc";
+export type LedgerKind = "storyline" | "timeline" | "arc" | "promise" | "clue";
 
 export interface LedgerInput {
   storyline: { name: string; summary?: string; status?: StorylineStatus };
   timeline: { label: string; detail?: string; chapterIndex?: number | null };
   arc: { characterName: string; note: string; chapterIndex?: number | null };
+  promise: {
+    content: string;
+    status?: PromiseStatus;
+    madeChapter?: number | null;
+    dueChapter?: number | null;
+  };
+  clue: {
+    content: string;
+    status?: ClueStatus;
+    plantChapter?: number | null;
+    revealChapter?: number | null;
+  };
 }
 
 export function addLedgerRow<K extends LedgerKind>(
@@ -412,6 +430,45 @@ export function updateLedgerRow<K extends LedgerKind>(
 
 export function deleteLedgerRow(kind: LedgerKind, id: string): Promise<{ ok: true }> {
   return request(`/api/ledger/${kind}/${id}`, { method: "DELETE" });
+}
+
+// ---------------------------------------------------------------------------
+// Chapter packs (Phase 8) — 材料包 / 定稿准备包 (草稿区 workspace)
+// ---------------------------------------------------------------------------
+
+export function getPacks(novelId: string): Promise<{ packs: ChapterPackDTO[] }> {
+  return request(`/api/novels/${novelId}/packs`);
+}
+
+export interface PackUpsertInput {
+  kind: ChapterPackKind;
+  chapterIndex: number;
+  title?: string;
+  content?: string;
+}
+
+export function upsertPack(
+  novelId: string,
+  input: PackUpsertInput
+): Promise<{ pack: ChapterPackDTO }> {
+  return request(`/api/novels/${novelId}/packs`, {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export function updatePack(
+  id: string,
+  patch: { title?: string; content?: string }
+): Promise<{ pack: ChapterPackDTO }> {
+  return request(`/api/packs/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(patch),
+  });
+}
+
+export function deletePack(id: string): Promise<{ ok: true }> {
+  return request(`/api/packs/${id}`, { method: "DELETE" });
 }
 
 // ---------------------------------------------------------------------------
