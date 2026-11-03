@@ -332,6 +332,8 @@ export const mockAgentRuntime = {
           goal: parsed.goal,
           mode: parsed.mode,
           status: "running",
+          modelId: parsed.modelId ?? "glm-4.6",
+          thinkingLevel: parsed.thinkingLevel ?? "off",
           finalReport: null,
           pinned: parsed.pinned ?? [],
           createdAt: now(),

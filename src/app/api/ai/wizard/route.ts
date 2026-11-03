@@ -21,9 +21,17 @@ Example: Night shift, normal rules: Mara balances the ledger after a quiet shift
 const BEAT_FORMAT_ZH = `每行一个节拍，严格按此格式：
 标题：摘要
 示例：夜班，规则照旧：玛拉清完账本后发现有笔交易让钱柜恰好短了一年。`;
+const WORLD_FORMAT_EN = `One entry per line, exactly this format:
+Title — category: content
+(category is one of: location, faction, item, system, culture)
+Example: The Ledger Hall — location: a converted bank where debts are measured in years; the vault door only opens at dusk.`;
+const WORLD_FORMAT_ZH = `每行一个条目，严格按此格式：
+标题 — 类别：内容
+（类别只能取：location、faction、item、system、culture）
+示例：账簿厅 — location：由旧银行改建的大厅，债务以年月计量，金库门只在黄昏开启。`;
 
 const wizardSchema = z.object({
-  section: z.enum(["logline", "premise", "characters", "beats"]),
+  section: z.enum(["logline", "premise", "characters", "world", "beats", "contract"]),
   genre: z.string().trim().max(120).optional(),
   logline: z.string().trim().max(2000).optional(),
   premise: z.string().trim().max(20000).optional(),
@@ -89,6 +97,16 @@ export async function POST(req: Request) {
       ask = isChinese
         ? `任务：为这个故事写 4–6 个主要角色，覆盖主角/对手/关键配角，全部用中文。\n${CAST_FORMAT_ZH}`
         : `Task: write 4–6 main characters for this story, covering protagonist / antagonist / key supporting.\n${CAST_FORMAT_EN}`;
+      break;
+    case "world":
+      ask = isChinese
+        ? `任务：为这个故事设定 5–8 个世界书条目，覆盖地点/组织/物品/规则/文化，全部用中文，条目之间要有内在因果关联。\n${WORLD_FORMAT_ZH}`
+        : `Task: write 5–8 world bible entries for this story, covering places / factions / items / systems / culture, with coherent internal cause-and-effect between entries.\n${WORLD_FORMAT_EN}`;
+      break;
+    case "contract":
+      ask = isChinese
+        ? "任务：为这本书起草作品契约，恰好 5 行、每行以「标签：」开头，依次是\n类型承诺：\n读者与定位：\n文风承诺：\n节奏承诺：\n硬性禁忌：\n每行 20–60 字，具体可执行，不要空话。只输出这 5 行。"
+        : "Task: draft the story contract for this book — exactly 5 lines, each starting with a label, in this order:\nGenre promise:\nAudience:\nStyle commitment:\nPacing commitment:\nHard taboos:\nEach line 10–30 words, concrete and actionable. Output only those 5 lines.";
       break;
     case "beats":
       ask = isChinese

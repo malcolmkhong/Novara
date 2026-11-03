@@ -59,6 +59,8 @@ export interface CharacterDTO {
   description: string;
   /** Comma-separated alternate names (Phase 7 P1). */
   aliases: string;
+  /** Canon status layer (Phase 9) — draft = editable, final = locked canon. */
+  status: "draft" | "final";
   updatedAt: string;
 }
 
@@ -68,7 +70,18 @@ export interface WorldEntryDTO {
   title: string;
   category: WorldCategory;
   content: string;
+  /** Canon status layer (Phase 9) — draft = editable, final = locked canon. */
+  status: "draft" | "final";
+  /** Owning 世界书 group (Phase 9) — null = ungrouped (renders top-level). */
+  groupId: string | null;
   updatedAt: string;
+}
+
+export interface WorldGroupDTO {
+  id: string;
+  novelId: string;
+  name: string;
+  order: number;
 }
 
 export interface OutlineBeatDTO {
@@ -79,6 +92,8 @@ export interface OutlineBeatDTO {
   summary: string;
   /** Owning volume (Phase 7 P1) — null = unsorted. */
   volumeId: string | null;
+  /** Canon status layer (Phase 9) — draft = editable, final = locked canon. */
+  status: "draft" | "final";
   updatedAt: string;
 }
 
@@ -91,6 +106,8 @@ export interface VolumeDTO {
   title: string;
   /** Volume plan (卷规划) — markdown. */
   synopsis: string;
+  /** Canon status layer (Phase 9) — draft = editable, final = locked canon. */
+  status: "draft" | "final";
   updatedAt: string;
 }
 
@@ -105,6 +122,8 @@ export interface StoryPromiseDTO {
   novelId: string;
   content: string;
   status: PromiseStatus;
+  /** Canon status layer (Phase 9) — lock, not promise lifecycle. */
+  lock: "draft" | "final";
   madeChapter: number | null;
   dueChapter: number | null;
   updatedAt: string;
@@ -117,6 +136,8 @@ export interface StoryClueDTO {
   novelId: string;
   content: string;
   status: ClueStatus;
+  /** Canon status layer (Phase 9) — lock, not clue lifecycle. */
+  lock: "draft" | "final";
   plantChapter: number | null;
   revealChapter: number | null;
   updatedAt: string;
@@ -143,12 +164,24 @@ export interface DigestDTO {
   updatedAt: string;
 }
 
+/** Version summary (稿N) for the tree's per-chapter draft list (Phase 9). */
+export interface ChapterVersionSummaryDTO {
+  id: string;
+  chapterId: string;
+  draftNo: number;
+  wordCount: number;
+  createdBy: string;
+  createdAt: string;
+}
+
 export interface StorylineDTO {
   id: string;
   novelId: string;
   name: string;
   summary: string;
   status: StorylineStatus;
+  /** Canon status layer (Phase 9) — lock, not thread lifecycle. */
+  lock: "draft" | "final";
   updatedAt: string;
 }
 
@@ -159,6 +192,8 @@ export interface TimelineEntryDTO {
   label: string;
   detail: string;
   chapterIndex: number | null;
+  /** Canon status layer (Phase 9) — draft = editable, final = locked canon. */
+  status: "draft" | "final";
   updatedAt: string;
 }
 
@@ -169,6 +204,8 @@ export interface CharacterArcDTO {
   order: number;
   note: string;
   chapterIndex: number | null;
+  /** Canon status layer (Phase 9) — draft = editable, final = locked canon. */
+  status: "draft" | "final";
   updatedAt: string;
 }
 
@@ -185,14 +222,22 @@ export interface NovelDetail {
   chapters: ChapterDTO[];
   characters: CharacterDTO[];
   worldEntries: WorldEntryDTO[];
+  /** 世界书 second-level groups (Phase 9) — entries nest under them. */
+  worldGroups: WorldGroupDTO[];
   outlineBeats: OutlineBeatDTO[];
   volumes: VolumeDTO[];
   /** Story contract (作品契约) markdown — null when never written. */
   contract: string | null;
+  /** Contract canon status (Phase 9) — final contract is locked canon. */
+  contractStatus: "draft" | "final";
   /** 草稿区 workspace documents (材料包 + 定稿准备包) — Phase 8. */
   packs: ChapterPackDTO[];
   /** 章摘要 (chapter digests) — tree-visible under 卷规划. */
   digests: DigestDTO[];
+  /** 稿N version summaries — tree-visible under each draft chapter. */
+  versions: ChapterVersionSummaryDTO[];
+  /** 账本 five ledgers — tree-visible sub-rows (Phase 9). */
+  ledger: LedgerView;
 }
 
 // ---------------------------------------------------------------------------

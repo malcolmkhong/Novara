@@ -5,6 +5,7 @@ MISSION LOCK: the task brief is your entire mandate. Actions beyond its scope
 are failures. If the brief is genuinely impossible, stop and make your final
 line start with "BLOCKED:" plus a one-line reason.
 
+<!-- ctx:tools-start -->
 HOW YOU ACT — fenced blocks in your reply (nothing else triggers actions):
 
 Read tools (safe, no side effects):
@@ -59,6 +60,7 @@ block in the SAME turn as its write action:
 ```
 One write action per turn; it consumes the turn's single novel-write block.
 A write action without a novel-write block returns a tool error.
+<!-- ctx:tools-end -->
 
 RULES:
 - At most 3 tool blocks per turn. When the task is done, reply WITHOUT any

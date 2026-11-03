@@ -35,7 +35,7 @@ import {
   type CreateNovelInput,
   type WizardSection,
 } from "@/lib/novara/api";
-import { parseBeatLines, parseCastLines } from "@/lib/novara/wizard-parse";
+import { parseBeatLines, parseCastLines, parseWorldLines } from "@/lib/novara/wizard-parse";
 import { cn } from "@/lib/utils";
 
 export interface CreateWizardProps {
@@ -51,13 +51,14 @@ export interface CreateWizardProps {
 
 const STEPS = ["Concept", "Story foundation", "World & cast", "Outline"] as const;
 
-type WizardField = "logline" | "premise" | "cast" | "beats";
+type WizardField = "logline" | "premise" | "cast" | "world" | "beats";
 
 interface WizardState {
   genre: string;
   logline: string;
   premise: string;
   characters: string;
+  world: string;
   beats: string;
   targetWords: string;
 }
@@ -67,6 +68,7 @@ const EMPTY_STATE: WizardState = {
   logline: "",
   premise: "",
   characters: "",
+  world: "",
   beats: "",
   targetWords: "100000",
 };
@@ -180,7 +182,9 @@ export function CreateWizard({
           ? "premise"
           : field === "cast"
             ? "characters"
-            : "beats";
+            : field === "world"
+              ? "world"
+              : "beats";
 
     try {
       const { content } = await generateWizardSection({
@@ -201,6 +205,8 @@ export function CreateWizard({
             return { ...f, premise: appendContent(f.premise, content) };
           case "cast":
             return { ...f, characters: appendContent(f.characters, content) };
+          case "world":
+            return { ...f, world: appendContent(f.world, content) };
           case "beats":
             return { ...f, beats: appendContent(f.beats, content) };
         }
@@ -222,8 +228,24 @@ export function CreateWizard({
     setSubmitting(true);
 
     const characters = parseCastLines(fields.characters);
+    const worldEntries = parseWorldLines(fields.world);
     const outlineBeats = parseBeatLines(fields.beats);
     const targetWords = parseTarget();
+
+    // Phase 9 — 构想快照: the confirmed vision, kept verbatim as the
+    // creation-time baseline (audit analog of 构想/构想快照.md).
+    const snapshotParts: string[] = [];
+    if (fields.genre.trim()) snapshotParts.push(`题材 GENRE: ${fields.genre.trim()}`);
+    if (targetWords) snapshotParts.push(`目标字数 TARGET: ${targetWords}`);
+    if (fields.logline.trim()) snapshotParts.push(`【一句话 LOGLINE】\n${fields.logline.trim()}`);
+    if (fields.premise.trim()) snapshotParts.push(`【前提 PREMISE】\n${fields.premise.trim()}`);
+    if (fields.characters.trim()) snapshotParts.push(`【人物 CAST】\n${fields.characters.trim()}`);
+    if (fields.world.trim()) snapshotParts.push(`【世界书 WORLD】\n${fields.world.trim()}`);
+    if (fields.beats.trim()) snapshotParts.push(`【大纲 OUTLINE】\n${fields.beats.trim()}`);
+    const conceptSnapshot =
+      snapshotParts.length > 0
+        ? `# 构想快照 — captured by "New with the AI team" at creation\n\n${snapshotParts.join("\n\n")}`
+        : undefined;
 
     const input: CreateNovelInput = {
       title: deriveTitle(fields),
@@ -231,7 +253,9 @@ export function CreateWizard({
       synopsis: fields.premise.trim() || undefined,
       targetWords,
       ...(characters.length > 0 ? { characters } : {}),
+      ...(worldEntries.length > 0 ? { worldEntries } : {}),
       ...(outlineBeats.length > 0 ? { outlineBeats } : {}),
+      ...(conceptSnapshot ? { conceptSnapshot } : {}),
     };
 
     let ok = false;
@@ -386,7 +410,7 @@ export function CreateWizard({
               <>
                 <div className="flex items-center justify-between gap-2">
                   <div className="space-y-0.5">
-                    <Label htmlFor="wizard-characters">World & cast</Label>
+                    <Label htmlFor="wizard-characters">Cast</Label>
                     <p className="text-xs text-muted-foreground">
                       One per line — Name — role: description.
                     </p>
@@ -405,6 +429,29 @@ export function CreateWizard({
                     setFields((f) => ({ ...f, characters: e.target.value }))
                   }
                   placeholder={"Mara Voss — protagonist: night clerk who keeps the ledger."}
+                />
+                <div className="flex items-center justify-between gap-2">
+                  <div className="space-y-0.5">
+                    <Label htmlFor="wizard-world">World bible（世界书）</Label>
+                    <p className="text-xs text-muted-foreground">
+                      One per line — Title — category: content. Lands in the
+                      世界规则 group of the tree.
+                    </p>
+                  </div>
+                  <GenerateButton
+                    onClick={() => generate("world")}
+                    busy={generating === "world"}
+                    disabled={generating !== null}
+                  />
+                </div>
+                <Textarea
+                  id="wizard-world"
+                  rows={4}
+                  value={fields.world}
+                  onChange={(e) =>
+                    setFields((f) => ({ ...f, world: e.target.value }))
+                  }
+                  placeholder={"The Ledger Hall — location: a converted bank where debts are measured in years."}
                 />
               </>
             )}

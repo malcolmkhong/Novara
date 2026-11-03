@@ -25,7 +25,7 @@ export async function POST(req: Request) {
   const schema = createNovelSchema.safeParse(parsed.data);
   if (!schema.success) return validationError(schema.error);
 
-  const { title, genre, synopsis, targetWords, characters, worldEntries, outlineBeats } =
+  const { title, genre, synopsis, targetWords, characters, worldEntries, outlineBeats, conceptSnapshot } =
     schema.data;
 
   const novel = await db.novel.create({
@@ -34,6 +34,9 @@ export async function POST(req: Request) {
       genre: genre ?? "",
       synopsis: synopsis ?? "",
       targetWords: targetWords ?? 100000,
+      // Phase 9 — the wizard's vision snapshot lands at creation so the
+      // tree shows 已快照 and the runtime has a concept anchor from day one.
+      conceptSnapshot: conceptSnapshot ?? "",
       ...(characters && characters.length > 0
         ? {
             characters: {
@@ -45,20 +48,27 @@ export async function POST(req: Request) {
             },
           }
         : {}),
-      ...(worldEntries && worldEntries.length > 0
-        ? {
-            worldEntries: {
-              create: worldEntries.map((w) => ({
-                title: w.title,
-                category: w.category ?? "other",
-                content: w.content ?? "",
-              })),
-            },
-          }
-        : {}),
     },
     include: { chapters: { select: { wordCount: true } } },
   });
+
+  // Phase 9 — wizard-seeded world entries land in a "世界规则" second-level
+  // group (DSH 世界书/世界规则 analog), so a new book's tree matches the
+  // designed two-level world-bible shape immediately.
+  if (worldEntries && worldEntries.length > 0) {
+    const group = await db.worldGroup.create({
+      data: { novelId: novel.id, name: "世界规则", order: 1 },
+    });
+    await db.worldEntry.createMany({
+      data: worldEntries.map((w) => ({
+        novelId: novel.id,
+        title: w.title,
+        category: w.category ?? "other",
+        content: w.content ?? "",
+        groupId: group.id,
+      })),
+    });
+  }
 
   // Phase 7 (P1) — wizard-seeded beats land in "Volume 1" so new books match
   // the migrated shape (flat outline = the book's first arc). Two plain

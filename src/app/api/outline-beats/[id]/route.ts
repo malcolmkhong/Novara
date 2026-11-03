@@ -1,12 +1,20 @@
 import { db } from "@/lib/db";
 import { outlineBeatUpdateSchema } from "@/lib/novara/schemas";
 import { jsonError, parseBody, validationError } from "@/lib/novara/api-helpers";
+import {
+  assetDeleteGate,
+  assetGate,
+  canonDowngrade,
+  canonLock,
+} from "@/lib/novara/asset-gate";
 
 export const dynamic = "force-dynamic";
 
 type Params = { params: Promise<{ id: string }> };
 
 // PATCH /api/outline-beats/[id]
+// Canon gate (Phase 9): a final beat is Immutable Canon — 409 unless
+// reopen:true (archives the final state, downgrades to draft).
 export async function PATCH(req: Request, { params }: Params) {
   const { id } = await params;
   const parsed = await parseBody(req);
@@ -35,18 +43,59 @@ export async function PATCH(req: Request, { params }: Params) {
     }
   }
 
+  const { reopen, status, ...data } = schema.data;
+  const gate = await assetGate({
+    novelId: existing.novelId,
+    assetType: "outline_beat",
+    assetId: existing.id,
+    assetLabel: existing.title,
+    lockState: existing.status,
+    lockField: "status",
+    reopen,
+    wantsFinal: status === "final",
+    snapshotFields: {
+      title: existing.title,
+      summary: existing.summary,
+      volumeId: existing.volumeId,
+      status: existing.status,
+    },
+  });
+  if (gate instanceof Response) return gate;
+
   const beat = await db.outlineBeat.update({
     where: { id },
-    data: { ...schema.data, ...(volumeId !== undefined ? { volumeId } : {}) },
+    data: {
+      ...data,
+      ...(volumeId !== undefined ? { volumeId } : {}),
+      ...(gate.reopened ? canonDowngrade("status") : {}),
+      ...(gate.finalized ? canonLock("status") : {}),
+    },
   });
   return Response.json({ beat });
 }
 
-// DELETE /api/outline-beats/[id] — delete and close the index gap
-export async function DELETE(_req: Request, { params }: Params) {
+// DELETE /api/outline-beats/[id] — delete and close the index gap. Locked
+// beats refuse deletion unless ?reopen=1 is explicit (archive runs first).
+export async function DELETE(req: Request, { params }: Params) {
   const { id } = await params;
   const existing = await db.outlineBeat.findUnique({ where: { id } });
   if (!existing) return jsonError("Outline beat not found", 404);
+
+  const gateError = await assetDeleteGate({
+    novelId: existing.novelId,
+    assetType: "outline_beat",
+    assetId: existing.id,
+    assetLabel: existing.title,
+    lockState: existing.status,
+    snapshotFields: {
+      title: existing.title,
+      summary: existing.summary,
+      volumeId: existing.volumeId,
+      status: existing.status,
+    },
+    reopen: new URL(req.url).searchParams.get("reopen") === "1",
+  });
+  if (gateError) return gateError;
 
   await db.$transaction([
     db.outlineBeat.delete({ where: { id } }),

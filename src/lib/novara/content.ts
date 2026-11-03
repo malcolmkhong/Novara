@@ -252,27 +252,60 @@ export function getAgentFile(relPath: string): string {
 }
 
 /**
+ * Role cards mark their tool-documentation section with HTML comments
+ * (`<!-- ctx:tools-start -->` … `<!-- ctx:tools-end -->`). The markers are
+ * stripped from what the model sees; the slices feed the Context Usage meter
+ * so "Tools" (our prose tool protocol) can be counted separately from the
+ * persona/rules part of the card. Cards without markers → tools = "".
+ */
+const TOOLS_START = "<!-- ctx:tools-start -->";
+const TOOLS_END = "<!-- ctx:tools-end -->";
+
+function splitToolSection(card: string): { before: string; tools: string; after: string } {
+  const start = card.indexOf(TOOLS_START);
+  const end = card.indexOf(TOOLS_END);
+  if (start === -1 || end === -1 || end < start) {
+    return { before: card.trim(), tools: "", after: "" };
+  }
+  const before = card.slice(0, start).trim();
+  const tools = card.slice(start + TOOLS_START.length, end).trim();
+  const after = card.slice(end + TOOLS_END.length).trim();
+  return { before, tools, after };
+}
+
+/**
  * Assemble a role's system prompt: role card + skill bodies (dedup by id,
  * order preserved), capped at prompt.systemPromptCapChars.
  *
  * extraSkillIds (Phase 5 delegate): additional skills appended after the
  * role's defaults — used by team-delegate's optional `skills` field. Unknown
  * ids are skipped here; the caller (runtime) records which were injected.
+ *
+ * `parts` exposes the SAME text split for context accounting:
+ * system (card minus tool docs) + tools (protocol docs) + skills (bodies).
  */
 export function buildSystemPrompt(
   roleId: string,
   extraSkillIds: string[] = []
-): { prompt: string; injectedSkillIds: string[] } {
+): {
+  prompt: string;
+  injectedSkillIds: string[];
+  parts: { system: string; tools: string; skills: { id: string; body: string }[] };
+} {
   const state = load();
   const role = state.roles.find((r) => r.id === roleId);
   if (!role) throw new Error(`[agent-content] unknown role: ${roleId}`);
   if (!role.enabled) throw new Error(`[agent-content] role disabled: ${roleId}`);
 
   const cap = state.budgets.prompt.systemPromptCapChars;
-  const parts: string[] = [getAgentFile(role.system).trim()];
-  let used = parts[0].length;
+  const card = splitToolSection(getAgentFile(role.system).trim());
+  // Assembled role text — same bytes the card carried, markers stripped.
+  const roleText = [card.before, card.tools, card.after].filter(Boolean).join("\n\n");
+  const parts: string[] = [roleText];
+  let used = roleText.length;
 
   const injectedSkillIds: string[] = [];
+  const skillBodies: { id: string; body: string }[] = [];
   const seen = new Set<string>();
   const ordered = [
     ...role.skills,
@@ -294,9 +327,18 @@ export function buildSystemPrompt(
       break;
     }
     parts.push(body);
+    skillBodies.push({ id, body });
     used += body.length + 4;
     injectedSkillIds.push(id);
   }
 
-  return { prompt: parts.join("\n\n"), injectedSkillIds };
+  return {
+    prompt: parts.join("\n\n"),
+    injectedSkillIds,
+    parts: {
+      system: [card.before, card.after].filter(Boolean).join("\n\n"),
+      tools: card.tools,
+      skills: skillBodies,
+    },
+  };
 }

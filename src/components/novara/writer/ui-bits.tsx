@@ -32,9 +32,9 @@ export function PinButton({
   className?: string;
   label?: string;
 }) {
-  // Selector must return a stable reference (stored array or undefined) —
-  // allocating a fresh [] inside the selector trips React's snapshot cache
-  // check (zustand v5).
+  // Selector stays referentially stable (raw record only); the `?? []`
+  // fallback happens outside the selector — zustand v5 getSnapshot must not
+  // return a fresh array on every call (React Compiler loop guard).
   const pins = useWriterStore((s) => s.pinnedByNovel[novelId]);
   const pinned = (pins ?? []).some(
     (p) => p.type === target.type && p.id === target.id

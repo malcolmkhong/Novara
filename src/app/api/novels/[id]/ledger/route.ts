@@ -39,6 +39,7 @@ export async function GET(_req: Request, { params }: Params) {
       name: sl.name,
       summary: sl.summary,
       status: sl.status as LedgerView["storylines"][number]["status"],
+      lock: sl.lock === "final" ? "final" : "draft",
       updatedAt: sl.updatedAt.toISOString(),
     })),
     timeline: timeline.map((t) => ({
@@ -48,6 +49,7 @@ export async function GET(_req: Request, { params }: Params) {
       label: t.label,
       detail: t.detail,
       chapterIndex: t.chapterIndex,
+      status: t.status === "final" ? "final" : "draft",
       updatedAt: t.updatedAt.toISOString(),
     })),
     arcs: arcs.map((a) => ({
@@ -57,6 +59,7 @@ export async function GET(_req: Request, { params }: Params) {
       order: a.order,
       note: a.note,
       chapterIndex: a.chapterIndex,
+      status: a.status === "final" ? "final" : "draft",
       updatedAt: a.updatedAt.toISOString(),
     })),
     promises: promises.map((p) => ({
@@ -64,6 +67,7 @@ export async function GET(_req: Request, { params }: Params) {
       novelId: p.novelId,
       content: p.content,
       status: p.status as LedgerView["promises"][number]["status"],
+      lock: p.lock === "final" ? "final" : "draft",
       madeChapter: p.madeChapter,
       dueChapter: p.dueChapter,
       updatedAt: p.updatedAt.toISOString(),
@@ -73,6 +77,7 @@ export async function GET(_req: Request, { params }: Params) {
       novelId: c.novelId,
       content: c.content,
       status: c.status as LedgerView["clues"][number]["status"],
+      lock: c.lock === "final" ? "final" : "draft",
       plantChapter: c.plantChapter,
       revealChapter: c.revealChapter,
       updatedAt: c.updatedAt.toISOString(),

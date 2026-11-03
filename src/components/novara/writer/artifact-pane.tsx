@@ -341,6 +341,8 @@ export function ArtifactPane({
               {focusedVolume ? (
                 <VolumeDocument
                   volume={focusedVolume}
+                  novelId={novelId}
+                  onRefresh={handlers.onRefresh}
                   onUpdate={handlers.onUpdateVolume}
                   onDelete={handlers.onDeleteVolume}
                   onBack={handlers.onClearVolume}
@@ -348,6 +350,8 @@ export function ArtifactPane({
               ) : focusedBeat ? (
                 <BeatDocument
                   beat={focusedBeat}
+                  novelId={novelId}
+                  onRefresh={handlers.onRefresh}
                   volumes={detail.volumes}
                   onUpdate={handlers.onUpdateBeat}
                   onDelete={handlers.onDeleteBeat}
@@ -380,6 +384,8 @@ export function ArtifactPane({
               {focusedCharacter ? (
                 <CharacterDocument
                   character={focusedCharacter}
+                  novelId={novelId}
+                  onRefresh={handlers.onRefresh}
                   onUpdate={handlers.onUpdateCharacter}
                   onDelete={handlers.onDeleteCharacter}
                   onBack={handlers.onClearCharacter}
@@ -387,6 +393,8 @@ export function ArtifactPane({
               ) : focusedWorld ? (
                 <WorldDocument
                   entry={focusedWorld}
+                  novelId={novelId}
+                  onRefresh={handlers.onRefresh}
                   onUpdate={handlers.onUpdateWorldEntry}
                   onDelete={handlers.onDeleteWorldEntry}
                   onBack={handlers.onClearWorld}
@@ -395,14 +403,19 @@ export function ArtifactPane({
                 <>
                   <CharactersPanel
                     characters={detail.characters}
+                    novelId={novelId}
                     focusCharacterId={handlers.focusCharacterId}
+                    onRefresh={handlers.onRefresh}
                     onAdd={handlers.onAddCharacter}
                     onUpdate={handlers.onUpdateCharacter}
                     onDelete={handlers.onDeleteCharacter}
                   />
                   <WorldPanel
                     entries={detail.worldEntries}
+                    groups={detail.worldGroups}
+                    novelId={novelId}
                     focusWorldId={handlers.focusWorldId}
+                    onRefresh={handlers.onRefresh}
                     onAdd={handlers.onAddWorldEntry}
                     onUpdate={handlers.onUpdateWorldEntry}
                     onDelete={handlers.onDeleteWorldEntry}
@@ -443,9 +456,13 @@ export function ArtifactPane({
             <ContractPanel
               novelId={novelId}
               contract={detail.contract}
+              contractStatus={detail.contractStatus}
               conceptSnapshot={detail.novel.conceptSnapshot}
+              genre={detail.novel.genre}
+              synopsis={detail.novel.synopsis}
               onSaveContract={handlers.onSaveContract}
               onSaveConcept={handlers.onSaveConcept}
+              onRefresh={handlers.onRefresh}
             />
           </TabsContent>
 
@@ -458,7 +475,10 @@ export function ArtifactPane({
           </TabsContent>
 
           <TabsContent value="memory" className="mt-0">
-            <MemoryPanel novel={detail.novel} />
+            <MemoryPanel
+              detail={detail}
+              onOpenArtifactTab={(t) => setTab(novelId, t)}
+            />
           </TabsContent>
 
           <TabsContent value="qc" className="mt-0">

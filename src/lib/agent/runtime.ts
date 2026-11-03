@@ -28,6 +28,16 @@
 import { db } from "@/lib/db";
 import { getBudgets, buildSystemPrompt, getSkillEntry } from "@/lib/novara/content";
 import { glmChat } from "@/lib/novara/glm";
+import {
+  resolveModelSelection,
+  type ModelSelection,
+  type SdkModelParams,
+} from "@/lib/novara/models";
+import {
+  createContextMeter,
+  formatUsageSummary,
+  type ContextMeter,
+} from "@/lib/agent/context-meter";
 import { countWords } from "@/lib/novara/words";
 import { assessOverwrite } from "@/lib/novara/write-gate";
 import { recordChapterVersion } from "@/lib/novara/versions";
@@ -139,6 +149,8 @@ type AgentRunRow = {
   goal: string;
   mode: string;
   status: string;
+  modelId: string;
+  thinkingLevel: string;
   finalReport: string | null;
   pinnedJson: string | null;
   error: string | null;
@@ -153,6 +165,8 @@ function serializeRun(run: AgentRunRow): AgentRun {
     goal: run.goal,
     mode: run.mode as AgentRunMode,
     status: run.status as AgentRunStatus,
+    modelId: run.modelId ?? "glm-4.6",
+    thinkingLevel: run.thinkingLevel ?? "off",
     finalReport: parseJsonSafe<RunFinalReport | null>(run.finalReport, null),
     pinned: parseJsonSafe<PinnedRef[]>(run.pinnedJson, []),
     createdAt: run.createdAt.toISOString(),
@@ -295,9 +309,21 @@ export async function createRun(params: {
   goal: string;
   mode: AgentRunMode;
   pinned?: PinnedRef[];
+  /** P2 — client-supplied model registry selection (validated below). */
+  modelId?: string;
+  thinkingLevel?: string;
 }): Promise<AgentRunDetail> {
   const novel = await db.novel.findUnique({ where: { id: params.novelId }, select: { id: true } });
   if (!novel) throw new NotFoundError("Novel not found");
+
+  // P2 — validate the model selection against the registry BEFORE anything
+  // is persisted; bad combos are a 400, not a half-created run.
+  let model: RunModel;
+  try {
+    model = resolveModelSelection(params.modelId, params.thinkingLevel);
+  } catch (error) {
+    throw new ValidationError(error instanceof Error ? error.message : "Invalid model selection");
+  }
 
   const active = await db.agentRun.findFirst({
     where: { novelId: params.novelId, status: { in: ACTIVE_STATUSES } },
@@ -314,6 +340,8 @@ export async function createRun(params: {
       goal: params.goal,
       mode: params.mode,
       status: "running",
+      modelId: model.selection.modelId,
+      thinkingLevel: model.selection.thinkingLevel,
       pinnedJson: pinned.length > 0 ? JSON.stringify(pinned) : null,
     },
   });
@@ -424,12 +452,48 @@ async function buildPinnedContext(
 
 export class NotFoundError extends Error {}
 export class ConflictError extends Error {}
+export class ValidationError extends Error {}
 
 export function errorStatus(error: unknown): { message: string; status: number } {
   if (error instanceof NotFoundError) return { message: error.message, status: 404 };
   if (error instanceof ConflictError) return { message: error.message, status: 409 };
+  if (error instanceof ValidationError) return { message: error.message, status: 400 };
   const message = error instanceof Error ? error.message : "Unknown error";
   return { message, status: 500 };
+}
+
+// ---------------------------------------------------------------------------
+// P2 — resolved run model + Context Usage meter plumbing.
+// Every GLM call of a run goes through a conversation-scoped meter; each call
+// snapshots it (what THAT call sent) and emits a `usage` event. The SSE
+// stream carries events to the composer's Context Usage panel in real time.
+// ---------------------------------------------------------------------------
+
+type RunModel = ReturnType<typeof resolveModelSelection>;
+
+/**
+ * Run-row → resolved model. Defensive: a stored run whose model the registry
+ * no longer offers falls back to the registry default instead of failing a
+ * resumed run (creation-time validation already guarantees fresh runs are
+ * valid).
+ */
+function resolveRunModel(modelId: string | null, thinkingLevel: string | null): RunModel {
+  try {
+    return resolveModelSelection(modelId, thinkingLevel);
+  } catch {
+    return resolveModelSelection(null, null);
+  }
+}
+
+/** Fire-and-forget — a telemetry failure must never break the run. */
+function emitUsageEvent(runId: string, meter: ContextMeter, actor: string): void {
+  const usage = meter.snapshot(actor);
+  void emitEvent({
+    runId,
+    kind: "usage",
+    summary: `Context usage (${actor}): ${formatUsageSummary(usage)}`,
+    payload: { usage },
+  }).catch(() => undefined);
 }
 
 // ---------------------------------------------------------------------------
@@ -749,6 +813,9 @@ async function leaderLoop(runId: string, goal: string, signal: AbortSignal): Pro
   const run = await db.agentRun.findUnique({ where: { id: runId } });
   if (!run) return;
   const novelId = run.novelId;
+  // P2 — resolve the run's registry selection once; every GLM call of the
+  // run (leader + members) goes out with these exact params.
+  const modelCtx = resolveRunModel(run.modelId, run.thinkingLevel);
 
   const snapshot = await loadStorySnapshot(novelId);
   await emitEvent({ runId, kind: "message", summary: "Atlas is reading the story state and assembling the team…" });
@@ -799,7 +866,7 @@ async function leaderLoop(runId: string, goal: string, signal: AbortSignal): Pro
       qc: newQcLedger(),
       extraSkills: [],
       pinnedContext,
-      readOnly: true,
+      model: modelCtx,
       onNarration: (text) => {
         if (!impactReport) impactReport = text;
       },
@@ -807,37 +874,51 @@ async function leaderLoop(runId: string, goal: string, signal: AbortSignal): Pro
     if (signal.aborted) return;
   }
 
-  const atlasSystem = buildSystemPrompt("atlas").prompt;
-  const envelopeParts = [
-    `AUTHOR GOAL: ${goal}`,
-    "",
-  ];
+  const atlasPrompt = buildSystemPrompt("atlas");
+  const atlasSystem = atlasPrompt.prompt;
+
+  // P2 — the leader envelope is split by where its content COMES FROM, so
+  // the meter can attribute tokens honestly: the author's goal and the loop
+  // instructions are conversation; the impact report, pinned refs and story
+  // snapshot are novel context.
+  const leaderConvParts: string[] = [`AUTHOR GOAL: ${goal}`, ""];
+  const leaderNovelParts: string[] = [];
   if (impactReport) {
-    envelopeParts.push(
+    leaderNovelParts.push(
       "IMPACT ASSESSMENT (Task 0, verified read-only — plan around this):",
       truncate(impactReport, 2400),
       ""
     );
   }
   if (pinnedContext) {
-    envelopeParts.push(pinnedContext, "");
+    leaderNovelParts.push(pinnedContext, "");
   }
-  envelopeParts.push(
-    "STORY SNAPSHOT (measured now):",
-    renderSnapshot(snapshot),
-    "",
+  leaderNovelParts.push("STORY SNAPSHOT (measured now):", renderSnapshot(snapshot), "");
+  leaderConvParts.push(
     "LEAD THE TEAM: read what you need, then dispatch work with ```team-delegate",
     "blocks (JSON array of orders). Each executed order's VERIFIED outcome comes",
     "back to you as a tool result — decide the next step from those, never from",
     "the member's narration alone. Finish with a tool-free reply."
   );
-  const envelope = envelopeParts.join("\n");
+  const envelope = [...leaderConvParts, ...leaderNovelParts].join("\n");
 
   type ChatMessage = { role: "assistant" | "user"; content: string };
   const messages: ChatMessage[] = [
     { role: "assistant", content: atlasSystem },
     { role: "user", content: envelope },
   ];
+
+  // P2 — one meter per conversation; snapshot before each call reflects
+  // exactly what THAT call sends.
+  const meter = createContextMeter({
+    modelId: modelCtx.selection.modelId,
+    contextWindow: modelCtx.contextWindow,
+    system: [atlasPrompt.parts.system],
+    tools: atlasPrompt.parts.tools,
+    skills: atlasPrompt.parts.skills.map((s) => s.body),
+    novel: leaderNovelParts,
+    conversation: leaderConvParts,
+  });
 
   const measured: Measured = { ...ZERO_MEASURED };
   const qc = newQcLedger();
@@ -847,14 +928,16 @@ async function leaderLoop(runId: string, goal: string, signal: AbortSignal): Pro
   let delegateCount = 0;
   let leaderBlocked: string | null = null;
 
-  const glmCall = async (tag: string): Promise<string> => {
+  const glmCall = async (tag: string, turn: number): Promise<string> => {
     if (signal.aborted) throw new Error("Run aborted");
-    return glmChat({ messages, tag, signal });
+    const reply = await glmChat({ messages, tag, signal, sdkParams: modelCtx.sdk });
+    emitUsageEvent(runId, meter, `atlas · turn ${turn}`);
+    return reply;
   };
 
   for (let turn = 1; turn <= budgets.glm.leaderMaxTurns; turn++) {
     if (signal.aborted) return;
-    const reply = await glmCall(`leader turn ${turn}`);
+    const reply = await glmCall(`leader turn ${turn}`, turn);
     const parsed = parseAgentTurn(reply);
 
     if (parsed.narration) {
@@ -953,6 +1036,7 @@ async function leaderLoop(runId: string, goal: string, signal: AbortSignal): Pro
         qc,
         extraSkills: d.order.skills ?? [],
         pinnedContext,
+        model: modelCtx,
       });
       if (outcome === "skipped") return; // gate stop — handlers own status
       feeds.push(
@@ -964,11 +1048,11 @@ async function leaderLoop(runId: string, goal: string, signal: AbortSignal): Pro
     // turn's delegates have run.
     if (parsed.endsLoop && parsed.delegates.length === 0) break;
 
+    const toolResults = `TOOL RESULTS:\n${feeds.join("\n") || "(no actions parsed — use read tools or ```team-delegate blocks)"}`;
+    meter.addConversation(reply);
+    meter.addConversation(toolResults);
     messages.push({ role: "assistant", content: reply });
-    messages.push({
-      role: "user",
-      content: `TOOL RESULTS:\n${feeds.join("\n") || "(no actions parsed — use read tools or ```team-delegate blocks)"}`,
-    });
+    messages.push({ role: "user", content: toolResults });
   }
 
   if (signal.aborted) return;
@@ -1080,13 +1164,10 @@ async function executeTask(params: {
   extraSkills: string[];
   /** Author-pinned context (Phase 8) appended after the story snapshot. */
   pinnedContext?: string | null;
+  /** P2 — the run's resolved registry selection, applied to every call. */
+  model: RunModel;
   /** Narration tap — lets the leader capture a member's report text. */
   onNarration?: (text: string) => void;
-  /**
-   * READ-ONLY task (Phase 8 impact assessment): write/finalize actions are
-   * rejected at the tool gate, not merely discouraged in the brief.
-   */
-  readOnly?: boolean;
 }): Promise<TaskOutcome> {
   const budgets = getBudgets();
   const { runId, novelId, task, snapshot, signal, measured } = params;
@@ -1101,7 +1182,10 @@ async function executeTask(params: {
   // Skills: role defaults + delegate-supplied extras → telemetry rows record
   // what was actually injected (plan §7.2 SkillInvocation). Unknown ids from
   // the delegate block are recorded with injected:false — never silent.
-  const { prompt: system, injectedSkillIds } = buildSystemPrompt(assignee, params.extraSkills);
+  const { prompt: system, injectedSkillIds, parts: systemParts } = buildSystemPrompt(
+    assignee,
+    params.extraSkills
+  );
   const unknownSkills = params.extraSkills.filter((id) => !getSkillEntry(id));
   await db.skillInvocation.createMany({
     data: [
@@ -1122,24 +1206,29 @@ async function executeTask(params: {
     task.artifactLabel?.match(/chapter\s*(\d+)/i) ?? task.title.match(/chapter\s*(\d+)/i);
   const targetChapterIndex = quotaHint ? Number(quotaHint[1]) : null;
 
-  const envelopeParts: string[] = [
+  // P2 — the member envelope splits by ORIGIN for the meter: brief + mission
+  // lock are conversation; snapshot, pinned refs, certify protocol, word
+  // quota and language directive are novel-derived context.
+  const convParts: string[] = [
     `TASK ENVELOPE — execute exactly this task, then stop.`,
     `${task.key} — ${task.title}`,
     truncate(task.detail || "(no additional detail)", budgets.prompt.taskBriefCapChars),
     "",
     "MISSION LOCK: you are the assigned member for this brief; actions beyond it are failures. If it is impossible, make your final line start with BLOCKED: plus the reason.",
+  ];
+  const novelParts: string[] = [
     "",
     "STORY SNAPSHOT (measured at run start; use read tools for fresher data):",
     renderSnapshot(snapshot),
   ];
   if (params.pinnedContext) {
-    envelopeParts.push("", params.pinnedContext);
+    novelParts.push("", params.pinnedContext);
   }
   if (assignee === "prism" && /certif|finaliz/i.test(`${task.title} ${task.detail ?? ""}`)) {
     // Phase 6.1 — certify tasks must END in a verified finalize, and the
     // protocol wording here overrides any inverted phrasing that slips into
     // a leader-generated brief (e.g. "if blocking issues exist, finalize").
-    envelopeParts.push(
+    novelParts.push(
       "",
       "CERTIFY PROTOCOL (hard rule — overrides any contrary wording in the brief): " +
         "review first; if the review finds 0 blocking issues you MUST call finalize_chapter(index) then settle_chapter(index) within this same task — " +
@@ -1147,36 +1236,45 @@ async function executeTask(params: {
         "If blocking issues exist, do NOT finalize: report them so the leader can dispatch repairs.",
     );
   }
-  if (assignee === "sage" && !params.readOnly) {
+  if (assignee === "sage") {
     // Word quota is a writer concern — researchers/analysts don't need it.
     if (targetChapterIndex) {
-      envelopeParts.push("", quotaForChapter(snapshot, targetChapterIndex));
+      novelParts.push("", quotaForChapter(snapshot, targetChapterIndex));
     } else {
-      envelopeParts.push("", quotaForChapter(snapshot, snapshot.nextChapterIndex));
+      novelParts.push("", quotaForChapter(snapshot, snapshot.nextChapterIndex));
     }
   }
-  if (params.readOnly) {
-    envelopeParts.push(
-      "",
-      "READ-ONLY TASK: write, update, finalize and settle actions are DISABLED for this task at the tool gate. Produce your analysis as your final message."
-    );
-  }
-  envelopeParts.push("", languageDirective(snapshot));
+  novelParts.push("", languageDirective(snapshot));
 
   type ChatMessage = { role: "assistant" | "user"; content: string };
   const messages: ChatMessage[] = [
     { role: "assistant", content: system },
-    { role: "user", content: envelopeParts.join("\n") },
+    { role: "user", content: [...convParts, ...novelParts].join("\n") },
   ];
+
+  // P2 — conversation-scoped meter; snapshot per call = what that call sent.
+  const meter = createContextMeter({
+    modelId: params.model.selection.modelId,
+    contextWindow: params.model.contextWindow,
+    system: [systemParts.system],
+    tools: systemParts.tools,
+    skills: systemParts.skills.map((s) => s.body),
+    novel: novelParts,
+    conversation: convParts,
+  });
 
   const measuredForTask: Measured = { ...ZERO_MEASURED };
   let blockedReason: string | null = null;
   let repairRound = 0;
   let stoppedByGate = false;
 
+  let callCounter = 0; // repair rounds reuse runTurns — keep labels monotonic
   const glmCall = async (tag: string): Promise<string> => {
     if (signal.aborted) throw new Error("Run aborted");
-    return glmChat({ messages, tag, signal });
+    const reply = await glmChat({ messages, tag, signal, sdkParams: params.model.sdk });
+    callCounter += 1;
+    emitUsageEvent(runId, meter, `${task.key} · ${assignee} · turn ${callCounter}`);
+    return reply;
   };
 
   const runTurns = async (turnBudget: number): Promise<void> => {
@@ -1227,16 +1325,6 @@ async function executeTask(params: {
           feeds.push(`${i + 1}. [error] ${call.action.action} is not available to your role (${assignee}). Use one of: ${MEMBER_TOOLS[assignee].join(", ")}.`);
           continue;
         }
-        if (
-          params.readOnly &&
-          !READ_ACTIONS.has(call.action.action) &&
-          call.action.action !== "finish"
-        ) {
-          feeds.push(
-            `${i + 1}. [rejected] ${call.action.action} is a write action — this task is READ-ONLY (impact assessment). Read, analyze, and report your findings.`
-          );
-          continue;
-        }
         const result = await executeTool({
           action: call.action,
           prose: parsed.novelWrite,
@@ -1274,11 +1362,11 @@ async function executeTask(params: {
 
       if (parsed.endsLoop) return;
 
+      const toolResults = `TOOL RESULTS:\n${feeds.join("\n") || "(no actions parsed — use ```novel-tool blocks)"}`;
+      meter.addConversation(reply);
+      meter.addConversation(toolResults);
       messages.push({ role: "assistant", content: reply });
-      messages.push({
-        role: "user",
-        content: `TOOL RESULTS:\n${feeds.join("\n") || "(no actions parsed — use ```novel-tool blocks)"}`,
-      });
+      messages.push({ role: "user", content: toolResults });
     }
   };
 
@@ -1290,10 +1378,7 @@ async function executeTask(params: {
     if (stoppedByGate) return "skipped";
 
     // Write verification for SAGE chapter tasks — repair rounds before failure.
-    // READ-ONLY tasks (Phase 8 impact assessment) are exempt: their verified
-    // outcome is the analysis itself, never a DB write.
-    const requiresWrite =
-      task.artifactType === "chapter" && assignee === "sage" && params.readOnly !== true;
+    const requiresWrite = task.artifactType === "chapter" && assignee === "sage";
     while (
       requiresWrite &&
       measuredForTask.chaptersWritten + measuredForTask.chaptersUpdated === 0 &&
@@ -1308,13 +1393,12 @@ async function executeTask(params: {
         kind: "error",
         summary: `Write verification failed — no verified DB write. Repair round ${repairRound}/${budgets.glm.repairRounds}.`,
       });
-      messages.push({
-        role: "user",
-        content:
-          "VERIFY FAILED: this task required a chapter write but nothing was committed. " +
-          "Reply with create_chapter/update_chapter plus a ```novel-write block NOW, " +
-          "or make your final line BLOCKED: with the reason. Narration alone will fail again.",
-      });
+      const verifyFailed =
+        "VERIFY FAILED: this task required a chapter write but nothing was committed. " +
+        "Reply with create_chapter/update_chapter plus a ```novel-write block NOW, " +
+        "or make your final line BLOCKED: with the reason. Narration alone will fail again.";
+      meter.addConversation(verifyFailed);
+      messages.push({ role: "user", content: verifyFailed });
       await runTurns(2);
     }
 
@@ -1342,13 +1426,12 @@ async function executeTask(params: {
         kind: "error",
         summary: `Finalize verification failed — chapter is still draft, no verified finalize_chapter. Repair round ${repairRound}/${budgets.glm.repairRounds}.`,
       });
-      messages.push({
-        role: "user",
-        content:
-          "VERIFY FAILED: this task was expected to certify the chapter but no finalize_chapter was verified — the chapter is still DRAFT. " +
-          "Call finalize_chapter(index) NOW (the E2 gate reads the latest persisted review — 0 blocking passes), then settle_chapter(index) for memory. " +
-          "Skip optional scans; or reply BLOCKED: with the reason. Narration alone will fail again.",
-      });
+      const finalizeFailed =
+        "VERIFY FAILED: this task was expected to certify the chapter but no finalize_chapter was verified — the chapter is still DRAFT. " +
+        "Call finalize_chapter(index) NOW (the E2 gate reads the latest persisted review — 0 blocking passes), then settle_chapter(index) for memory. " +
+        "Skip optional scans; or reply BLOCKED: with the reason. Narration alone will fail again.";
+      meter.addConversation(finalizeFailed);
+      messages.push({ role: "user", content: finalizeFailed });
       await runTurns(2);
     }
 

@@ -18,7 +18,7 @@ export type UsageAmount = number | "unlimited";
 export interface PlanLimits {
   novels: UsageAmount;
   aiDraftWordsPerMonth: UsageAmount;
-  /** "core" = drafting & editing agents only; "all" = full seven-agent team */
+  /** "core" = drafting & editing agents only; "all" = full five-agent team */
   agentTeam: "core" | "all";
   continuityChecks: boolean;
   exportFormats: string[];
@@ -78,7 +78,7 @@ export const SUBSCRIPTION_PLANS: SubscriptionPlan[] = [
     features: [
       "5 novel projects",
       "100,000 AI draft words / month",
-      "Full AI team (all 7 agents)",
+      "Full AI team (all 5 agents)",
       "Continuity checking on every chapter",
       "JSON backup + Markdown export",
       "Priority task queue",
@@ -107,7 +107,7 @@ export const SUBSCRIPTION_PLANS: SubscriptionPlan[] = [
     features: [
       "Unlimited novel projects",
       "400,000 AI draft words / month",
-      "Full AI team (all 7 agents)",
+      "Full AI team (all 5 agents)",
       "Continuity checking + consistency doctor",
       "All export formats",
       "Early access to new agent features",

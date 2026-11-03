@@ -1,17 +1,22 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   BookOpen,
+  Check,
   ChevronLeft,
+  FolderOpen,
   Globe2,
   Loader2,
+  Lock,
+  LockOpen,
   PenLine,
   Pencil,
   Plus,
   ScrollText,
   Trash2,
   Users,
+  X,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -37,18 +42,151 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import { addVolume, deleteVolume } from "@/lib/novara/api";
-import type { PinnedRef } from "@/lib/novara/agent-types";
+import { useToast } from "@/hooks/use-toast";
+import {
+  addVolume,
+  addWorldGroup,
+  deleteCharacter,
+  deleteOutlineBeat,
+  deleteVolume,
+  deleteWorldEntry,
+  deleteWorldGroup,
+  updateCharacter,
+  updateOutlineBeat,
+  updateVolume,
+  updateWorldEntry,
+  updateWorldGroup,
+} from "@/lib/novara/api";
 import type {
   CharacterDTO,
   OutlineBeatDTO,
   VolumeDTO,
   WorldCategory,
   WorldEntryDTO,
+  WorldGroupDTO,
 } from "@/lib/novara/types";
 import { MarkdownDocument } from "./markdown-document";
-import { ConfirmDialog, PinButton } from "./ui-bits";
+import { ConfirmDialog } from "./ui-bits";
 import { cn } from "@/lib/utils";
+
+// ---------------------------------------------------------------------------
+// Canon lock (定稿锁, Phase 9) — shared controls.
+//
+// A `final` asset is Immutable Canon: the server refuses edits/deletes with
+// 409 unless the request carries `reopen: true`. Reopen archives the final
+// state into AssetVersion then downgrades back to draft. The UI therefore
+// renders locked documents read-only and routes every transition through a
+// confirmation.
+// ---------------------------------------------------------------------------
+
+const REOPEN_ARCHIVE_NOTE =
+  "原版将自动存档到版本史，然后降回草稿，可再次编辑。";
+
+/** Amber “已定稿” badge shown beside document titles while canon-locked. */
+export function CanonFinalBadge() {
+  return (
+    <Badge
+      variant="outline"
+      className="shrink-0 border-amber-300 bg-amber-50 text-[11px] text-amber-700"
+    >
+      已定稿
+    </Badge>
+  );
+}
+
+/**
+ * Canon lock toggle for one asset. Unlocked assets get a 定稿 action (confirm
+ * once → caller persists `{ status: "final" }` / `{ lock: "final" }`); locked
+ * assets get a 解除定稿 action whose confirm carries the archive explanation.
+ */
+export function CanonLockButton({
+  locked,
+  busy = false,
+  onFinalize,
+  onReopen,
+}: {
+  locked: boolean;
+  busy?: boolean;
+  onFinalize: () => void;
+  onReopen: () => void;
+}) {
+  const [confirming, setConfirming] = useState(false);
+
+  if (locked) {
+    return (
+      <>
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={busy}
+          onClick={() => setConfirming(true)}
+          className="h-8 gap-1.5 border-amber-300 bg-amber-50 px-2 text-xs text-amber-700 hover:bg-amber-100 hover:text-amber-800"
+          aria-label="解除定稿"
+        >
+          {busy ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+          ) : (
+            <LockOpen className="h-3.5 w-3.5" aria-hidden="true" />
+          )}
+          解除定稿
+        </Button>
+        <ConfirmDialog
+          open={confirming}
+          onOpenChange={setConfirming}
+          title="解除定稿？"
+          description={REOPEN_ARCHIVE_NOTE}
+          confirmLabel="解除定稿"
+          busy={busy}
+          onConfirm={() => {
+            setConfirming(false);
+            onReopen();
+          }}
+        />
+      </>
+    );
+  }
+
+  return (
+    <>
+      <Button
+        variant="outline"
+        size="sm"
+        disabled={busy}
+        onClick={() => setConfirming(true)}
+        className="h-8 gap-1.5 border-emerald-300 bg-emerald-50 px-2 text-xs text-emerald-700 hover:bg-emerald-100 hover:text-emerald-800"
+        aria-label="定稿"
+      >
+        <Lock className="h-3.5 w-3.5" aria-hidden="true" />
+        定稿
+      </Button>
+      <ConfirmDialog
+        open={confirming}
+        onOpenChange={setConfirming}
+        title="定稿？"
+        description={
+          "定稿后成为 Immutable Canon：编辑或删除将被拒绝，如需修改须先解除定稿。"
+        }
+        confirmLabel="定稿"
+        busy={busy}
+        onConfirm={() => {
+          setConfirming(false);
+          onFinalize();
+        }}
+      />
+    </>
+  );
+}
+
+/** Shared failure toast for canon/group mutations in the bible panels. */
+function useCanonAction() {
+  const { toast } = useToast();
+  return (e: unknown) =>
+    toast({
+      title: "操作失败",
+      description: e instanceof Error ? e.message : "未知错误",
+      variant: "destructive",
+    });
+}
 
 /** Scrolls the focused card into view when opened from the asset tree. */
 function useFocusScroll<T extends HTMLElement>(focusId: string | null) {
@@ -74,20 +212,39 @@ function categoryLabel(c: WorldCategory): string {
   return WORLD_CATEGORIES.find((x) => x.value === c)?.label ?? "Other";
 }
 
+/** Tiny amber lock glyph for list rows/cards whose asset is final. */
+function CanonLockGlyph() {
+  return (
+    <span
+      className="inline-flex shrink-0 items-center text-amber-600"
+      title="已定稿（Immutable Canon）"
+      aria-label="已定稿"
+    >
+      <Lock className="h-3.5 w-3.5" aria-hidden="true" />
+    </span>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Characters
 // ---------------------------------------------------------------------------
 
 export function CharactersPanel({
   characters,
+  novelId,
   focusCharacterId,
+  onRefresh,
   onAdd,
   onUpdate,
   onDelete,
 }: {
   characters: CharacterDTO[];
+  /** Novel id — needed to delete canon-locked characters with reopen. */
+  novelId: string;
   /** Card highlighted + scrolled into view (opened from the asset tree). */
   focusCharacterId?: string | null;
+  /** Parent refetch, called after a panel-driven canon-locked delete. */
+  onRefresh: () => Promise<void>;
   onAdd: (input: { name: string; role: string; description: string }) => Promise<boolean>;
   onUpdate: (id: string, patch: { name?: string; role?: string; description?: string }) => Promise<boolean>;
   onDelete: (c: CharacterDTO) => Promise<void>;
@@ -99,6 +256,7 @@ export function CharactersPanel({
   const [busy, setBusy] = useState(false);
   const [deleting, setDeleting] = useState<CharacterDTO | null>(null);
   const focusRef = useFocusScroll<HTMLDivElement>(focusCharacterId ?? null);
+  const onCanonActionError = useCanonAction();
 
   const openNew = () => {
     setName("");
@@ -150,7 +308,10 @@ export function CharactersPanel({
           <CardContent className="pt-5">
             <div className="flex items-start justify-between gap-2">
               <div>
-                <h3 className="font-semibold">{c.name}</h3>
+                <h3 className="flex items-center gap-1.5 font-semibold">
+                  <span className="min-w-0 truncate">{c.name}</span>
+                  {c.status === "final" && <CanonLockGlyph />}
+                </h3>
                 {c.role && (
                   <Badge variant="outline" className="mt-1 text-[11px]">
                     {c.role}
@@ -158,7 +319,14 @@ export function CharactersPanel({
                 )}
               </div>
               <div className="flex gap-1">
-                <Button variant="ghost" size="icon" onClick={() => openEdit(c)} aria-label={`Edit ${c.name}`}>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => openEdit(c)}
+                  disabled={c.status === "final"}
+                  title={c.status === "final" ? "已定稿 — 解除定稿后可编辑" : undefined}
+                  aria-label={`Edit ${c.name}`}
+                >
                   <Pencil className="h-4 w-4" aria-hidden="true" />
                 </Button>
                 <Button
@@ -221,9 +389,25 @@ export function CharactersPanel({
         open={deleting !== null}
         onOpenChange={(v) => !v && setDeleting(null)}
         title="Delete character?"
-        description={`“${deleting?.name ?? ""}” will be removed from the story bible.`}
+        description={
+          deleting?.status === "final"
+            ? `“${deleting?.name ?? ""}” 已定稿：删除前原版将自动存档到版本史。`
+            : `“${deleting?.name ?? ""}” will be removed from the story bible.`
+        }
         onConfirm={async () => {
-          if (deleting) await onDelete(deleting);
+          if (!deleting) return;
+          const target = deleting;
+          if (target.status === "final") {
+            // Immutable Canon: the server only allows the delete with reopen.
+            try {
+              await deleteCharacter(target.id, true);
+              await onRefresh();
+            } catch (e) {
+              onCanonActionError(e);
+            }
+          } else {
+            await onDelete(target);
+          }
           setDeleting(null);
         }}
       />
@@ -237,25 +421,34 @@ export function CharactersPanel({
 
 export function CharacterDocument({
   character,
+  novelId,
+  onRefresh,
   onUpdate,
   onDelete,
   onBack,
 }: {
   character: CharacterDTO;
+  /** Novel id — required by the canon lock API calls. */
+  novelId: string;
+  /** Parent refetch, called after a canon finalize/reopen. */
+  onRefresh: () => Promise<void>;
   onUpdate: (id: string, patch: { name?: string; role?: string; aliases?: string; description?: string }) => Promise<boolean>;
   onDelete: (c: CharacterDTO) => Promise<void>;
   onBack: () => void;
 }) {
+  const locked = character.status === "final";
   const [name, setName] = useState(character.name);
   const [role, setRole] = useState(character.role);
   const [aliases, setAliases] = useState(character.aliases);
   const [description, setDescription] = useState(character.description);
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [lockBusy, setLockBusy] = useState(false);
   const [view, setView] = useState<AssetDocView>(
     character.description.trim() ? "preview" : "write"
   );
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const onCanonActionError = useCanonAction();
 
   // Resync local state when a different character is opened (prop identity
   // change). Adjusting state during render is React's recommended alternative
@@ -285,6 +478,19 @@ export function CharacterDocument({
     if (ok) setDirty(false);
   };
 
+  /** 定稿 → Immutable Canon；解除定稿 → archive then downgrade to draft. */
+  const setCanon = async (final: boolean) => {
+    setLockBusy(true);
+    try {
+      await updateCharacter(character.id, final ? { status: "final" } : { reopen: true });
+      await onRefresh();
+    } catch (e) {
+      onCanonActionError(e);
+    } finally {
+      setLockBusy(false);
+    }
+  };
+
   return (
     <div className="rounded-lg border bg-card">
       {/* Header — back + title inputs while writing, document title while reading */}
@@ -308,6 +514,7 @@ export function CharacterDocument({
               }}
               className="min-w-0 flex-1 font-medium"
               aria-label="Character name"
+              readOnly={locked}
             />
             <Input
               value={role}
@@ -318,6 +525,7 @@ export function CharacterDocument({
               placeholder="Role"
               className="min-w-0 sm:w-36"
               aria-label="Role"
+              readOnly={locked}
             />
             <Input
               value={aliases}
@@ -328,6 +536,7 @@ export function CharacterDocument({
               placeholder="Alternate names, comma-separated"
               className="min-w-0 sm:w-44"
               aria-label="Aliases"
+              readOnly={locked}
             />
           </div>
         ) : (
@@ -347,6 +556,15 @@ export function CharacterDocument({
             )}
           </div>
         )}
+        <div className="flex shrink-0 items-center gap-1.5">
+          {locked && <CanonFinalBadge />}
+          <CanonLockButton
+            locked={locked}
+            busy={lockBusy}
+            onFinalize={() => void setCanon(true)}
+            onReopen={() => void setCanon(false)}
+          />
+        </div>
       </div>
 
       <DocToolbar
@@ -357,12 +575,7 @@ export function CharacterDocument({
         onSave={() => void save()}
         onDelete={() => setConfirmDelete(true)}
         deleteAriaLabel="Delete character"
-        novelId={character.novelId}
-        pinTarget={{
-          type: "character",
-          id: character.id,
-          label: `人物档案 · ${character.name}`,
-        }}
+        locked={locked}
       />
 
       {/* Body — textarea while writing, document window while reading */}
@@ -376,6 +589,7 @@ export function CharacterDocument({
           placeholder="Motivations, flaws, arc, relationships…"
           className="nice-scroll min-h-[280px] resize-y rounded-none border-0 font-serif text-[15px] leading-7 shadow-none focus-visible:ring-0"
           aria-label="Description"
+          readOnly={locked}
         />
       ) : (
         <div className="px-6 py-5" aria-label="Character document preview">
@@ -410,14 +624,23 @@ export function CharacterDocument({
 
 export function WorldPanel({
   entries,
+  groups,
+  novelId,
   focusWorldId,
+  onRefresh,
   onAdd,
   onUpdate,
   onDelete,
 }: {
   entries: WorldEntryDTO[];
+  /** 世界书 second-level groups (Phase 9) — chips filter the entry grid. */
+  groups: WorldGroupDTO[];
+  /** Novel id — group create + canon-locked entry deletes ride on it. */
+  novelId: string;
   /** Card highlighted + scrolled into view (opened from the asset tree). */
   focusWorldId?: string | null;
+  /** Parent refetch, called after group/canon mutations. */
+  onRefresh: () => Promise<void>;
   onAdd: (input: { title: string; category: WorldCategory; content: string }) => Promise<boolean>;
   onUpdate: (id: string, patch: { title?: string; category?: WorldCategory; content?: string }) => Promise<boolean>;
   onDelete: (w: WorldEntryDTO) => Promise<void>;
@@ -429,17 +652,94 @@ export function WorldPanel({
   const [busy, setBusy] = useState(false);
   const [deleting, setDeleting] = useState<WorldEntryDTO | null>(null);
   const focusRef = useFocusScroll<HTMLDivElement>(focusWorldId ?? null);
+  const onCanonActionError = useCanonAction();
+
+  // --- 世界书 group management state (Phase 9) ---
+  const [groupFilter, setGroupFilter] = useState<string>("all");
+  const [creatingGroup, setCreatingGroup] = useState(false);
+  const [newGroupName, setNewGroupName] = useState("");
+  const [renamingGroupId, setRenamingGroupId] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState("");
+  const [groupBusy, setGroupBusy] = useState(false);
+  const [deletingGroup, setDeletingGroup] = useState<WorldGroupDTO | null>(null);
+  const [groupId, setGroupId] = useState<string | null>(null);
+
+  const groupCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const w of entries) {
+      if (w.groupId) counts.set(w.groupId, (counts.get(w.groupId) ?? 0) + 1);
+    }
+    return counts;
+  }, [entries]);
+
+  const visibleEntries = useMemo(
+    () =>
+      groupFilter === "all"
+        ? entries
+        : entries.filter((w) => w.groupId === groupFilter),
+    [entries, groupFilter]
+  );
+
+  const createGroup = async () => {
+    const name = newGroupName.trim();
+    if (!name) return;
+    setGroupBusy(true);
+    try {
+      await addWorldGroup(novelId, name);
+      setNewGroupName("");
+      setCreatingGroup(false);
+      await onRefresh();
+    } catch (e) {
+      onCanonActionError(e);
+    } finally {
+      setGroupBusy(false);
+    }
+  };
+
+  const renameGroup = async (g: WorldGroupDTO) => {
+    const name = renameValue.trim();
+    if (!name || name === g.name) {
+      setRenamingGroupId(null);
+      return;
+    }
+    setGroupBusy(true);
+    try {
+      await updateWorldGroup(g.id, { name });
+      setRenamingGroupId(null);
+      await onRefresh();
+    } catch (e) {
+      onCanonActionError(e);
+    } finally {
+      setGroupBusy(false);
+    }
+  };
+
+  const removeGroup = async (g: WorldGroupDTO) => {
+    setGroupBusy(true);
+    try {
+      await deleteWorldGroup(g.id);
+      setDeletingGroup(null);
+      if (groupFilter === g.id) setGroupFilter("all");
+      await onRefresh();
+    } catch (e) {
+      onCanonActionError(e);
+    } finally {
+      setGroupBusy(false);
+    }
+  };
 
   const openNew = () => {
     setTitle("");
     setCategory("other");
     setContent("");
+    setGroupId(null);
     setEditing("new");
   };
   const openEdit = (w: WorldEntryDTO) => {
     setTitle(w.title);
     setCategory(w.category);
     setContent(w.content);
+    setGroupId(w.groupId);
     setEditing(w);
   };
 
@@ -450,9 +750,165 @@ export function WorldPanel({
       editing === "new"
         ? await onAdd({ title: title.trim(), category, content })
         : await onUpdate(editing.id, { title: title.trim(), category, content });
+    // Persist the 分组 assignment straight through the world-entry API
+    // (the generic onUpdate handler only covers title/category/content).
+    if (ok && editing !== "new" && groupId !== editing.groupId) {
+      try {
+        await updateWorldEntry(editing.id, { groupId });
+        await onRefresh();
+      } catch (e) {
+        onCanonActionError(e);
+      }
+    }
     setBusy(false);
     if (ok) setEditing(null);
   };
+
+  // --- 世界书 second-level group toolbar (Phase 9) ---
+  const groupToolbar = (
+    <div className="space-y-2 rounded-lg border bg-muted/30 p-2.5">
+      <div className="flex items-center justify-between gap-2">
+        <span className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+          <FolderOpen className="h-3.5 w-3.5" aria-hidden="true" />
+          分组
+        </span>
+        {!creatingGroup && (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-7 gap-1 px-2 text-xs"
+            onClick={() => {
+              setNewGroupName("");
+              setCreatingGroup(true);
+            }}
+          >
+            <Plus className="h-3.5 w-3.5" aria-hidden="true" />
+            新建分组
+          </Button>
+        )}
+      </div>
+      {creatingGroup && (
+        <div className="flex items-center gap-1.5">
+          <Input
+            value={newGroupName}
+            onChange={(e) => setNewGroupName(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") void createGroup();
+              if (e.key === "Escape") setCreatingGroup(false);
+            }}
+            placeholder="分组名称…"
+            aria-label="新分组名称"
+            autoFocus
+            className="h-8 max-w-xs text-sm"
+          />
+          <Button
+            size="sm"
+            className="h-8 px-3 text-xs"
+            onClick={() => void createGroup()}
+            disabled={groupBusy || !newGroupName.trim()}
+          >
+            {groupBusy && <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />}
+            创建
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-8 px-2 text-xs"
+            onClick={() => setCreatingGroup(false)}
+          >
+            取消
+          </Button>
+        </div>
+      )}
+      <div className="flex flex-wrap items-center gap-1.5">
+        <GroupChip
+          label="全部"
+          count={entries.length}
+          active={groupFilter === "all"}
+          onSelect={() => setGroupFilter("all")}
+        />
+        {groups.map((g) =>
+          renamingGroupId === g.id ? (
+            <span
+              key={g.id}
+              className="flex items-center gap-0.5 rounded-full border bg-background px-2 py-0.5"
+            >
+              <Input
+                value={renameValue}
+                onChange={(e) => setRenameValue(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") void renameGroup(g);
+                  if (e.key === "Escape") setRenamingGroupId(null);
+                }}
+                aria-label="分组名称"
+                autoFocus
+                className="h-6 w-32 border-0 px-1 text-xs shadow-none focus-visible:ring-0"
+              />
+              <button
+                type="button"
+                onClick={() => void renameGroup(g)}
+                aria-label="保存分组名称"
+                className="rounded p-0.5 text-emerald-600 hover:text-emerald-700"
+              >
+                <Check className="h-3 w-3" aria-hidden="true" />
+              </button>
+              <button
+                type="button"
+                onClick={() => setRenamingGroupId(null)}
+                aria-label="取消重命名"
+                className="rounded p-0.5 text-muted-foreground hover:text-foreground"
+              >
+                <X className="h-3 w-3" aria-hidden="true" />
+              </button>
+            </span>
+          ) : (
+            <span
+              key={g.id}
+              className={cn(
+                "flex items-center gap-0.5 rounded-full border px-1 py-0.5 transition-colors",
+                groupFilter === g.id
+                  ? "border-primary/40 bg-primary/10"
+                  : "border-border bg-background"
+              )}
+            >
+              <GroupChip
+                label={g.name}
+                count={groupCounts.get(g.id) ?? 0}
+                active={groupFilter === g.id}
+                onSelect={() => setGroupFilter(g.id)}
+              />
+              <button
+                type="button"
+                onClick={() => {
+                  setRenameValue(g.name);
+                  setRenamingGroupId(g.id);
+                }}
+                aria-label={`重命名分组 ${g.name}`}
+                title="重命名"
+                className="rounded p-0.5 text-muted-foreground/50 transition-colors hover:text-foreground"
+              >
+                <Pencil className="h-3 w-3" aria-hidden="true" />
+              </button>
+              <button
+                type="button"
+                onClick={() => setDeletingGroup(g)}
+                aria-label={`删除分组 ${g.name}`}
+                title="删除分组"
+                className="rounded p-0.5 text-muted-foreground/50 transition-colors hover:text-destructive"
+              >
+                <Trash2 className="h-3 w-3" aria-hidden="true" />
+              </button>
+            </span>
+          )
+        )}
+        {groups.length === 0 && !creatingGroup && (
+          <span className="text-xs text-muted-foreground">
+            暂无分组 — 用「新建分组」为世界书条目建立二级目录。
+          </span>
+        )}
+      </div>
+    </div>
+  );
 
   return (
     <PanelShell
@@ -462,49 +918,68 @@ export function WorldPanel({
       emptyText="No world entries yet. Places, factions, systems and lore belong here."
       onAdd={openNew}
       addLabel="Add entry"
+      toolbar={groupToolbar}
       list={
-        <div ref={focusRef} className="grid gap-4 sm:grid-cols-2">
-          {entries.map((w) => (
-        <Card
-          key={w.id}
-          data-asset-id={w.id}
-          className={cn(
-            "scroll-mt-2 transition-shadow",
-            w.id === focusWorldId && "border-primary/50 ring-1 ring-primary/30"
-          )}
-        >
-          <CardContent className="pt-5">
-            <div className="flex items-start justify-between gap-2">
-              <div>
-                <h3 className="font-semibold">{w.title}</h3>
-                <Badge variant="outline" className="mt-1 text-[11px]">
-                  {categoryLabel(w.category)}
-                </Badge>
-              </div>
-              <div className="flex gap-1">
-                <Button variant="ghost" size="icon" onClick={() => openEdit(w)} aria-label={`Edit ${w.title}`}>
-                  <Pencil className="h-4 w-4" aria-hidden="true" />
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  onClick={() => setDeleting(w)}
-                  aria-label={`Delete ${w.title}`}
-                  className="hover:text-destructive"
-                >
-                  <Trash2 className="h-4 w-4" aria-hidden="true" />
-                </Button>
-              </div>
+        <div ref={focusRef}>
+          {visibleEntries.length > 0 ? (
+            <div className="grid gap-4 sm:grid-cols-2">
+              {visibleEntries.map((w) => (
+            <Card
+              key={w.id}
+              data-asset-id={w.id}
+              className={cn(
+                "scroll-mt-2 transition-shadow",
+                w.id === focusWorldId && "border-primary/50 ring-1 ring-primary/30"
+              )}
+            >
+              <CardContent className="pt-5">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <h3 className="flex items-center gap-1.5 font-semibold">
+                      <span className="min-w-0 truncate">{w.title}</span>
+                      {w.status === "final" && <CanonLockGlyph />}
+                    </h3>
+                    <Badge variant="outline" className="mt-1 text-[11px]">
+                      {categoryLabel(w.category)}
+                    </Badge>
+                  </div>
+                  <div className="flex gap-1">
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      onClick={() => openEdit(w)}
+                      disabled={w.status === "final"}
+                      title={w.status === "final" ? "已定稿 — 解除定稿后可编辑" : undefined}
+                      aria-label={`Edit ${w.title}`}
+                    >
+                      <Pencil className="h-4 w-4" aria-hidden="true" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      onClick={() => setDeleting(w)}
+                      aria-label={`Delete ${w.title}`}
+                      className="hover:text-destructive"
+                    >
+                      <Trash2 className="h-4 w-4" aria-hidden="true" />
+                    </Button>
+                  </div>
+                </div>
+                {w.content && (
+                  <MarkdownDocument
+                    content={w.content}
+                    className="mt-2 text-muted-foreground"
+                  />
+                )}
+              </CardContent>
+            </Card>
+              ))}
             </div>
-            {w.content && (
-              <MarkdownDocument
-                content={w.content}
-                className="mt-2 text-muted-foreground"
-              />
-            )}
-          </CardContent>
-        </Card>
-          ))}
+          ) : (
+            <p className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">
+              该分组暂无条目。
+            </p>
+          )}
         </div>
       }
     >
@@ -538,6 +1013,27 @@ export function WorldPanel({
                 </SelectContent>
               </Select>
             </div>
+            {editing !== "new" && (
+              <div className="space-y-1.5">
+                <Label>分组</Label>
+                <Select
+                  value={groupId ?? "ungrouped"}
+                  onValueChange={(v) => setGroupId(v === "ungrouped" ? null : v)}
+                >
+                  <SelectTrigger aria-label="分组">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="ungrouped">未分组</SelectItem>
+                    {groups.map((g) => (
+                      <SelectItem key={g.id} value={g.id}>
+                        {g.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
             <div className="space-y-1.5">
               <Label htmlFor="world-content">Content</Label>
               <Textarea id="world-content" value={content} onChange={(e) => setContent(e.target.value)} rows={4} placeholder="Rules, geography, history, dangers…" />
@@ -556,13 +1052,72 @@ export function WorldPanel({
         open={deleting !== null}
         onOpenChange={(v) => !v && setDeleting(null)}
         title="Delete world entry?"
-        description={`“${deleting?.title ?? ""}” will be removed from the world bible.`}
+        description={
+          deleting?.status === "final"
+            ? `“${deleting?.title ?? ""}” 已定稿：删除前原版将自动存档到版本史。`
+            : `“${deleting?.title ?? ""}” will be removed from the world bible.`
+        }
         onConfirm={async () => {
-          if (deleting) await onDelete(deleting);
+          if (!deleting) return;
+          const target = deleting;
+          if (target.status === "final") {
+            // Immutable Canon: the server only allows the delete with reopen.
+            try {
+              await deleteWorldEntry(target.id, true);
+              await onRefresh();
+            } catch (e) {
+              onCanonActionError(e);
+            }
+          } else {
+            await onDelete(target);
+          }
           setDeleting(null);
         }}
       />
+
+      <ConfirmDialog
+        open={deletingGroup !== null}
+        onOpenChange={(v) => !v && setDeletingGroup(null)}
+        title="删除分组？"
+        description={`“${deletingGroup?.name ?? ""}” 将被删除，组内条目将变为未分组。`}
+        confirmLabel="删除分组"
+        busy={groupBusy}
+        onConfirm={async () => {
+          if (deletingGroup) await removeGroup(deletingGroup);
+        }}
+      />
     </PanelShell>
+  );
+}
+
+/** Round filter chip for the 世界书 group toolbar (全部 / each group). */
+function GroupChip({
+  label,
+  count,
+  active,
+  onSelect,
+}: {
+  label: string;
+  count: number;
+  active: boolean;
+  onSelect: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onSelect}
+      aria-pressed={active}
+      title={`只看「${label}」`}
+      className={cn(
+        "flex items-center gap-1 rounded-full px-2 py-0.5 text-xs transition-colors",
+        active
+          ? "bg-primary/10 font-medium text-primary"
+          : "text-muted-foreground hover:text-foreground"
+      )}
+    >
+      <span className="max-w-40 truncate">{label}</span>
+      <span className="font-mono text-[10px] opacity-70">({count})</span>
+    </button>
   );
 }
 
@@ -572,24 +1127,33 @@ export function WorldPanel({
 
 export function WorldDocument({
   entry,
+  novelId,
+  onRefresh,
   onUpdate,
   onDelete,
   onBack,
 }: {
   entry: WorldEntryDTO;
+  /** Novel id — required by the canon lock API calls. */
+  novelId: string;
+  /** Parent refetch, called after a canon finalize/reopen. */
+  onRefresh: () => Promise<void>;
   onUpdate: (id: string, patch: { title?: string; category?: WorldCategory; content?: string }) => Promise<boolean>;
   onDelete: (w: WorldEntryDTO) => Promise<void>;
   onBack: () => void;
 }) {
+  const locked = entry.status === "final";
   const [title, setTitle] = useState(entry.title);
   const [category, setCategory] = useState<WorldCategory>(entry.category);
   const [content, setContent] = useState(entry.content);
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [lockBusy, setLockBusy] = useState(false);
   const [view, setView] = useState<AssetDocView>(
     entry.content.trim() ? "preview" : "write"
   );
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const onCanonActionError = useCanonAction();
 
   // Resync local state when a different world entry is opened (see
   // CharacterDocument for why this is a render-time adjustment).
@@ -612,6 +1176,19 @@ export function WorldDocument({
     });
     setSaving(false);
     if (ok) setDirty(false);
+  };
+
+  /** 定稿 → Immutable Canon；解除定稿 → archive then downgrade to draft. */
+  const setCanon = async (final: boolean) => {
+    setLockBusy(true);
+    try {
+      await updateWorldEntry(entry.id, final ? { status: "final" } : { reopen: true });
+      await onRefresh();
+    } catch (e) {
+      onCanonActionError(e);
+    } finally {
+      setLockBusy(false);
+    }
   };
 
   return (
@@ -637,6 +1214,7 @@ export function WorldDocument({
               }}
               className="min-w-0 flex-1 font-medium"
               aria-label="Entry title"
+              readOnly={locked}
             />
             <Select
               value={category}
@@ -644,6 +1222,7 @@ export function WorldDocument({
                 setCategory(v as WorldCategory);
                 setDirty(true);
               }}
+              disabled={locked}
             >
               <SelectTrigger className="w-full sm:w-44" aria-label="Category">
                 <SelectValue />
@@ -667,6 +1246,15 @@ export function WorldDocument({
             </Badge>
           </div>
         )}
+        <div className="flex shrink-0 items-center gap-1.5">
+          {locked && <CanonFinalBadge />}
+          <CanonLockButton
+            locked={locked}
+            busy={lockBusy}
+            onFinalize={() => void setCanon(true)}
+            onReopen={() => void setCanon(false)}
+          />
+        </div>
       </div>
 
       <DocToolbar
@@ -677,12 +1265,7 @@ export function WorldDocument({
         onSave={() => void save()}
         onDelete={() => setConfirmDelete(true)}
         deleteAriaLabel="Delete world entry"
-        novelId={entry.novelId}
-        pinTarget={{
-          type: "world_entry",
-          id: entry.id,
-          label: `世界规则 · ${entry.title}`,
-        }}
+        locked={locked}
       />
 
       {/* Body — textarea while writing, document window while reading */}
@@ -696,6 +1279,7 @@ export function WorldDocument({
           placeholder="Rules, geography, history, dangers…"
           className="nice-scroll min-h-[280px] resize-y rounded-none border-0 font-serif text-[15px] leading-7 shadow-none focus-visible:ring-0"
           aria-label="Content"
+          readOnly={locked}
         />
       ) : (
         <div className="px-6 py-5" aria-label="World entry document preview">
@@ -809,6 +1393,7 @@ export function OutlinePanel({
   const beatNumbers = new Map<string, number>(beats.map((b, i) => [b.id, i + 1]));
   const renderBeat = (b: OutlineBeatDTO) => {
     const no = beatNumbers.get(b.id) ?? 1;
+    const locked = b.status === "final";
     return (
       <li
         key={b.id}
@@ -822,7 +1407,10 @@ export function OutlinePanel({
           {no}
         </span>
         <div className="min-w-0 flex-1">
-          <h3 className="font-medium">{b.title}</h3>
+          <h3 className="flex items-center gap-1.5 font-medium">
+            <span className="min-w-0 truncate">{b.title}</span>
+            {locked && <CanonLockGlyph />}
+          </h3>
           {b.summary && (
             <MarkdownDocument
               content={b.summary}
@@ -831,7 +1419,14 @@ export function OutlinePanel({
           )}
         </div>
         <div className="flex shrink-0 gap-1">
-          <Button variant="ghost" size="icon" onClick={() => openEdit(b)} aria-label={`Edit beat ${no}`}>
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => openEdit(b)}
+            disabled={locked}
+            title={locked ? "已定稿 — 解除定稿后可编辑" : undefined}
+            aria-label={`Edit beat ${no}`}
+          >
             <Pencil className="h-4 w-4" aria-hidden="true" />
           </Button>
           <Button
@@ -895,8 +1490,9 @@ export function OutlinePanel({
                     <span className="shrink-0 font-mono text-xs text-muted-foreground">
                       {String(v.index).padStart(2, "0")}
                     </span>
-                    <h4 className="min-w-0 flex-1 truncate text-sm font-semibold">
-                      {v.title}
+                    <h4 className="flex min-w-0 flex-1 items-center gap-1.5 truncate text-sm font-semibold">
+                      <span className="min-w-0 truncate">{v.title}</span>
+                      {v.status === "final" && <CanonLockGlyph />}
                     </h4>
                     <span className="shrink-0 text-xs text-muted-foreground">
                       ({section.beats.length})
@@ -975,9 +1571,25 @@ export function OutlinePanel({
         open={deleting !== null}
         onOpenChange={(v) => !v && setDeleting(null)}
         title="Delete outline beat?"
-        description={`“${deleting?.title ?? ""}” will be removed from the outline. Later beats keep their order.`}
+        description={
+          deleting?.status === "final"
+            ? `“${deleting?.title ?? ""}” 已定稿：删除前原版将自动存档到版本史。`
+            : `“${deleting?.title ?? ""}” will be removed from the outline. Later beats keep their order.`
+        }
         onConfirm={async () => {
-          if (deleting) await onDelete(deleting);
+          if (!deleting) return;
+          const target = deleting;
+          if (target.status === "final") {
+            // Immutable Canon: the server only allows the delete with reopen.
+            try {
+              await deleteOutlineBeat(target.id, true);
+              await onRefresh?.();
+            } catch (e) {
+              console.error("deleteOutlineBeat (reopen) failed", e);
+            }
+          } else {
+            await onDelete(target);
+          }
           setDeleting(null);
         }}
       />
@@ -986,13 +1598,17 @@ export function OutlinePanel({
         open={deletingVolume !== null}
         onOpenChange={(v) => !v && setDeletingVolume(null)}
         title="Delete volume?"
-        description={`“${deletingVolume?.title ?? ""}” will be deleted. Beats in this volume will become unsorted (they are not deleted).`}
+        description={
+          deletingVolume?.status === "final"
+            ? `“${deletingVolume?.title ?? ""}” 已定稿：删除前原版将自动存档到版本史。卷内节拍将变为未分组（不会被删除）。`
+            : `“${deletingVolume?.title ?? ""}” will be deleted. Beats in this volume will become unsorted (they are not deleted).`
+        }
         onConfirm={async () => {
           const volume = deletingVolume;
           setDeletingVolume(null);
           if (!volume) return;
           try {
-            await deleteVolume(volume.id);
+            await deleteVolume(volume.id, volume.status === "final");
             await onRefresh?.();
           } catch (e) {
             console.error("deleteVolume failed", e);
@@ -1009,23 +1625,32 @@ export function OutlinePanel({
 
 export function VolumeDocument({
   volume,
+  novelId,
+  onRefresh,
   onUpdate,
   onDelete,
   onBack,
 }: {
   volume: VolumeDTO;
+  /** Novel id — required by the canon lock API calls. */
+  novelId: string;
+  /** Parent refetch, called after a canon finalize/reopen. */
+  onRefresh: () => Promise<void>;
   onUpdate: (id: string, patch: { title?: string; synopsis?: string }) => Promise<boolean>;
   onDelete: (v: VolumeDTO) => Promise<void>;
   onBack: () => void;
 }) {
+  const locked = volume.status === "final";
   const [title, setTitle] = useState(volume.title);
   const [synopsis, setSynopsis] = useState(volume.synopsis);
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [lockBusy, setLockBusy] = useState(false);
   const [view, setView] = useState<AssetDocView>(
     volume.synopsis.trim() ? "preview" : "write"
   );
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const onCanonActionError = useCanonAction();
 
   // Resync local state when a different volume is opened (see
   // CharacterDocument for why this is a render-time adjustment).
@@ -1046,6 +1671,19 @@ export function VolumeDocument({
     });
     setSaving(false);
     if (ok) setDirty(false);
+  };
+
+  /** 定稿 → Immutable Canon；解除定稿 → archive then downgrade to draft. */
+  const setCanon = async (final: boolean) => {
+    setLockBusy(true);
+    try {
+      await updateVolume(volume.id, final ? { status: "final" } : { reopen: true });
+      await onRefresh();
+    } catch (e) {
+      onCanonActionError(e);
+    } finally {
+      setLockBusy(false);
+    }
   };
 
   return (
@@ -1071,6 +1709,7 @@ export function VolumeDocument({
               }}
               className="min-w-0 flex-1 font-medium"
               aria-label="Volume title"
+              readOnly={locked}
             />
             <span className="shrink-0 rounded border bg-muted px-2 py-1 font-mono text-xs text-muted-foreground">
               Volume {volume.index}
@@ -1081,6 +1720,15 @@ export function VolumeDocument({
             {title || volume.title}
           </h2>
         )}
+        <div className="flex shrink-0 items-center gap-1.5">
+          {locked && <CanonFinalBadge />}
+          <CanonLockButton
+            locked={locked}
+            busy={lockBusy}
+            onFinalize={() => void setCanon(true)}
+            onReopen={() => void setCanon(false)}
+          />
+        </div>
       </div>
 
       <DocToolbar
@@ -1091,12 +1739,7 @@ export function VolumeDocument({
         onSave={() => void save()}
         onDelete={() => setConfirmDelete(true)}
         deleteAriaLabel="Delete volume"
-        novelId={volume.novelId}
-        pinTarget={{
-          type: "volume",
-          id: volume.id,
-          label: `卷${String(volume.index).padStart(2, "0")} · ${volume.title}`,
-        }}
+        locked={locked}
       />
 
       {/* Body — textarea while writing, document window while reading */}
@@ -1110,6 +1753,7 @@ export function VolumeDocument({
           placeholder="The plan for this volume — arc, turning points, how it pays off…"
           className="nice-scroll min-h-[280px] resize-y rounded-none border-0 font-serif text-[15px] leading-7 shadow-none focus-visible:ring-0"
           aria-label="Synopsis"
+          readOnly={locked}
         />
       ) : (
         <div className="px-6 py-5" aria-label="Volume document preview">
@@ -1149,26 +1793,35 @@ export function VolumeDocument({
 
 export function BeatDocument({
   beat,
+  novelId,
+  onRefresh,
   volumes,
   onUpdate,
   onDelete,
   onBack,
 }: {
   beat: OutlineBeatDTO;
+  /** Novel id — required by the canon lock API calls. */
+  novelId: string;
+  /** Parent refetch, called after a canon finalize/reopen. */
+  onRefresh: () => Promise<void>;
   /** Volumes (卷) for the quick reassignment select — hidden while absent. */
   volumes?: VolumeDTO[];
   onUpdate: (id: string, patch: { title?: string; summary?: string; volumeId?: string | null }) => Promise<boolean>;
   onDelete: (b: OutlineBeatDTO) => Promise<void>;
   onBack: () => void;
 }) {
+  const locked = beat.status === "final";
   const [title, setTitle] = useState(beat.title);
   const [summary, setSummary] = useState(beat.summary);
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [lockBusy, setLockBusy] = useState(false);
   const [view, setView] = useState<AssetDocView>(
     beat.summary.trim() ? "preview" : "write"
   );
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const onCanonActionError = useCanonAction();
 
   // Resync local state when a different beat is opened (see
   // CharacterDocument for why this is a render-time adjustment).
@@ -1189,6 +1842,19 @@ export function BeatDocument({
     });
     setSaving(false);
     if (ok) setDirty(false);
+  };
+
+  /** 定稿 → Immutable Canon；解除定稿 → archive then downgrade to draft. */
+  const setCanon = async (final: boolean) => {
+    setLockBusy(true);
+    try {
+      await updateOutlineBeat(beat.id, final ? { status: "final" } : { reopen: true });
+      await onRefresh();
+    } catch (e) {
+      onCanonActionError(e);
+    } finally {
+      setLockBusy(false);
+    }
   };
 
   return (
@@ -1214,6 +1880,7 @@ export function BeatDocument({
               }}
               className="min-w-0 flex-1 font-medium"
               aria-label="Beat title"
+              readOnly={locked}
             />
             <span className="shrink-0 rounded border bg-muted px-2 py-1 font-mono text-xs text-muted-foreground">
               Beat {beat.index}
@@ -1232,6 +1899,7 @@ export function BeatDocument({
                 volumeId: value === "unsorted" ? null : value,
               })
             }
+            disabled={locked}
           >
             <SelectTrigger className="w-full shrink-0 sm:w-40" aria-label="Volume">
               <SelectValue />
@@ -1246,6 +1914,15 @@ export function BeatDocument({
             </SelectContent>
           </Select>
         )}
+        <div className="flex shrink-0 items-center gap-1.5">
+          {locked && <CanonFinalBadge />}
+          <CanonLockButton
+            locked={locked}
+            busy={lockBusy}
+            onFinalize={() => void setCanon(true)}
+            onReopen={() => void setCanon(false)}
+          />
+        </div>
       </div>
 
       <DocToolbar
@@ -1256,12 +1933,7 @@ export function BeatDocument({
         onSave={() => void save()}
         onDelete={() => setConfirmDelete(true)}
         deleteAriaLabel="Delete outline beat"
-        novelId={beat.novelId}
-        pinTarget={{
-          type: "outline_beat",
-          id: beat.id,
-          label: `故事骨架 · ${beat.title}`,
-        }}
+        locked={locked}
       />
 
       {/* Body — textarea while writing, document window while reading */}
@@ -1275,6 +1947,7 @@ export function BeatDocument({
           placeholder="What happens in this beat…"
           className="nice-scroll min-h-[280px] resize-y rounded-none border-0 font-serif text-[15px] leading-7 shadow-none focus-visible:ring-0"
           aria-label="Summary"
+          readOnly={locked}
         />
       ) : (
         <div className="px-6 py-5" aria-label="Outline beat document preview">
@@ -1320,6 +1993,7 @@ function PanelShell({
   onAdd,
   addLabel,
   headerAction,
+  toolbar,
   list,
   children,
 }: {
@@ -1331,6 +2005,9 @@ function PanelShell({
   addLabel: string;
   /** Extra secondary control beside the add button (e.g. "Add volume"). */
   headerAction?: React.ReactNode;
+  /** Filter/management strip rendered between the header and the list
+   * (e.g. the 世界书 second-level group toolbar) — shown even when empty. */
+  toolbar?: React.ReactNode;
   list: React.ReactNode;
   children: React.ReactNode;
 }) {
@@ -1352,6 +2029,7 @@ function PanelShell({
           </Button>
         </div>
       </div>
+      {toolbar}
       {count === 0 ? (
         <p className="rounded-lg border border-dashed p-8 text-center text-sm text-muted-foreground">
           {emptyText}
@@ -1424,8 +2102,7 @@ function DocToolbar({
   onSave,
   onDelete,
   deleteAriaLabel,
-  novelId,
-  pinTarget,
+  locked = false,
 }: {
   view: AssetDocView;
   onViewChange: (v: AssetDocView) => void;
@@ -1434,37 +2111,42 @@ function DocToolbar({
   onSave: () => void;
   onDelete: () => void;
   deleteAriaLabel: string;
-  /** Phase 8 Pin-to-Chat — optional pin toggle rendered before Save. */
-  novelId?: string;
-  pinTarget?: PinnedRef;
+  /** Immutable Canon: hide save/delete, show the archive hint instead. */
+  locked?: boolean;
 }) {
   return (
     <div className="flex flex-wrap items-center gap-2 border-b bg-muted/30 px-4 py-2 text-xs text-muted-foreground">
       <DocViewToggle view={view} onChange={onViewChange} />
-      {dirty && (
+      {locked ? (
         <span className="flex items-center gap-1 text-amber-700">
-          <span className="h-1.5 w-1.5 rounded-full bg-amber-500" aria-hidden="true" />
-          Unsaved changes
+          <Lock className="h-3.5 w-3.5" aria-hidden="true" />
+          Immutable Canon — 解除定稿后可编辑，原版自动存档
+        </span>
+      ) : (
+        dirty && (
+          <span className="flex items-center gap-1 text-amber-700">
+            <span className="h-1.5 w-1.5 rounded-full bg-amber-500" aria-hidden="true" />
+            Unsaved changes
+          </span>
+        )
+      )}
+      {!locked && (
+        <span className="ml-auto flex items-center gap-1">
+          <Button size="sm" onClick={onSave} disabled={saving || !dirty}>
+            {saving && <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />}
+            Save
+          </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={onDelete}
+            aria-label={deleteAriaLabel}
+            className="hover:text-destructive"
+          >
+            <Trash2 className="h-4 w-4" aria-hidden="true" />
+          </Button>
         </span>
       )}
-      <span className="ml-auto flex items-center gap-1">
-        {novelId && pinTarget && (
-          <PinButton novelId={novelId} target={pinTarget} label="Pin" />
-        )}
-        <Button size="sm" onClick={onSave} disabled={saving || !dirty}>
-          {saving && <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />}
-          Save
-        </Button>
-        <Button
-          size="sm"
-          variant="ghost"
-          onClick={onDelete}
-          aria-label={deleteAriaLabel}
-          className="hover:text-destructive"
-        >
-          <Trash2 className="h-4 w-4" aria-hidden="true" />
-        </Button>
-      </span>
     </div>
   );
 }

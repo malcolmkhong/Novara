@@ -97,7 +97,7 @@ const INSIDE_ITEMS: InsideItem[] = [
     icon: Workflow,
     title: "Autonomous agent runtime",
     description:
-      "Background tasks, verification gates and full seven-agent orchestration — roadmap phases 3-5.",
+      "Background tasks, verification gates and full five-agent orchestration — roadmap phases 3-5.",
     status: "in-development",
   },
 ];

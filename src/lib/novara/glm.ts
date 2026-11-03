@@ -19,6 +19,7 @@
 import ZAI from "z-ai-web-dev-sdk";
 import { withTimeout } from "./api-helpers";
 import { getBudgets } from "./content";
+import type { SdkModelParams } from "./models";
 
 export type ChatMessage = { role: "assistant" | "user"; content: string };
 
@@ -73,6 +74,12 @@ export async function glmChat(opts: {
   tag: string;
   timeoutMs?: number;
   signal?: AbortSignal;
+  /**
+   * P2 — resolved registry selection (model id + thinking params). Omitted
+   * on non-agent call sites (draft/review/sediment), which keep the gateway
+   * default with thinking disabled.
+   */
+  sdkParams?: SdkModelParams;
 }): Promise<string> {
   const budgets = getBudgets();
   const retries = budgets.glm.retryAttempts;
@@ -87,7 +94,9 @@ export async function glmChat(opts: {
         const completion = await withTimeout(
           zai.chat.completions.create({
             messages: opts.messages,
-            thinking: { type: "disabled" },
+            // Registry-resolved model + thinking; non-agent callers keep the
+            // historical default (server default model, thinking disabled).
+            ...(opts.sdkParams ?? { thinking: { type: "disabled" as const } }),
           }),
           opts.timeoutMs ?? budgets.glm.timeoutMs,
           opts.tag

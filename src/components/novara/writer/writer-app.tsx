@@ -14,6 +14,7 @@ import {
 import type { CreateNovelInput } from "@/lib/novara/api";
 import { getGuestSession } from "@/lib/novara/session";
 import type { ChapterDTO, NovelDetail, NovelSummary } from "@/lib/novara/types";
+import { useWriterStore } from "@/hooks/use-writer-store";
 import { NovelDashboard } from "./novel-dashboard";
 import { WorkbenchShell } from "./workbench-shell";
 
@@ -27,6 +28,10 @@ export function WriterApp({ onExit }: { onExit: () => void }) {
 
   useEffect(() => {
     setGuestAt(getGuestSession()?.enteredAt ?? null);
+    // P1 — restore persisted writer UI prefs (per-novel composer run mode)
+    // after mount. The store uses skipHydration, so this is the single
+    // hydration-safe point where localStorage state re-enters the app.
+    void useWriterStore.persist.rehydrate();
   }, []);
 
   const refreshList = useCallback(async () => {

@@ -84,6 +84,7 @@ export const EVENT_KIND_META: Record<AgentEventKind, { label: string }> = {
   message: { label: "Agent" },
   error: { label: "Error" },
   approval: { label: "Approval" },
+  usage: { label: "Context" },
 };
 
 // ---------------------------------------------------------------------------

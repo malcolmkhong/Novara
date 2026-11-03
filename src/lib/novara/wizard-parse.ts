@@ -18,6 +18,12 @@ export interface ParsedBeat {
   summary: string;
 }
 
+export interface ParsedWorldEntry {
+  title: string;
+  category: string;
+  content: string;
+}
+
 const NAME_MAX = 120;
 const ROLE_MAX = 200;
 const DESC_MAX = 2000;
@@ -133,6 +139,88 @@ export function parseBeatLines(text: string): ParsedBeat[] {
     out.push({
       title: clamp(title, TITLE_MAX),
       summary: clamp(summary, SUMMARY_MAX),
+    });
+  }
+  return out;
+}
+
+const WORLD_CATEGORIES = new Set([
+  "location",
+  "faction",
+  "item",
+  "system",
+  "culture",
+  "other",
+]);
+
+/** Maps a Chinese or free-form category label onto a canonical category. */
+function normalizeWorldCategory(raw: string): string {
+  const c = raw.trim().toLowerCase();
+  if (WORLD_CATEGORIES.has(c)) return c;
+  const zhMap: Record<string, string> = {
+    地点: "location",
+    场景: "location",
+    组织: "faction",
+    势力: "faction",
+    派系: "faction",
+    物品: "item",
+    道具: "item",
+    规则: "system",
+    系统: "system",
+    体系: "system",
+    文化: "culture",
+    风俗: "culture",
+  };
+  return zhMap[c] ?? "other";
+}
+
+/**
+ * Parses world-bible entries. Canonical line: `Title — category: content`
+ * (categories location/faction/item/system/culture). Also tolerated:
+ * `Title: content` (no category — "other"), plain hyphen instead of dash,
+ * leading bullets/numbering, Chinese category labels (地点/势力/规则…).
+ */
+export function parseWorldLines(text: string): ParsedWorldEntry[] {
+  const out: ParsedWorldEntry[] = [];
+  for (const raw of text.split("\n")) {
+    let line = raw.trim().replace(/^[-*•]\s*/, "");
+    if (!line) continue;
+    line = line.replace(/^\d+\s*[.、)）]\s*/, "").trim();
+    if (!line) continue;
+
+    let title = "";
+    let category = "other";
+    let content = "";
+
+    const dash = line.match(/^(.+?)\s*[—–]\s*(.+)$/);
+    const hyphen = line.match(/^(.+?)\s-\s(.+)$/);
+    if (dash || hyphen) {
+      title = (dash ? dash[1] : hyphen![1]).trim();
+      const rest = (dash ? dash[2] : hyphen![2]).trim();
+      // rest may be "category: content" or just "content".
+      const colon = rest.match(/^([^:：]{1,30})[：:]\s*(.+)$/);
+      if (colon) {
+        category = normalizeWorldCategory(colon[1]);
+        content = colon[2].trim();
+      } else {
+        content = rest;
+      }
+    } else {
+      // No dash — maybe "Title: content".
+      const colon = line.match(/^([^:：]{1,120})[：:]\s*(.+)$/);
+      if (colon) {
+        title = colon[1].trim();
+        content = colon[2].trim();
+      } else {
+        title = line;
+      }
+    }
+
+    if (!title) continue;
+    out.push({
+      title: clamp(title, TITLE_MAX),
+      category,
+      content: clamp(content, DESC_MAX),
     });
   }
   return out;

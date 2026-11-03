@@ -102,6 +102,8 @@ export const liveAgentGateway: AgentGateway = {
         goal: options.goal,
         mode: options.mode,
         ...(options.pinned && options.pinned.length > 0 ? { pinned: options.pinned } : {}),
+        ...(options.modelId ? { modelId: options.modelId } : {}),
+        ...(options.thinkingLevel ? { thinkingLevel: options.thinkingLevel } : {}),
       }),
     });
     return res.detail;

@@ -16,7 +16,7 @@
 // flows down to the panes; the agent run instance is owned once, here.
 // ---------------------------------------------------------------------------
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   FolderTree,
   Loader2,
@@ -84,6 +84,7 @@ import { ArtifactPane } from "./artifact-pane";
 import { AssetTree } from "./asset-tree";
 import { ConversationPane } from "./conversation-pane";
 import { ExportDialog } from "./import-export";
+import { buildPinOptions } from "./prompt-box";
 import { ConfirmDialog } from "./ui-bits";
 
 type MobileView = "chat" | "assets";
@@ -127,6 +128,9 @@ export function WorkbenchShell({
   const selectedChapterId = useWriterStore(
     (s) => s.selectedChapterByNovel[novel.id] ?? detail.chapters[0]?.id ?? null
   );
+
+  // Pin-to-Chat menu source — rebuilt when the novel detail refreshes.
+  const pinOptions = useMemo(() => buildPinOptions(detail), [detail]);
   const selectedBeatId = useWriterStore((s) => s.selectedBeatByNovel[novel.id] ?? null);
   const selectedCharacterId = useWriterStore((s) => s.selectedCharacterByNovel[novel.id] ?? null);
   const selectedWorldId = useWriterStore((s) => s.selectedWorldByNovel[novel.id] ?? null);
@@ -165,6 +169,26 @@ export function WorkbenchShell({
       setPreviewOpen(true);
     }
   }, []);
+
+  /** Shared CRUD wrapper: run, refetch, toast. Used by every handler below. */
+  const wrap = useCallback(
+    async (fn: () => Promise<unknown>, successTitle?: string): Promise<boolean> => {
+      try {
+        await fn();
+        await refresh();
+        if (successTitle) toast({ title: successTitle });
+        return true;
+      } catch (e) {
+        toast({
+          title: "Operation failed",
+          description: e instanceof Error ? e.message : "Unknown error",
+          variant: "destructive",
+        });
+        return false;
+      }
+    },
+    [refresh, toast]
+  );
 
   const handleOpenChapter = useCallback(
     (chapterId: string) => {
@@ -242,21 +266,25 @@ export function WorkbenchShell({
   );
 
   /** Tree "+" button in a pack group → create/replace a pack for the next chapter. */
-  const handleAddPack = async (kind: ChapterPackKind) => {
-    const nextIndex = detail.chapters.length + 1;
-    const ok = await wrap(() =>
-      upsertPack(novel.id, {
-        kind,
-        chapterIndex: nextIndex,
-        title: `Chapter ${nextIndex}`,
-      })
-    );
-    if (ok) {
-      selectPack(novel.id, `${kind}:${nextIndex}`);
-      setArtifactTab(novel.id, "packs");
-      revealArtifacts();
-    }
-  };
+  const handleAddPack = useCallback(
+    async (kind: ChapterPackKind) => {
+      const nextIndex = detail.chapters.length + 1;
+      const ok = await wrap(() =>
+        upsertPack(novel.id, {
+          kind,
+          chapterIndex: nextIndex,
+          title: `Chapter ${nextIndex}`,
+        })
+      );
+      if (ok) {
+        selectPack(novel.id, `${kind}:${nextIndex}`);
+        setArtifactTab(novel.id, "packs");
+        revealArtifacts();
+      }
+    },
+    // wrap is stable enough (recreated each render but cheap); deps kept minimal
+    [detail.chapters.length, novel.id, revealArtifacts, selectPack, setArtifactTab, wrap]
+  );
 
   // ---- chapter handlers ----
 
@@ -372,22 +400,6 @@ export function WorkbenchShell({
   };
 
   // ---- bible handlers (all end with a full refresh) ----
-
-  const wrap = async (fn: () => Promise<unknown>, successTitle?: string): Promise<boolean> => {
-    try {
-      await fn();
-      await refresh();
-      if (successTitle) toast({ title: successTitle });
-      return true;
-    } catch (e) {
-      toast({
-        title: "Operation failed",
-        description: e instanceof Error ? e.message : "Unknown error",
-        variant: "destructive",
-      });
-      return false;
-    }
-  };
 
   // ---- novel meta ----
 
@@ -517,10 +529,8 @@ export function WorkbenchShell({
           novel={novel}
           chapterCount={detail.chapters.length}
           run={run}
+          pinOptions={pinOptions}
           onOpenPreview={() => setPreviewOpen(true)}
-          activeChapter={
-            detail.chapters.find((c) => c.id === selectedChapterId) ?? null
-          }
         />
       </section>
 

@@ -51,10 +51,40 @@ export interface AgentRun {
   goal: string;
   mode: AgentRunMode;
   status: AgentRunStatus;
+  /** P2 — model registry id + thinking level this run executes with. */
+  modelId: string;
+  thinkingLevel: string;
   finalReport: RunFinalReport | null;
   /** Pinned context refs the author attached in the chat composer (Phase 8). */
   pinned: PinnedRef[];
   createdAt: string;
+  updatedAt: string;
+}
+
+// ---------------------------------------------------------------------------
+// Context usage (P2 — what one GLM call actually sends, per section)
+// ---------------------------------------------------------------------------
+
+/**
+ * Measured (or estimated) token breakdown of one agent conversation.
+ * `system`/`tools`/`skills` are fixed per conversation; `novel` is the
+ * story snapshot + pinned refs; `conversation` grows per turn; `mcp` is a
+ * reserved 0 row — this system has no MCP server.
+ */
+export interface ContextUsage {
+  modelId: string;
+  contextWindow: number;
+  used: number;
+  /** Which call produced it, e.g. "atlas · turn 2" or "estimate". */
+  actor: string;
+  sections: {
+    system: number;
+    tools: number;
+    skills: number;
+    novel: number;
+    conversation: number;
+    mcp: number;
+  };
   updatedAt: string;
 }
 
@@ -131,7 +161,9 @@ export type AgentEventKind =
   | "write"
   | "message"
   | "error"
-  | "approval";
+  | "approval"
+  /** P2 — per-GLM-call Context Usage snapshot (payload: ContextUsage). */
+  | "usage";
 
 export interface AgentEvent {
   id: string;
@@ -151,6 +183,19 @@ export interface AgentRunDetail {
   events: AgentEvent[];
   /** Present while the run is awaiting_approval (the D2 gate payload). */
   pendingApproval: ApprovalRequest | null;
+}
+
+/** Latest ContextUsage among a detail's events (null before the first call). */
+export function latestContextUsage(events: AgentEvent[]): ContextUsage | null {
+  for (let i = events.length - 1; i >= 0; i--) {
+    const event = events[i];
+    if (event.kind !== "usage") continue;
+    const payload = event.payload as { usage?: ContextUsage } | null;
+    if (payload?.usage?.sections && typeof payload.usage.used === "number") {
+      return payload.usage;
+    }
+  }
+  return null;
 }
 
 // ---------------------------------------------------------------------------

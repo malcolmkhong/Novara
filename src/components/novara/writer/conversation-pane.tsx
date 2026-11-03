@@ -13,10 +13,9 @@
 //     the composer becomes the run control bar.
 // ---------------------------------------------------------------------------
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
-  BookOpenText,
   CheckCircle2,
   ChevronDown,
   ChevronRight,
@@ -26,7 +25,6 @@ import {
   PanelRight,
   PauseCircle,
   PenLine,
-  Pin,
   ShieldCheck,
   Sparkles,
   Wrench,
@@ -44,25 +42,26 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import type { UseAgentRunResult } from "@/hooks/use-agent-run";
 import { useWriterStore } from "@/hooks/use-writer-store";
 import { AGENT_BACKEND } from "@/lib/novara/agent-client";
-import type {
-  AgentEvent,
-  AgentRun,
-  AgentRunMode,
-  AgentRunStatus,
-  RunFinalReport,
+import {
+  type AgentEvent,
+  type AgentRun,
+  type AgentRunMode,
+  type AgentRunStatus,
+  type RunFinalReport,
 } from "@/lib/novara/agent-types";
+import { defaultSelection, getModelDefinition, type ModelSelection } from "@/lib/novara/models";
 import type { NovelMeta } from "@/lib/novara/types";
 import type { CenterView } from "@/config/writer";
 import { AGENT_BACKEND_LABEL, RUN_STATUS_META } from "@/config/writer";
 import { cn } from "@/lib/utils";
 import { ActivityStream } from "./activity-stream";
+import { ContextUsageButton } from "./context-usage-panel";
 import { ModeSwitch } from "./mode-switch";
+import { PromptBox, type PinOption } from "./prompt-box";
 import { TaskBoard } from "./task-board";
 
 const ACTIVE_STATUSES: readonly AgentRunStatus[] = [
@@ -187,7 +186,8 @@ type StreamBlock =
   | { kind: "error"; event: AgentEvent }
   | { kind: "process"; events: AgentEvent[] };
 
-/** Collapse consecutive tool_call/write events into one process block. */
+/** Collapse consecutive tool_call/write events into one process block.
+ *  `usage` telemetry rows are panel data, not chat — skipped entirely. */
 function buildBlocks(events: AgentEvent[]): StreamBlock[] {
   const ordered = [...events].sort(
     (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
@@ -201,6 +201,7 @@ function buildBlocks(events: AgentEvent[]): StreamBlock[] {
     }
   };
   for (const event of ordered) {
+    if (event.kind === "usage") continue;
     if (event.kind === "tool_call" || event.kind === "write") {
       buffer.push(event);
     } else {
@@ -394,34 +395,52 @@ export function ConversationPane({
   novel,
   chapterCount,
   run,
+  pinOptions,
   onOpenPreview,
-  activeChapter,
 }: {
   novel: NovelMeta;
   /** Real chapter count, so mock gate labels name the next chapter. */
   chapterCount: number;
   /** Single useAgentRun instance owned by the shell, shared with the tree. */
   run: UseAgentRunResult;
+  /** Flat, grouped pin-menu source built from the loaded NovelDetail. */
+  pinOptions: PinOption[];
   /** Open the artifact pane as an overlay (screens narrower than xl). */
   onOpenPreview?: () => void;
-  /**
-   * Currently open chapter (Phase 8 quick actions: 审读/定稿/续写 presets).
-   * Null when no chapter is selected.
-   */
-  activeChapter?: { index: number; title: string } | null;
 }) {
   const { toast } = useToast();
   const view = useWriterStore((s) => s.centerViewByNovel[novel.id] ?? "chat");
   const setView = useWriterStore((s) => s.setCenterView);
-  const lastMode = useWriterStore((s) => s.lastMode);
+  // P1 — run-mode preference is persisted per novel; the local composer state
+  // adopts the stored value once it rehydrates (after mount) and whenever the
+  // novel switches (falling back to the D2 default: approval).
+  const storedMode = useWriterStore((s) => s.lastModeByNovel[novel.id]);
   const setLastMode = useWriterStore((s) => s.setLastMode);
-  const pinnedOrUndef = useWriterStore((s) => s.pinnedByNovel[novel.id]);
-  const pinned = pinnedOrUndef ?? [];
+  // P2 — model registry selection is persisted per novel; the composer
+  // adopts the stored value once it rehydrates and on novel switches.
+  const storedModel = useWriterStore((s) => s.lastModelByNovel[novel.id]);
+  const setLastModel = useWriterStore((s) => s.setLastModel);
+  // Phase 8 — Pin-to-Chat: refs pinned from the artifact panes ride the next
+  // run start and are resolved server-side (client content never trusted).
+  // Selector stays referentially stable (raw record only) — the derived
+  // array is built in useMemo (zustand v5: unstable getSnapshot = loop).
+  const pinnedRecord = useWriterStore((s) => s.pinnedByNovel[novel.id]);
+  const pinnedRefs = useMemo(() => pinnedRecord ?? [], [pinnedRecord]);
   const togglePin = useWriterStore((s) => s.togglePin);
   const clearPins = useWriterStore((s) => s.clearPins);
 
   const [goal, setGoal] = useState("");
-  const [mode, setMode] = useState<AgentRunMode>(lastMode);
+  const [mode, setMode] = useState<AgentRunMode>("approval");
+  useEffect(() => {
+    setMode(storedMode ?? "approval");
+  }, [storedMode, novel.id]);
+  const [modelSelection, setModelSelection] = useState<ModelSelection>(defaultSelection);
+  useEffect(() => {
+    // Stored selections are client-authored, not runtime-validated — if the
+    // registry no longer knows the model, fall back to the default.
+    const stored = storedModel;
+    setModelSelection(stored && getModelDefinition(stored.modelId).id === stored.modelId ? stored : defaultSelection());
+  }, [storedModel, novel.id]);
   const [submitting, setSubmitting] = useState(false);
   const [approving, setApproving] = useState(false);
   /** Recent run summaries for the history switcher (latest first). */
@@ -482,33 +501,14 @@ export function ConversationPane({
         chapterCount,
         goal: goal.trim(),
         mode,
-        pinned,
+        modelId: modelSelection.modelId,
+        thinkingLevel: modelSelection.thinkingLevel,
+        pinned: pinnedRefs.length > 0 ? pinnedRefs : undefined,
       });
       setGoal("");
-    } catch (e) {
-      toast({
-        title: "Could not start run",
-        description: e instanceof Error ? e.message : "Unknown error",
-        variant: "destructive",
-      });
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  /** Quick action (Phase 8): start a run with a preset goal + the current pins. */
-  const handleQuickAction = async (presetGoal: string) => {
-    if (submitting || isActive) return;
-    setSubmitting(true);
-    try {
-      await run.start({
-        novelId: novel.id,
-        novelTitle: novel.title,
-        chapterCount,
-        goal: presetGoal,
-        mode,
-        pinned,
-      });
+      // Pins were "context for the next run" — the run consumed them. Pinned
+      // chapters additionally trigger the runtime's auto impact assessment.
+      if (pinnedRefs.length > 0) clearPins(novel.id);
     } catch (e) {
       toast({
         title: "Could not start run",
@@ -534,11 +534,16 @@ export function ConversationPane({
 
   const handleComposerModeChange = (next: AgentRunMode) => {
     setMode(next);
-    setLastMode(next);
+    setLastMode(novel.id, next);
+  };
+
+  const handleModelChange = (next: ModelSelection) => {
+    setModelSelection(next);
+    setLastModel(novel.id, next);
   };
 
   const handleRunModeChange = (next: AgentRunMode) => {
-    setLastMode(next);
+    setLastMode(novel.id, next);
     run.setMode(next).catch((e: unknown) => {
       toast({
         title: "Could not change mode",
@@ -590,11 +595,28 @@ export function ConversationPane({
           <>
             <StatusBadge status={detail.run.status} />
             <ModeChip mode={detail.run.mode} />
+            {/* P2 — the model the DISPLAYED run executes with. */}
+            <Badge variant="outline" className="gap-1 text-[11px] text-muted-foreground">
+              {getModelDefinition(detail.run.modelId).label}
+              {detail.run.thinkingLevel !== "off" && ` · thinking`}
+            </Badge>
+            <ContextUsageButton
+              novelId={novel.id}
+              modelId={modelSelection.modelId}
+              events={detail.events}
+            />
           </>
         ) : (
-          <Badge variant="outline" className="text-muted-foreground">
-            Idle
-          </Badge>
+          <>
+            <Badge variant="outline" className="text-muted-foreground">
+              Idle
+            </Badge>
+            <ContextUsageButton
+              novelId={novel.id}
+              modelId={modelSelection.modelId}
+              events={[]}
+            />
+          </>
         )}
         <div className="ml-auto flex items-center gap-1">
           {history.length > 0 && (
@@ -778,120 +800,20 @@ export function ConversationPane({
         </div>
       ) : (
         <div className="border-t bg-card/60 p-3">
-          {/* Quick actions (Phase 8) — one-click agent flows on the active chapter */}
-          {activeChapter && (
-            <div className="mb-2 flex flex-wrap items-center gap-1.5">
-              <span className="flex items-center gap-1 text-[11px] text-muted-foreground">
-                <Zap className="h-3 w-3" aria-hidden="true" />
-                Quick actions
-              </span>
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-7 gap-1 px-2 text-[11px]"
-                disabled={submitting}
-                onClick={() =>
-                  void handleQuickAction(
-                    `Review 第${activeChapter.index}章 "${activeChapter.title}". Run the review core, report every finding, and dispatch repairs for blocking issues.`
-                  )
-                }
-              >
-                <ShieldCheck className="h-3 w-3" aria-hidden="true" />
-                审读本章
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-7 gap-1 px-2 text-[11px]"
-                disabled={submitting}
-                onClick={() =>
-                  void handleQuickAction(
-                    `Certify and finalize 第${activeChapter.index}章 "${activeChapter.title}". Review first; if 0 blocking issues, finalize the chapter and settle its memory.`
-                  )
-                }
-              >
-                <BookOpenText className="h-3 w-3" aria-hidden="true" />
-                定稿本章
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-7 gap-1 px-2 text-[11px]"
-                disabled={submitting}
-                onClick={() =>
-                  void handleQuickAction(
-                    `Draft 第${chapterCount + 1}章 from the outline beats, volume plan and story memory — continue the story faithfully.`
-                  )
-                }
-              >
-                <PenLine className="h-3 w-3" aria-hidden="true" />
-                续写下一章
-              </Button>
-            </div>
-          )}
-
-          {/* Pinned context chips (Phase 8 Pin-to-Chat) */}
-          {pinned.length > 0 && (
-            <div
-              className="mb-2 flex flex-wrap items-center gap-1.5 rounded-md border border-dashed bg-background px-2 py-1.5"
-              aria-label="Pinned context"
-            >
-              <span className="flex items-center gap-1 text-[11px] text-muted-foreground">
-                <Pin className="h-3 w-3" aria-hidden="true" />
-                Pinned ({pinned.length}) — attached to the next run:
-              </span>
-              {pinned.map((ref) => (
-                <button
-                  key={`${ref.type}:${ref.id}`}
-                  type="button"
-                  onClick={() => togglePin(novel.id, ref)}
-                  className="flex max-w-[220px] items-center gap-1 rounded-full border bg-muted px-2 py-0.5 text-[11px] text-foreground transition-colors hover:bg-muted/60"
-                  aria-label={`Unpin ${ref.label}`}
-                  title="Click to unpin"
-                >
-                  <span className="truncate">{ref.label}</span>
-                  <X className="h-3 w-3 shrink-0 text-muted-foreground" aria-hidden="true" />
-                </button>
-              ))}
-              <button
-                type="button"
-                onClick={() => clearPins(novel.id)}
-                className="ml-1 text-[11px] text-muted-foreground underline-offset-2 hover:underline"
-              >
-                Clear all
-              </button>
-            </div>
-          )}
-
-          <div className="space-y-1.5">
-            <Label htmlFor="agent-goal" className="sr-only">
-              Run goal
-            </Label>
-            <Textarea
-              id="agent-goal"
-              rows={2}
-              value={goal}
-              onChange={(e) => setGoal(e.target.value)}
-              placeholder="Give the team a goal — e.g. Draft the next chapter from the outline, keeping Mara's arc on track."
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-                  e.preventDefault();
-                  void handleStart();
-                }
-              }}
-            />
-          </div>
-          <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
-            <ModeSwitch mode={mode} onChange={handleComposerModeChange} />
-            <Button onClick={handleStart} disabled={submitting || goal.trim().length < 3}>
-              {submitting ? (
-                <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
-              ) : (
-                <Sparkles className="h-4 w-4" aria-hidden="true" />
-              )}
-              Run team
-            </Button>
-          </div>
+          <PromptBox
+            value={goal}
+            onChange={setGoal}
+            onStart={() => void handleStart()}
+            submitting={submitting}
+            mode={mode}
+            onModeChange={handleComposerModeChange}
+            modelSelection={modelSelection}
+            onModelChange={handleModelChange}
+            pinnedRefs={pinnedRefs}
+            onTogglePin={(ref) => togglePin(novel.id, ref)}
+            onClearPins={() => clearPins(novel.id)}
+            pinOptions={pinOptions}
+          />
         </div>
       )}
     </div>

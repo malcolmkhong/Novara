@@ -8,15 +8,21 @@
 // the team is touching right now — the "章新区 · 工作中" pattern from the
 // workbench reference design.
 //
-// Phase 8 repository structure (DSH-style zones, rendered top → bottom):
-//   世界书   — 世界规则 (world entries) + 人物档案 (characters)
+// Phase 9 repository structure (DSH-style zones, rendered top → bottom):
+//   世界书   — dynamic 世界书 groups (one sub-group per WorldGroupDTO, ordered)
+//              + 未分组 (ungrouped entries; agent world_entry fallback badge)
+//              + 人物档案 (characters); canon-locked (status "final") files
+//              carry a Lock icon
 //   作品契约 — single document row → contract tab ("已写入"/"未写入")
 //   大纲     — 故事骨架 (unsorted beats) + 卷规划 (per-volume beats) + 章摘要
 //   定稿     — zero-padded final-chapter files (hidden until one exists)
-//   本书记忆 — single document row → memory tab
+//   本书记忆 — expandable group → 索引/决策/对话/文风/灵感 sub-rows → memory
+//              tab (writes the store's memory deep-link focus first)
 //   构想     — single document row → contract tab ("已快照"/"未快照")
-//   账本     — single document row → ledger tab
-//   草稿区   — 草稿 (draft chapters) + 材料包 + 定稿准备 (packs) + 审核
+//   账本     — expandable group → 故事线/时间线/人物弧线/承诺/线索 sub-rows
+//              with live counts → ledger tab (writes ledger focus first)
+//   草稿区   — 草稿 (draft chapters, expandable into 稿N version rows) +
+//              材料包 + 定稿准备 (packs) + 审核
 //
 // File-explorer semantics: groups AND sub-groups are expandable/collapsible
 // via the chevron OR by clicking the group label; their children are
@@ -58,12 +64,16 @@ import type {
   ChapterDTO,
   ChapterPackDTO,
   ChapterPackKind,
+  ChapterVersionSummaryDTO,
   NovelDetail,
   OutlineBeatDTO,
   VolumeDTO,
+  WorldEntryDTO,
+  WorldGroupDTO,
 } from "@/lib/novara/types";
 import { formatWordCount } from "@/lib/novara/words";
 import { cn } from "@/lib/utils";
+import { useWriterStore } from "@/hooks/use-writer-store";
 
 // ---------------------------------------------------------------------------
 // Badge binding: live tasks → tree node keys
@@ -118,8 +128,9 @@ export function buildTreeBadges(
         );
         break;
       case "world_entry":
+        // Entries without an artifact yet fall back to the 未分组 sub-group.
         push(
-          task.artifactId ? `world:${task.artifactId}` : "group:world.rules",
+          task.artifactId ? `world:${task.artifactId}` : "group:world.ungrouped",
           badge
         );
         break;
@@ -162,15 +173,19 @@ function BadgeIcons({ badges }: { badges: NodeBadge[] | undefined }) {
 // AssetTree
 // ---------------------------------------------------------------------------
 
-/** Static expandable group/sub-group keys (volume rows use "volume:<id>"). */
+/** Static expandable group/sub-group keys (dynamic rows use prefixed keys:
+ * volume plans "volume:<id>", 世界书 groups "world.group.<groupId>", draft
+ * chapter versions "chapter.v.<chapterId>"). */
 type ExpandableKey =
   | "world"
-  | "world.rules"
+  | "world.ungrouped"
   | "world.characters"
   | "outline"
   | "outline.skeleton"
   | "outline.volumes"
   | "canon"
+  | "memory"
+  | "ledger"
   | "workspace"
   | "workspace.drafts"
   | "workspace.material"
@@ -178,12 +193,14 @@ type ExpandableKey =
 
 const EXPANDABLE_KEYS: readonly ExpandableKey[] = [
   "world",
-  "world.rules",
+  "world.ungrouped",
   "world.characters",
   "outline",
   "outline.skeleton",
   "outline.volumes",
   "canon",
+  "memory",
+  "ledger",
   "workspace",
   "workspace.drafts",
   "workspace.material",
@@ -191,6 +208,8 @@ const EXPANDABLE_KEYS: readonly ExpandableKey[] = [
 ];
 
 const VOLUME_KEY_PREFIX = "volume:";
+const WORLD_GROUP_KEY_PREFIX = "world.group.";
+const CHAPTER_VERSION_KEY_PREFIX = "chapter.v.";
 
 /** The 草稿区 workspace (and its draft chapters) starts open — the primary
  * asset; everything else starts collapsed to keep the rail scannable. */
@@ -214,7 +233,9 @@ function loadExpandState(novelId: string): Record<string, boolean> {
     for (const [key, value] of Object.entries(parsed)) {
       const known =
         (EXPANDABLE_KEYS as readonly string[]).includes(key) ||
-        key.startsWith(VOLUME_KEY_PREFIX);
+        key.startsWith(VOLUME_KEY_PREFIX) ||
+        key.startsWith(WORLD_GROUP_KEY_PREFIX) ||
+        key.startsWith(CHAPTER_VERSION_KEY_PREFIX);
       if (known && typeof value === "boolean") {
         base[key] = value;
       }
@@ -224,6 +245,16 @@ function loadExpandState(novelId: string): Record<string, boolean> {
     return base;
   }
 }
+
+/** 本书记忆 tree sub-rows (Phase 9): key is the store's memory deep-link
+ * focus value ("all" | MemoryCategory), label is the Chinese sub-row name. */
+const MEMORY_TREE_ROWS: readonly { key: string; label: string }[] = [
+  { key: "all", label: "索引" },
+  { key: "decision", label: "决策" },
+  { key: "dialogue", label: "对话" },
+  { key: "style", label: "文风" },
+  { key: "inspiration", label: "灵感" },
+];
 
 interface AssetTreeProps {
   detail: NovelDetail;
@@ -287,6 +318,10 @@ export function AssetTree({
     tasks,
     detail.chapters.map((c) => c.index)
   );
+  // Deep-link focus writers (Phase 9): memory/ledger tree sub-rows preselect
+  // the target tab's category/kind before opening it.
+  const setMemoryFocus = useWriterStore((s) => s.setMemoryFocus);
+  const setLedgerKind = useWriterStore((s) => s.setLedgerKind);
 
   // Collapse state (file-explorer style). The 草稿区 workspace starts open —
   // the primary asset; the rest start collapsed. The state persists per novel
@@ -329,6 +364,27 @@ export function AssetTree({
   }
   const sortedVolumes = [...detail.volumes].sort((a, b) => a.index - b.index);
 
+  // 世界书 second-level groups (Phase 9): one sub-group per WorldGroupDTO,
+  // ordered, plus an 未分组 bucket for entries with groupId === null.
+  const sortedWorldGroups = [...detail.worldGroups].sort((a, b) => a.order - b.order);
+  const worldEntriesInGroup = (groupId: string) =>
+    detail.worldEntries.filter((w) => w.groupId === groupId);
+  const ungroupedWorldEntries = detail.worldEntries.filter(
+    (w) => w.groupId === null
+  );
+
+  // 稿N draft versions grouped per chapter — chapters with versions render as
+  // expandable rows whose children are the 稿N version files.
+  const versionsByChapter = new Map<string, ChapterVersionSummaryDTO[]>();
+  for (const version of detail.versions) {
+    const list = versionsByChapter.get(version.chapterId) ?? [];
+    list.push(version);
+    versionsByChapter.set(version.chapterId, list);
+  }
+  for (const list of versionsByChapter.values()) {
+    list.sort((a, b) => a.draftNo - b.draftNo);
+  }
+
   const materialPacks = detail.packs
     .filter((p) => p.kind === "material")
     .sort((a, b) => a.chapterIndex - b.chapterIndex);
@@ -340,10 +396,24 @@ export function AssetTree({
     `${String(ch.index).padStart(4, "0")}-${ch.title}`;
 
   // Search filtering — file rows match by label; matching a zone/group name
-  // (世界书/世界规则/…) surfaces that zone's whole contents.
+  // (世界书/未分组/故事骨架/…) surfaces that zone's whole contents. Ledger and
+  // memory sub-row labels and 稿N version rows participate in the same logic.
+  const chapterVersionEntries = (ch: ChapterDTO) => {
+    const all = versionsByChapter.get(ch.id) ?? [];
+    if (!searching) return all;
+    return matchesQuery(ch.title) || matchesQuery("草稿") || matchesQuery("草稿区")
+      ? all
+      : all.filter((v) => matchesQuery(`稿${v.draftNo}`));
+  };
   const visibleChapters = searching
     ? detail.chapters.filter(
-        (ch) => matchesQuery(ch.title) || matchesQuery("草稿") || matchesQuery("草稿区")
+        (ch) =>
+          matchesQuery(ch.title) ||
+          matchesQuery("草稿") ||
+          matchesQuery("草稿区") ||
+          (versionsByChapter.get(ch.id) ?? []).some((v) =>
+            matchesQuery(`稿${v.draftNo}`)
+          )
       )
     : detail.chapters;
   const visibleUnsortedBeats = searching
@@ -373,11 +443,27 @@ export function AssetTree({
           matchesQuery(c.name) || matchesQuery("人物档案") || matchesQuery("世界书")
       )
     : detail.characters;
+  // World entries surface per group: a group-name hit exposes the whole group,
+  // otherwise entries match by title (matching the group label itself too).
+  const worldGroupMatchesQuery = (g: WorldGroupDTO) =>
+    matchesQuery(g.name) || matchesQuery("世界书");
+  const worldGroupVisibleEntries = (g: WorldGroupDTO): WorldEntryDTO[] => {
+    const entries = worldEntriesInGroup(g.id);
+    if (!searching) return entries;
+    return worldGroupMatchesQuery(g)
+      ? entries
+      : entries.filter((w) => matchesQuery(w.title));
+  };
+  const visibleUngroupedWorld = searching
+    ? matchesQuery("未分组") || matchesQuery("世界书")
+      ? ungroupedWorldEntries
+      : ungroupedWorldEntries.filter((w) => matchesQuery(w.title))
+    : ungroupedWorldEntries;
   const visibleWorld = searching
-    ? detail.worldEntries.filter(
-        (w) =>
-          matchesQuery(w.title) || matchesQuery("世界规则") || matchesQuery("世界书")
-      )
+    ? [
+        ...sortedWorldGroups.flatMap((g) => worldGroupVisibleEntries(g)),
+        ...visibleUngroupedWorld,
+      ]
     : detail.worldEntries;
   const visibleMaterial = searching
     ? materialPacks.filter(
@@ -397,14 +483,30 @@ export function AssetTree({
       )
     : finalChapters;
 
-  // Single document rows (作品契约/章摘要/本书记忆/构想/账本/审核) — matched
-  // by their Chinese label or an English alias.
+  // Single document rows (作品契约/章摘要/构想/审核) — matched by their
+  // Chinese label or an English alias.
   const contractMatch = matchesQuery("作品契约") || matchesQuery("contract");
   const digestMatch = matchesQuery("章摘要") || matchesQuery("digest");
   const memoryMatch = matchesQuery("本书记忆") || matchesQuery("memory");
   const conceptMatch = matchesQuery("构想") || matchesQuery("concept");
   const ledgerMatch = matchesQuery("账本") || matchesQuery("ledger");
   const reviewMatch = matchesQuery("审核") || matchesQuery("review");
+
+  // 账本 sub-rows — live counts from the five ledgers (Phase 9). Clicking a
+  // row writes the ledger deep-link focus, then opens the ledger tab.
+  const ledgerRows: { kind: string; label: string; count: number }[] = [
+    { kind: "storyline", label: "故事线", count: detail.ledger.storylines.length },
+    { kind: "timeline", label: "时间线", count: detail.ledger.timeline.length },
+    { kind: "arc", label: "人物弧线", count: detail.ledger.arcs.length },
+    { kind: "promise", label: "承诺", count: detail.ledger.promises.length },
+    { kind: "clue", label: "线索", count: detail.ledger.clues.length },
+  ];
+
+  // Zone matches: the group label (本书记忆/账本) OR any of its sub-row labels.
+  const memoryZoneMatch =
+    memoryMatch || MEMORY_TREE_ROWS.some((row) => matchesQuery(row.label));
+  const ledgerZoneMatch =
+    ledgerMatch || ledgerRows.some((row) => matchesQuery(row.label));
 
   const anyMatch =
     visibleChapters.length > 0 ||
@@ -417,9 +519,9 @@ export function AssetTree({
     visibleFinals.length > 0 ||
     contractMatch ||
     digestMatch ||
-    memoryMatch ||
+    memoryZoneMatch ||
     conceptMatch ||
-    ledgerMatch ||
+    ledgerZoneMatch ||
     reviewMatch;
 
   const totalWords = detail.chapters.reduce((s, c) => s + c.wordCount, 0);
@@ -431,15 +533,54 @@ export function AssetTree({
 
   // Shared row renderers -----------------------------------------------------
 
+  /** Leading Lock glyph for canon-locked (status "final") asset files. */
+  const canonLockIcon = (locked: boolean): React.ReactNode =>
+    locked ? (
+      <Lock className="h-3 w-3 shrink-0 text-muted-foreground" aria-hidden="true" />
+    ) : undefined;
+
+  const renderWorldFile = (w: WorldEntryDTO) => (
+    <TreeFile
+      key={w.id}
+      label={w.title}
+      icon={canonLockIcon(w.status === "final")}
+      selected={w.id === selectedWorldId}
+      onClick={() => onOpenWorld(w.id)}
+      badges={badges.get(`world:${w.id}`)}
+    />
+  );
+
   const renderBeatFile = ({ beat, index }: { beat: OutlineBeatDTO; index: number }) => (
     <TreeFile
       key={beat.id}
       label={beat.title}
       prefix={String(index + 1).padStart(2, "0")}
+      icon={canonLockIcon(beat.status === "final")}
       selected={beat.id === selectedBeatId}
       onClick={() => onOpenBeat(beat.id)}
       badges={badges.get(`beat:${beat.id}`)}
     />
+  );
+
+  /** Status-dot + word-count trailing for draft chapter rows (shared by the
+   * plain file row and the expandable 稿N node). */
+  const chapterTrailing = (ch: ChapterDTO) => (
+    <>
+      {ch.wordCount > 0 && (
+        <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground">
+          {formatWordCount(ch.wordCount)}
+        </span>
+      )}
+      {ch.status !== "draft" && (
+        <span
+          className={cn(
+            "h-1.5 w-1.5 shrink-0 rounded-full",
+            ch.status === "final" ? "bg-emerald-600" : "bg-amber-500"
+          )}
+          aria-label={ch.status}
+        />
+      )}
+    </>
   );
 
   const renderChapterFile = (ch: ChapterDTO) => (
@@ -450,26 +591,49 @@ export function AssetTree({
       selected={ch.id === selectedChapterId}
       onClick={() => onOpenChapter(ch.id)}
       badges={badges.get(`chapter:${ch.index}`)}
-      trailing={
-        <>
-          {ch.wordCount > 0 && (
-            <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground">
-              {formatWordCount(ch.wordCount)}
-            </span>
-          )}
-          {ch.status !== "draft" && (
-            <span
-              className={cn(
-                "h-1.5 w-1.5 shrink-0 rounded-full",
-                ch.status === "final" ? "bg-emerald-600" : "bg-amber-500"
-              )}
-              aria-label={ch.status}
-            />
-          )}
-        </>
-      }
+      trailing={chapterTrailing(ch)}
     />
   );
+
+  /** Draft chapter row: plain file when versionless, otherwise an expandable
+   * node listing 稿N version files (children open the chapter's draft view,
+   * which hosts the version history). */
+  const renderChapterRow = (ch: ChapterDTO) => {
+    const versions = chapterVersionEntries(ch);
+    if (versions.length === 0) return renderChapterFile(ch);
+    return (
+      <TreeChapterNode
+        key={ch.id}
+        index={ch.index}
+        label={ch.title}
+        count={(versionsByChapter.get(ch.id) ?? []).length}
+        selected={ch.id === selectedChapterId}
+        expanded={searching ? true : isExpanded(`${CHAPTER_VERSION_KEY_PREFIX}${ch.id}`)}
+        onToggle={
+          searching
+            ? undefined
+            : () => toggle(`${CHAPTER_VERSION_KEY_PREFIX}${ch.id}`)
+        }
+        onOpen={() => onOpenChapter(ch.id)}
+        badges={badges.get(`chapter:${ch.index}`)}
+        trailing={chapterTrailing(ch)}
+      >
+        {versions.map((v) => (
+          <TreeFile
+            key={v.id}
+            label={`稿${v.draftNo}`}
+            onClick={() => onOpenChapter(ch.id)}
+            trailing={
+              <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground">
+                {formatWordCount(v.wordCount)}
+                {v.createdBy === "agent" ? " AI" : ""}
+              </span>
+            }
+          />
+        ))}
+      </TreeChapterNode>
+    );
+  };
 
   const renderPackFile = (kind: ChapterPackKind) => (pack: ChapterPackDTO) => (
     <TreeFile
@@ -600,7 +764,7 @@ export function AssetTree({
           {/* While searching, matching groups render force-expanded with no
               toggle, so the `expanded` map is never mutated by a search. */}
 
-          {/* 世界书 — world rules + character files */}
+          {/* 世界书 — dynamic world groups + 未分组 + character files */}
           {(!searching || visibleWorld.length > 0 || visibleCharacters.length > 0) && (
             <TreeGroup
               icon={<Globe2 className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />}
@@ -609,28 +773,43 @@ export function AssetTree({
               expanded={searching ? true : isExpanded("world")}
               onToggle={searching ? undefined : () => toggle("world")}
             >
-              {(!searching || visibleWorld.length > 0) && (
-                <TreeSubGroup
-                  label="世界规则"
-                  count={detail.worldEntries.length}
-                  expanded={searching ? true : isExpanded("world.rules")}
-                  onToggle={searching ? undefined : () => toggle("world.rules")}
-                >
-                  {visibleWorld.length > 0 ? (
-                    visibleWorld.map((w) => (
-                      <TreeFile
-                        key={w.id}
-                        label={w.title}
-                        selected={w.id === selectedWorldId}
-                        onClick={() => onOpenWorld(w.id)}
-                        badges={badges.get(`world:${w.id}`)}
-                      />
-                    ))
-                  ) : (
-                    !searching && <TreeEmptyRow />
-                  )}
-                </TreeSubGroup>
-              )}
+              {/* One sub-group per 世界书 group, in defined order. A group-name
+                  hit while searching exposes the whole group; otherwise its
+                  entries match by title. Empty groups render when idle. */}
+              {sortedWorldGroups.map((g) => {
+                const entries = worldGroupVisibleEntries(g);
+                const expandKey = `${WORLD_GROUP_KEY_PREFIX}${g.id}`;
+                if (searching && entries.length === 0) return null;
+                return (
+                  <TreeSubGroup
+                    key={g.id}
+                    label={g.name}
+                    count={worldEntriesInGroup(g.id).length}
+                    expanded={searching ? true : isExpanded(expandKey)}
+                    onToggle={searching ? undefined : () => toggle(expandKey)}
+                  >
+                    {entries.length > 0 ? (
+                      entries.map(renderWorldFile)
+                    ) : (
+                      !searching && <TreeEmptyRow />
+                    )}
+                  </TreeSubGroup>
+                );
+              })}
+              {/* 未分组 — ungrouped entries; hidden entirely until one exists
+                  (also hosts the agent world_entry fallback badge). */}
+              {ungroupedWorldEntries.length > 0 &&
+                (!searching || visibleUngroupedWorld.length > 0) && (
+                  <TreeSubGroup
+                    label="未分组"
+                    count={ungroupedWorldEntries.length}
+                    badges={badges.get("group:world.ungrouped")}
+                    expanded={searching ? true : isExpanded("world.ungrouped")}
+                    onToggle={searching ? undefined : () => toggle("world.ungrouped")}
+                  >
+                    {visibleUngroupedWorld.map(renderWorldFile)}
+                  </TreeSubGroup>
+                )}
               {(!searching || visibleCharacters.length > 0) && (
                 <TreeSubGroup
                   label="人物档案"
@@ -643,6 +822,7 @@ export function AssetTree({
                       <TreeFile
                         key={c.id}
                         label={c.name}
+                        icon={canonLockIcon(c.status === "final")}
                         selected={c.id === selectedCharacterId}
                         onClick={() => onOpenCharacter(c.id)}
                         badges={badges.get(`character:${c.id}`)}
@@ -715,6 +895,7 @@ export function AssetTree({
                           key={v.id}
                           volume={v}
                           count={(beatsByVolume.get(v.id) ?? []).length}
+                          icon={canonLockIcon(v.status === "final")}
                           selected={v.id === selectedVolumeId}
                           expanded={searching ? true : isExpanded(`volume:${v.id}`)}
                           onToggle={
@@ -773,13 +954,29 @@ export function AssetTree({
               </TreeGroup>
             )}
 
-          {/* 本书记忆 — single document row → memory tab */}
-          {(!searching || memoryMatch) && (
-            <TreeDocRow
+          {/* 本书记忆 — expandable group: 索引/决策/对话/文风/灵感 sub-rows.
+              Clicking a row writes the store's memory deep-link focus, then
+              opens the memory tab with that category preselected. */}
+          {(!searching || memoryZoneMatch) && (
+            <TreeGroup
               icon={<Brain className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />}
               label="本书记忆"
-              onClick={() => onOpenArtifactTab("memory")}
-            />
+              expanded={searching ? true : isExpanded("memory")}
+              onToggle={searching ? undefined : () => toggle("memory")}
+            >
+              {MEMORY_TREE_ROWS.filter(
+                (row) => !searching || memoryMatch || matchesQuery(row.label)
+              ).map((row) => (
+                <TreeFile
+                  key={row.key}
+                  label={row.label}
+                  onClick={() => {
+                    setMemoryFocus(novel.id, row.key);
+                    onOpenArtifactTab("memory");
+                  }}
+                />
+              ))}
+            </TreeGroup>
           )}
 
           {/* 构想 — single document row → contract tab (hosts 契约 + 快照) */}
@@ -792,13 +989,34 @@ export function AssetTree({
             />
           )}
 
-          {/* 账本 — single document row → ledger tab */}
-          {(!searching || ledgerMatch) && (
-            <TreeDocRow
+          {/* 账本 — expandable group: 故事线/时间线/人物弧线/承诺/线索 sub-rows
+              with live counts. Clicking writes the ledger deep-link focus,
+              then opens the ledger tab with that kind preselected. */}
+          {(!searching || ledgerZoneMatch) && (
+            <TreeGroup
               icon={<NotebookPen className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />}
               label="账本"
-              onClick={() => onOpenArtifactTab("ledger")}
-            />
+              expanded={searching ? true : isExpanded("ledger")}
+              onToggle={searching ? undefined : () => toggle("ledger")}
+            >
+              {ledgerRows.filter(
+                (row) => !searching || ledgerMatch || matchesQuery(row.label)
+              ).map((row) => (
+                <TreeFile
+                  key={row.kind}
+                  label={row.label}
+                  onClick={() => {
+                    setLedgerKind(novel.id, row.kind);
+                    onOpenArtifactTab("ledger");
+                  }}
+                  trailing={
+                    <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground">
+                      {row.count}
+                    </span>
+                  }
+                />
+              ))}
+            </TreeGroup>
           )}
 
           {/* 草稿区 — drafts + packs + review */}
@@ -818,7 +1036,7 @@ export function AssetTree({
                 action={addChapterButton}
               >
                 {visibleChapters.length > 0 ? (
-                  visibleChapters.map(renderChapterFile)
+                  visibleChapters.map(renderChapterRow)
                 ) : (
                   !searching && <TreeEmptyRow />
                 )}
@@ -1023,7 +1241,7 @@ function TreeSubGroup({
 
 // ---------------------------------------------------------------------------
 // Document row — a single clickable file that opens an artifact view
-// (作品契约 / 章摘要 / 本书记忆 / 构想 / 账本 / 审核)
+// (作品契约 / 章摘要 / 构想 / 审核)
 // ---------------------------------------------------------------------------
 
 function TreeDocRow({
@@ -1129,6 +1347,7 @@ function TreeVolumeNode({
   expanded,
   onToggle,
   onOpen,
+  icon,
   children,
 }: {
   volume: VolumeDTO;
@@ -1137,6 +1356,8 @@ function TreeVolumeNode({
   expanded?: boolean;
   onToggle?: () => void;
   onOpen: () => void;
+  /** Optional leading glyph (e.g. the canon Lock on final volumes). */
+  icon?: React.ReactNode;
   children?: React.ReactNode;
 }) {
   const expandable = typeof expanded === "boolean" && !!onToggle;
@@ -1170,6 +1391,7 @@ function TreeVolumeNode({
           aria-current={selected ? "true" : undefined}
           className="flex min-w-0 flex-1 items-center gap-2 py-1.5 text-left"
         >
+          {icon}
           <span className="shrink-0 font-mono text-[10px] text-muted-foreground">
             V{String(volume.index).padStart(2, "0")}
           </span>
@@ -1177,6 +1399,82 @@ function TreeVolumeNode({
             {volume.title}
           </span>
           <span className="shrink-0 text-[10px] text-muted-foreground">({count})</span>
+        </button>
+      </div>
+      {expanded && children != null && <ul className="ml-3 border-l pl-2">{children}</ul>}
+    </li>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Chapter node — a draft chapter row inside 草稿 that owns 稿N version files
+// (Phase 9). Modeled after TreeVolumeNode: the chevron collapses the version
+// list, clicking the row opens the chapter. Chapters without versions render
+// as plain TreeFile rows instead.
+// ---------------------------------------------------------------------------
+
+function TreeChapterNode({
+  index,
+  label,
+  count,
+  selected,
+  expanded,
+  onToggle,
+  onOpen,
+  badges,
+  trailing,
+  children,
+}: {
+  index: number;
+  label: string;
+  /** Number of 稿N versions under this chapter. */
+  count: number;
+  selected?: boolean;
+  expanded?: boolean;
+  onToggle?: () => void;
+  onOpen: () => void;
+  badges?: NodeBadge[];
+  trailing?: React.ReactNode;
+  children?: React.ReactNode;
+}) {
+  const expandable = typeof expanded === "boolean" && !!onToggle;
+  return (
+    <li>
+      <div
+        className={cn(
+          "flex min-h-10 items-center gap-1 rounded-md pr-1 transition-colors",
+          selected ? "bg-accent" : "hover:bg-accent/60"
+        )}
+      >
+        {expandable ? (
+          <button
+            type="button"
+            onClick={onToggle}
+            aria-expanded={expanded}
+            aria-label={`${label} — expand or collapse draft versions`}
+            className="flex h-8 w-6 shrink-0 items-center justify-center rounded text-muted-foreground hover:text-foreground"
+          >
+            <ChevronRight
+              className={cn("h-3.5 w-3.5 transition-transform", expanded && "rotate-90")}
+              aria-hidden="true"
+            />
+          </button>
+        ) : (
+          <span className="h-8 w-6 shrink-0" aria-hidden="true" />
+        )}
+        <button
+          type="button"
+          onClick={onOpen}
+          aria-current={selected ? "true" : undefined}
+          className="flex min-w-0 flex-1 items-center gap-2 py-1.5 text-left"
+        >
+          <span className="shrink-0 font-mono text-[10px] text-muted-foreground">
+            {String(index).padStart(2, "0")}
+          </span>
+          <span className="min-w-0 flex-1 truncate text-sm">{label}</span>
+          <span className="shrink-0 text-[10px] text-muted-foreground">({count})</span>
+          {trailing}
+          <BadgeIcons badges={badges} />
         </button>
       </div>
       {expanded && children != null && <ul className="ml-3 border-l pl-2">{children}</ul>}

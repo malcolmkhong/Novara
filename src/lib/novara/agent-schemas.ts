@@ -31,6 +31,10 @@ export const startRunInputSchema = z.object({
   goal: z.string().trim().min(3, "Describe the goal (at least 3 characters)").max(2000),
   mode: agentRunModeSchema,
   pinned: z.array(pinnedRefSchema).max(12).optional(),
+  // P2 — model registry selection (validated against the registry in
+  // createRun; the level must be one the chosen model declares).
+  modelId: z.string().max(64).optional(),
+  thinkingLevel: z.enum(["off", "low", "medium", "high"]).optional(),
 });
 export type StartRunInput = z.infer<typeof startRunInputSchema>;
 

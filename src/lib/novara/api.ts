@@ -23,6 +23,7 @@ import type {
   VolumeDTO,
   WorldCategory,
   WorldEntryDTO,
+  WorldGroupDTO,
 } from "./types";
 import type { ChapterReview, NovelMemoryView } from "./agent-types";
 
@@ -73,6 +74,8 @@ export interface CreateNovelInput {
   characters?: { name: string; role?: string; description?: string }[];
   worldEntries?: { title: string; category?: string; content?: string }[];
   outlineBeats?: { title: string; summary?: string }[];
+  // Phase 9 — written at creation by the wizard (构想快照 verbatim baseline).
+  conceptSnapshot?: string;
 }
 
 export function createNovel(
@@ -85,7 +88,13 @@ export function createNovel(
 // AI wizard ("New with the AI team")
 // ---------------------------------------------------------------------------
 
-export type WizardSection = "logline" | "premise" | "characters" | "beats";
+export type WizardSection =
+  | "logline"
+  | "premise"
+  | "characters"
+  | "world"
+  | "beats"
+  | "contract";
 
 export interface WizardGenerateInput {
   section: WizardSection;
@@ -117,6 +126,9 @@ export interface UpdateNovelInput {
   status?: NovelStatus;
   /** Story contract (作品契约) — upserted 1:1 (Phase 7 P1). */
   contract?: string;
+  /** Contract canon lock (Phase 9): "final" locks; editing needs reopen. */
+  contractStatus?: "draft" | "final";
+  contractReopen?: boolean;
   /** 构想快照 — initial creative vision snapshot (Phase 8). */
   conceptSnapshot?: string;
 }
@@ -248,6 +260,12 @@ export interface CharacterInput {
   aliases?: string;
 }
 
+export interface CharacterUpdateInput extends Partial<CharacterInput> {
+  /** Canon lock (Phase 9): "final" locks; editing a locked row needs reopen. */
+  status?: "draft" | "final";
+  reopen?: boolean;
+}
+
 export function addCharacter(
   novelId: string,
   input: CharacterInput
@@ -260,7 +278,7 @@ export function addCharacter(
 
 export function updateCharacter(
   id: string,
-  patch: Partial<CharacterInput>
+  patch: CharacterUpdateInput
 ): Promise<{ character: CharacterDTO }> {
   return request(`/api/characters/${id}`, {
     method: "PATCH",
@@ -268,8 +286,42 @@ export function updateCharacter(
   });
 }
 
-export function deleteCharacter(id: string): Promise<{ ok: true }> {
-  return request(`/api/characters/${id}`, { method: "DELETE" });
+export function deleteCharacter(id: string, reopen = false): Promise<{ ok: true }> {
+  return request(`/api/characters/${id}${reopen ? "?reopen=1" : ""}`, {
+    method: "DELETE",
+  });
+}
+
+// ---------------------------------------------------------------------------
+// 世界书 groups (Phase 9) — second-level grouping in the world bible
+// ---------------------------------------------------------------------------
+
+export function listWorldGroups(novelId: string): Promise<{ groups: WorldGroupDTO[] }> {
+  return request(`/api/novels/${novelId}/world-groups`);
+}
+
+export function addWorldGroup(
+  novelId: string,
+  name: string
+): Promise<{ group: WorldGroupDTO }> {
+  return request(`/api/novels/${novelId}/world-groups`, {
+    method: "POST",
+    body: JSON.stringify({ name }),
+  });
+}
+
+export function updateWorldGroup(
+  id: string,
+  patch: { name?: string; moveTo?: number }
+): Promise<{ group: WorldGroupDTO }> {
+  return request(`/api/world-groups/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(patch),
+  });
+}
+
+export function deleteWorldGroup(id: string): Promise<{ ok: true }> {
+  return request(`/api/world-groups/${id}`, { method: "DELETE" });
 }
 
 // ---------------------------------------------------------------------------
@@ -280,6 +332,14 @@ export interface WorldEntryInput {
   title: string;
   category?: WorldCategory;
   content?: string;
+}
+
+export interface WorldEntryUpdateInput extends Partial<WorldEntryInput> {
+  /** 世界书 second-level grouping (Phase 9) — null ungroups. */
+  groupId?: string | null;
+  /** Canon lock (Phase 9): "final" locks; editing a locked row needs reopen. */
+  status?: "draft" | "final";
+  reopen?: boolean;
 }
 
 export function addWorldEntry(
@@ -294,7 +354,7 @@ export function addWorldEntry(
 
 export function updateWorldEntry(
   id: string,
-  patch: Partial<WorldEntryInput>
+  patch: WorldEntryUpdateInput
 ): Promise<{ entry: WorldEntryDTO }> {
   return request(`/api/world-entries/${id}`, {
     method: "PATCH",
@@ -302,8 +362,10 @@ export function updateWorldEntry(
   });
 }
 
-export function deleteWorldEntry(id: string): Promise<{ ok: true }> {
-  return request(`/api/world-entries/${id}`, { method: "DELETE" });
+export function deleteWorldEntry(id: string, reopen = false): Promise<{ ok: true }> {
+  return request(`/api/world-entries/${id}${reopen ? "?reopen=1" : ""}`, {
+    method: "DELETE",
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -315,6 +377,12 @@ export interface OutlineBeatInput {
   summary?: string;
   /** Owning volume id (Phase 7 P1) — null unsorts the beat. */
   volumeId?: string | null;
+}
+
+export interface OutlineBeatUpdateInput extends Partial<OutlineBeatInput> {
+  /** Canon lock (Phase 9): "final" locks; editing a locked beat needs reopen. */
+  status?: "draft" | "final";
+  reopen?: boolean;
 }
 
 export function addOutlineBeat(
@@ -329,7 +397,7 @@ export function addOutlineBeat(
 
 export function updateOutlineBeat(
   id: string,
-  patch: Partial<OutlineBeatInput>
+  patch: OutlineBeatUpdateInput
 ): Promise<{ beat: OutlineBeatDTO }> {
   return request(`/api/outline-beats/${id}`, {
     method: "PATCH",
@@ -337,8 +405,10 @@ export function updateOutlineBeat(
   });
 }
 
-export function deleteOutlineBeat(id: string): Promise<{ ok: true }> {
-  return request(`/api/outline-beats/${id}`, { method: "DELETE" });
+export function deleteOutlineBeat(id: string, reopen = false): Promise<{ ok: true }> {
+  return request(`/api/outline-beats/${id}${reopen ? "?reopen=1" : ""}`, {
+    method: "DELETE",
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -366,7 +436,12 @@ export function addVolume(
 
 export function updateVolume(
   id: string,
-  patch: Partial<VolumeInput> & { moveTo?: number }
+  patch: Partial<VolumeInput> & {
+    moveTo?: number;
+    /** Canon lock (Phase 9): "final" locks; editing a locked volume needs reopen. */
+    status?: "draft" | "final";
+    reopen?: boolean;
+  }
 ): Promise<{ volume: VolumeDTO }> {
   return request(`/api/volumes/${id}`, {
     method: "PATCH",
@@ -374,8 +449,10 @@ export function updateVolume(
   });
 }
 
-export function deleteVolume(id: string): Promise<{ ok: true }> {
-  return request(`/api/volumes/${id}`, { method: "DELETE" });
+export function deleteVolume(id: string, reopen = false): Promise<{ ok: true }> {
+  return request(`/api/volumes/${id}${reopen ? "?reopen=1" : ""}`, {
+    method: "DELETE",
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -417,10 +494,18 @@ export function addLedgerRow<K extends LedgerKind>(
   });
 }
 
+/** Per-kind ledger update patch (Phase 9): storyline/promise/clue carry a
+ * lifecycle `status` in LedgerInput, so their canon lock rides `lock`;
+ * timeline/arc have no lifecycle status, so canon rides `status`. */
+export type LedgerUpdatePatch<K extends LedgerKind> = Partial<LedgerInput[K]> &
+  (K extends "storyline" | "promise" | "clue"
+    ? { moveTo?: number; lock?: "draft" | "final"; reopen?: boolean }
+    : { moveTo?: number; status?: "draft" | "final"; reopen?: boolean });
+
 export function updateLedgerRow<K extends LedgerKind>(
   kind: K,
   id: string,
-  patch: Partial<LedgerInput[K]> & { moveTo?: number }
+  patch: LedgerUpdatePatch<K>
 ): Promise<{ row: unknown }> {
   return request(`/api/ledger/${kind}/${id}`, {
     method: "PATCH",
@@ -428,8 +513,14 @@ export function updateLedgerRow<K extends LedgerKind>(
   });
 }
 
-export function deleteLedgerRow(kind: LedgerKind, id: string): Promise<{ ok: true }> {
-  return request(`/api/ledger/${kind}/${id}`, { method: "DELETE" });
+export function deleteLedgerRow(
+  kind: LedgerKind,
+  id: string,
+  reopen = false
+): Promise<{ ok: true }> {
+  return request(`/api/ledger/${kind}/${id}${reopen ? "?reopen=1" : ""}`, {
+    method: "DELETE",
+  });
 }
 
 // ---------------------------------------------------------------------------

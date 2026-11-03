@@ -11,7 +11,12 @@ export const characterSchema = z.object({
   aliases: z.string().max(400).optional(),
 });
 
-export const characterUpdateSchema = characterSchema.partial();
+export const characterUpdateSchema = characterSchema.partial().extend({
+  // Canon status layer (Phase 9): set "final" to lock; requires reopen to
+  // edit a locked asset (the route archives the final state to AssetVersion).
+  status: z.enum(["draft", "final"]).optional(),
+  reopen: z.boolean().optional(),
+});
 
 export const worldEntrySchema = z.object({
   title: z.string().trim().min(1).max(200),
@@ -21,7 +26,25 @@ export const worldEntrySchema = z.object({
   content: z.string().max(50000).optional(),
 });
 
-export const worldEntryUpdateSchema = worldEntrySchema.partial();
+export const worldEntryUpdateSchema = worldEntrySchema.partial().extend({
+  // 世界书 second-level grouping (Phase 9) — null ungroups the entry.
+  groupId: z.string().cuid().nullable().optional(),
+  // Canon status layer (Phase 9) — same gate law as characters.
+  status: z.enum(["draft", "final"]).optional(),
+  reopen: z.boolean().optional(),
+});
+
+// ---- Phase 9: 世界书 groups (二级分组) -------------------------------------
+
+export const createWorldGroupSchema = z.object({
+  name: z.string().trim().min(1).max(80),
+});
+
+export const updateWorldGroupSchema = z.object({
+  name: z.string().trim().min(1).max(80).optional(),
+  // Reorder support — explicit index move validated server-side.
+  moveTo: z.number().int().min(1).max(99).optional(),
+});
 
 export const outlineBeatSchema = z.object({
   title: z.string().trim().min(1).max(200),
@@ -30,7 +53,11 @@ export const outlineBeatSchema = z.object({
   volumeId: z.string().cuid().nullable().optional(),
 });
 
-export const outlineBeatUpdateSchema = outlineBeatSchema.partial();
+export const outlineBeatUpdateSchema = outlineBeatSchema.partial().extend({
+  // Canon status layer (Phase 9) — same gate law as characters.
+  status: z.enum(["draft", "final"]).optional(),
+  reopen: z.boolean().optional(),
+});
 
 // ---- Phase 7 (P1): volumes (卷) ------------------------------------------
 
@@ -42,6 +69,9 @@ export const createVolumeSchema = z.object({
 export const updateVolumeSchema = createVolumeSchema.partial().extend({
   // Reorder support — explicit index move validated server-side.
   moveTo: z.number().int().min(1).max(99).optional(),
+  // Canon status layer (Phase 9) — same gate law as characters.
+  status: z.enum(["draft", "final"]).optional(),
+  reopen: z.boolean().optional(),
 });
 
 // ---- Phase 7 (P1): ledger (账本三表) --------------------------------------
@@ -89,17 +119,51 @@ export const ledgerCreateSchema = z.discriminatedUnion("kind", [
 ]);
 
 export const ledgerUpdateSchema = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("storyline"), data: storylineSchema.partial() }),
+  z.object({
+    kind: z.literal("storyline"),
+    data: storylineSchema.partial().extend({
+      // Canon status layer (Phase 9) — storyline's lifecycle `status` is
+      // active/dormant/resolved, so the canon lock rides the `lock` field.
+      lock: z.enum(["draft", "final"]).optional(),
+      reopen: z.boolean().optional(),
+    }),
+  }),
   z.object({
     kind: z.literal("timeline"),
-    data: timelineEntrySchema.partial().extend({ moveTo: z.number().int().min(1).max(999).optional() }),
+    data: timelineEntrySchema
+      .partial()
+      .extend({ moveTo: z.number().int().min(1).max(999).optional() })
+      .extend({
+        status: z.enum(["draft", "final"]).optional(),
+        reopen: z.boolean().optional(),
+      }),
   }),
   z.object({
     kind: z.literal("arc"),
-    data: characterArcSchema.partial().extend({ moveTo: z.number().int().min(1).max(999).optional() }),
+    data: characterArcSchema
+      .partial()
+      .extend({ moveTo: z.number().int().min(1).max(999).optional() })
+      .extend({
+        status: z.enum(["draft", "final"]).optional(),
+        reopen: z.boolean().optional(),
+      }),
   }),
-  z.object({ kind: z.literal("promise"), data: promiseSchema.partial() }),
-  z.object({ kind: z.literal("clue"), data: clueSchema.partial() }),
+  z.object({
+    kind: z.literal("promise"),
+    data: promiseSchema.partial().extend({
+      // Canon lock (Phase 9) — lifecycle `status` is open/fulfilled/broken.
+      lock: z.enum(["draft", "final"]).optional(),
+      reopen: z.boolean().optional(),
+    }),
+  }),
+  z.object({
+    kind: z.literal("clue"),
+    data: clueSchema.partial().extend({
+      // Canon lock (Phase 9) — lifecycle `status` is planted/surfaced/revealed.
+      lock: z.enum(["draft", "final"]).optional(),
+      reopen: z.boolean().optional(),
+    }),
+  }),
 ]);
 
 // ---- Phase 8: chapter packs (材料包 / 定稿准备包) -------------------------
@@ -126,6 +190,10 @@ export const createNovelSchema = z.object({
   characters: z.array(characterSchema).max(24).optional(),
   worldEntries: z.array(worldEntrySchema).max(24).optional(),
   outlineBeats: z.array(outlineBeatSchema).max(64).optional(),
+  // Phase 9 — 构想快照 written at creation time by the "New with the AI
+  // team" wizard: the logline/premise/cast/outline the author confirmed,
+  // kept verbatim as the audit baseline (构想/构想快照.md analog).
+  conceptSnapshot: z.string().max(100000).optional(),
 });
 
 export const updateNovelSchema = createNovelSchema
@@ -136,6 +204,10 @@ export const updateNovelSchema = createNovelSchema
     // Phase 7 (P1) — the story contract (作品契约): promise document the
     // writing context always reads. Upserted 1:1 by the novel PATCH.
     contract: z.string().max(50000).optional(),
+    // Phase 9 — contract canon lock: set "final" to lock the contract;
+    // editing a locked contract requires reopen (archives to AssetVersion).
+    contractStatus: z.enum(["draft", "final"]).optional(),
+    contractReopen: z.boolean().optional(),
     // Phase 8 — 构想快照: the initial creative vision snapshot.
     conceptSnapshot: z.string().max(100000).optional(),
   });

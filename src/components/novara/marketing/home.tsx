@@ -47,7 +47,7 @@ const HERO_MOCK_LINES = [
   { width: "w-5/6", accent: false },
 ];
 
-const HERO_AGENT_CHIPS = ["Story Architect", "Editor", "Continuity Checker"];
+const HERO_AGENT_CHIPS = ["Atlas · Leader", "Sage · Writer", "Prism · Analyst"];
 
 const SOLUTION_SUBAGENTS = [
   "Sub-agent · Structure",
@@ -89,10 +89,10 @@ export function HomePage({ onEnterWriter }: HomePageProps) {
                 {BRAND.tagline}
               </h1>
               <p className="mt-5 max-w-xl text-base leading-relaxed text-stone-300 sm:text-lg">
-                Novara AI gives you a team of specialized AI agents — story
-                architecture, worldbuilding, characters, plot, drafting,
-                editing, continuity. They take your novel from one-line concept
-                to complete manuscript, and keep it consistent from the first
+                Novara AI gives you a coordinated team of five specialized AI
+                agents — a leader, a writer, a researcher, an analyst and an
+                engineer. They take your novel from one-line concept to
+                complete manuscript, and keep it consistent from the first
                 page to the last.
               </p>
               <div className="mt-8 flex flex-wrap gap-3">
@@ -348,7 +348,7 @@ export function HomePage({ onEnterWriter }: HomePageProps) {
               id="home-team-heading"
               className="mt-2 font-display text-3xl font-bold tracking-tight sm:text-4xl"
             >
-              Seven specialists. One shared story bible.
+              Five specialists. One shared story bible.
             </h2>
           </div>
           <div className="mt-10 grid gap-5 sm:mt-12 sm:grid-cols-2 lg:grid-cols-3">
@@ -383,7 +383,7 @@ export function HomePage({ onEnterWriter }: HomePageProps) {
             })}
           </div>
           <p className="mx-auto mt-8 max-w-2xl text-center text-sm text-muted-foreground">
-            All seven agents read and write to{" "}
+            All five agents read and write to{" "}
             <span className="font-medium text-foreground">
               one shared story bible
             </span>{" "}

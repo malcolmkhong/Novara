@@ -4,6 +4,7 @@ import { useEffect, useRef } from "react";
 import {
   Activity,
   AlertTriangle,
+  Gauge,
   ListChecks,
   MessageSquare,
   PenLine,
@@ -29,6 +30,7 @@ const EVENT_ICON: Record<AgentEventKind, LucideIcon> = {
   message: MessageSquare,
   error: AlertTriangle,
   approval: ShieldCheck,
+  usage: Gauge,
 };
 
 // Phase 5: per-member color accents in the activity stream.

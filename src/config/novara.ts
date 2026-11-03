@@ -10,7 +10,6 @@ import {
   ListOrdered,
   PenLine,
   Puzzle,
-  Route,
   ScrollText,
   ShieldCheck,
   Sparkles,
@@ -40,7 +39,7 @@ export const NAV_LINKS: NavLink[] = [
 // ---------------------------------------------------------------------------
 
 export const HERO_STATS = [
-  { value: "7", label: "Specialized AI agents" },
+  { value: "5", label: "Specialized AI agents" },
   { value: "1", label: "Shared story bible" },
   { value: "~100,000", label: "Words per novel pipeline" },
   { value: "0", label: "Continuity drift target" },
@@ -129,59 +128,43 @@ export interface AgentProfile {
 export const AI_TEAM: AgentProfile[] = [
   {
     icon: Compass,
-    name: "Story Architect",
+    name: "Atlas",
     role: "Team leader",
     description:
-      "Turns your premise into a viable story: evaluates the concept, defines the narrative pillars and coordinates every other agent's work.",
-    delivers: "Story foundation & direction",
-  },
-  {
-    icon: Globe2,
-    name: "Worldbuilding Agent",
-    role: "Settings & lore",
-    description:
-      "Builds the world — geography, cultures, factions, magic or technology systems — and maintains the world bible as it evolves.",
-    delivers: "World bible & setting rules",
-  },
-  {
-    icon: Users,
-    name: "Character Development Agent",
-    role: "Cast & arcs",
-    description:
-      "Creates characters with motivations, flaws and growth arcs, and tracks their relationships and states across the story.",
-    delivers: "Character profiles & arcs",
-  },
-  {
-    icon: Route,
-    name: "Plot Planner",
-    role: "Structure & pacing",
-    description:
-      "Designs acts, volumes and chapter beats. Places hooks, turning points and payoffs so the story keeps moving at a readable pace.",
-    delivers: "Outline & chapter beats",
+      "Turns your premise into a viable plan: evaluates the concept, decomposes it into concrete tasks, delegates every job across the team and verifies each result.",
+    delivers: "Plans, task orders & verified results",
   },
   {
     icon: PenLine,
-    name: "Novel Writer",
-    role: "Prose production",
+    name: "Sage",
+    role: "Writer",
     description:
-      "Drafts chapter prose that follows the outline, respects the world bible and keeps each character's voice consistent.",
+      "Drafts chapter prose that follows the outline, respects the story bible and keeps each character's voice consistent — one chapter at a time.",
     delivers: "Chapter drafts",
   },
   {
-    icon: ScrollText,
-    name: "Editor",
-    role: "Quality & style",
+    icon: Globe2,
+    name: "Nova",
+    role: "Researcher",
     description:
-      "Reviews drafts for clarity, pacing and style, requests targeted revisions and polishes chapters toward a publishable standard.",
-    delivers: "Review notes & revisions",
+      "Answers factual questions about your project — settings, characters, timeline, canon — pulling ground truth straight from the story bible.",
+    delivers: "Ground-truth facts & lookups",
   },
   {
-    icon: ShieldCheck,
-    name: "Continuity Checker",
-    role: "Canon guardian",
+    icon: ScrollText,
+    name: "Prism",
+    role: "Analyst",
     description:
-      "Watches for contradictions — timeline conflicts, changed settings, forgotten promises — and flags them before they reach readers.",
-    delivers: "Consistency reports",
+      "Reviews every draft for clarity, pacing and continuity, settles what happened into the story bible and flags contradictions before they reach readers.",
+    delivers: "Review verdicts & canon updates",
+  },
+  {
+    icon: Layers,
+    name: "Forge",
+    role: "Engineer",
+    description:
+      "Keeps the project library clean — assets, documents and exports stay organized, validated and ready to download at any time.",
+    delivers: "Library hygiene & exports",
   },
 ];
 
@@ -203,37 +186,37 @@ export const HOW_IT_WORKS: WorkflowStep[] = [
   {
     title: "AI Team builds the story foundation",
     description:
-      "The Story Architect analyzes your concept and establishes the story's core structure and direction.",
+      "Atlas analyzes your concept and establishes the story's core structure and direction.",
   },
   {
     title: "World & characters are created",
     description:
-      "The Worldbuilding and Character agents produce the setting bible and the cast that will carry your story.",
+      "Nova researches your premise while the team builds the setting bible and the cast that will carry your story.",
   },
   {
     title: "Plot & chapter outline",
     description:
-      "The Plot Planner shapes acts, volumes and chapter-level beats, so every chapter has a job to do.",
+      "Atlas shapes acts, volumes and chapter-level beats, so every chapter has a job to do.",
   },
   {
-    title: "AI Writer drafts the chapters",
+    title: "Sage drafts the chapters",
     description:
       "Chapters are written against the outline and the bible — one chapter at a time, in your review loop.",
   },
   {
-    title: "AI Editor refines every chapter",
+    title: "Prism refines every chapter",
     description:
       "Drafts are reviewed for clarity, pacing and style, then revised until they meet the bar.",
   },
   {
-    title: "Continuity Checker verifies the story",
+    title: "The story bible stays honest",
     description:
-      "Settings, timelines, character states and open plot lines are checked for contradictions.",
+      "Prism settles each finished chapter into the bible — settings, timelines, character states and open plot lines checked for contradictions.",
   },
   {
     title: "You review, refine and export",
     description:
-      "You stay in the director's chair the whole time — approve, adjust, and export your finished manuscript.",
+      "You stay in the director's chair the whole time — approve, adjust, and Forge exports your finished manuscript.",
   },
 ];
 
@@ -422,7 +405,7 @@ export const ROADMAP: RoadmapPhase[] = [
     phase: "Phase 5",
     title: "Full AI team",
     description:
-      "All seven agents working in parallel with leader-verified results and progress visibility.",
+      "All five agents working in parallel with leader-verified results and progress visibility.",
     status: "planned",
   },
   {

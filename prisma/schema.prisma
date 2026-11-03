@@ -530,6 +530,10 @@ model AgentRun {
   mode     String   @default("approval")
   // running | awaiting_approval | paused | completed | failed | cancelled
   status   String   @default("running")
+  // P2 — model registry id + thinking level this run executes with
+  // (validated against src/lib/novara/models.ts at creation AND execution)
+  modelId        String @default("glm-4.6")
+  thinkingLevel  String @default("off")
   // RunFinalReport JSON (reported vs verified numbers) — null until finished
   finalReport String?
   // PinnedRef[] JSON — author-pinned context refs resolved at execution time

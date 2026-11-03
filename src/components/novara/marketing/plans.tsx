@@ -103,7 +103,7 @@ export function PlansPage({ onEnterWriter }: PlansPageProps) {
                   <dt>Agent team</dt>
                   <dd className="font-medium text-foreground">
                     {plan.limits.agentTeam === "all"
-                      ? "All 7 agents"
+                      ? "All 5 agents"
                       : "Core agents"}
                   </dd>
                 </div>

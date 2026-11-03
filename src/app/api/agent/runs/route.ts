@@ -60,6 +60,8 @@ export async function POST(req: Request) {
       goal: schema.data.goal,
       mode: schema.data.mode,
       pinned: schema.data.pinned,
+      modelId: schema.data.modelId,
+      thinkingLevel: schema.data.thinkingLevel,
     });
     // Execute in the background — the board fills in via SSE.
     after(async () => {

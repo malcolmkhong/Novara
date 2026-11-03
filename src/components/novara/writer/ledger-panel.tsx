@@ -32,6 +32,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { useToast } from "@/hooks/use-toast";
+import { useWriterStore } from "@/hooks/use-writer-store";
 import { cn } from "@/lib/utils";
 import {
   addLedgerRow,
@@ -48,6 +50,7 @@ import type {
   StorylineStatus,
   TimelineEntryDTO,
 } from "@/lib/novara/types";
+import { CanonLockButton } from "./bible-panels";
 import { ConfirmDialog } from "./ui-bits";
 
 const SCROLL_LIST =
@@ -80,6 +83,25 @@ const CLUE_STATUS_META: Record<ClueStatus, { label: string; className: string }>
   revealed: { label: "revealed", className: "text-muted-foreground" },
 };
 
+// ---------------------------------------------------------------------------
+// Canon lock (定稿锁, Phase 9) — storyline/promise/clue carry `lock`;
+// timeline/arc carry `status`. Shared with the bible panels.
+// ---------------------------------------------------------------------------
+
+const LEDGER_KINDS: LedgerKind[] = ["storyline", "timeline", "arc", "promise", "clue"];
+
+/** Which canon field does this ledger kind use? */
+function isLockKind(kind: LedgerKind): boolean {
+  return kind === "storyline" || kind === "promise" || kind === "clue";
+}
+
+function rowLocked(kind: LedgerKind, row: { lock?: string; status?: string }): boolean {
+  return (isLockKind(kind) ? row.lock : row.status) === "final";
+}
+
+const REOPEN_ARCHIVE_NOTE =
+  "原版将自动存档到版本史，然后降回草稿，可再次编辑。";
+
 /**
  * Inline add/edit form model. `chapter` covers timeline/arcs; `numA`/`numB`
  * cover the promise (made/due) and clue (plant/reveal) chapter pairs.
@@ -106,6 +128,18 @@ const EMPTY_FIELDS: LedgerFormFields = {
   numB: "",
 };
 
+/** Ledger section tabs: 全部 keeps the stacked five-section view. */
+type LedgerTab = LedgerKind | "all";
+
+const LEDGER_TABS: { value: LedgerTab; label: string }[] = [
+  { value: "all", label: "全部" },
+  { value: "storyline", label: "故事线" },
+  { value: "timeline", label: "时间线" },
+  { value: "arc", label: "人物弧线" },
+  { value: "promise", label: "承诺" },
+  { value: "clue", label: "线索" },
+];
+
 // ---------------------------------------------------------------------------
 // LedgerPanel
 // ---------------------------------------------------------------------------
@@ -117,7 +151,46 @@ export function LedgerPanel({ novelId }: { novelId: string }) {
   const [actionError, setActionError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [form, setForm] = useState<LedgerFormState | null>(null);
-  const [deleting, setDeleting] = useState<{ kind: LedgerKind; id: string; label: string } | null>(null);
+  const [deleting, setDeleting] = useState<{
+    kind: LedgerKind;
+    id: string;
+    label: string;
+    locked?: boolean;
+  } | null>(null);
+
+  // Section tab (全部 keeps the stacked five-section view). The asset tree can
+  // deep-link a kind by writing `ledgerKindByNovel[novelId]` in the writer
+  // store — read defensively so this panel also typechecks before the store
+  // task lands; the fields are consumed verbatim once they exist.
+  const focusKind = useWriterStore((s) =>
+    (s as { ledgerKindByNovel?: Record<string, string | null> }).ledgerKindByNovel?.[
+      novelId
+    ] ?? null
+  );
+  const setLedgerKind = useWriterStore((s) =>
+    (
+      s as { setLedgerKind?: (novelId: string, kind: string | null) => void }
+    ).setLedgerKind
+  );
+  const [activeTab, setActiveTab] = useState<LedgerTab>("all");
+
+  // Tree deep-link: preselect the focus kind on mount and re-apply on later
+  // changes while the panel stays mounted.
+  useEffect(() => {
+    if (focusKind && (LEDGER_KINDS as string[]).includes(focusKind)) {
+      setActiveTab(focusKind as LedgerKind);
+    }
+  }, [focusKind]);
+
+  const selectTab = useCallback(
+    (tab: LedgerTab) => {
+      setActiveTab(tab);
+      setLedgerKind?.(novelId, tab === "all" ? null : tab);
+    },
+    [novelId, setLedgerKind]
+  );
+
+  const { toast } = useToast();
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -145,13 +218,40 @@ export function LedgerPanel({ novelId }: { novelId: string }) {
         await load();
         return true;
       } catch (e) {
-        setActionError(e instanceof Error ? e.message : "Unknown error");
+        const msg = e instanceof Error ? e.message : "Unknown error";
+        setActionError(msg);
+        toast({
+          title: "操作失败",
+          description: msg,
+          variant: "destructive",
+        });
         return false;
       } finally {
         setBusy(false);
       }
     },
-    [load]
+    [load, toast]
+  );
+
+  /**
+   * Canon lock toggle for one ledger row. storyline/promise/clue canon rides
+   * `lock`; timeline/arc rides `status` (see LedgerUpdatePatch).
+   */
+  const setRowLock = useCallback(
+    async (kind: LedgerKind, id: string, final: boolean) => {
+      await mutate(() => {
+        if (kind === "storyline")
+          return updateLedgerRow("storyline", id, final ? { lock: "final" } : { reopen: true });
+        if (kind === "promise")
+          return updateLedgerRow("promise", id, final ? { lock: "final" } : { reopen: true });
+        if (kind === "clue")
+          return updateLedgerRow("clue", id, final ? { lock: "final" } : { reopen: true });
+        if (kind === "timeline")
+          return updateLedgerRow("timeline", id, final ? { status: "final" } : { reopen: true });
+        return updateLedgerRow("arc", id, final ? { status: "final" } : { reopen: true });
+      });
+    },
+    [mutate]
   );
 
   const patchForm = useCallback((patch: Partial<LedgerFormFields>) => {
@@ -283,6 +383,25 @@ export function LedgerPanel({ novelId }: { novelId: string }) {
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">
+        <div className="flex flex-wrap items-center gap-1" role="tablist" aria-label="账本分区">
+          {LEDGER_TABS.map((t) => (
+            <Button
+              key={t.value}
+              type="button"
+              variant="ghost"
+              size="sm"
+              className={cn(
+                "h-7 px-2.5 text-xs",
+                activeTab === t.value && "bg-primary/10 font-medium text-primary"
+              )}
+              aria-pressed={activeTab === t.value}
+              onClick={() => selectTab(t.value)}
+            >
+              {t.label}
+            </Button>
+          ))}
+        </div>
+
         {loading && !ledger && (
           <div className="space-y-2" aria-busy="true" aria-label="Loading ledger">
             {[0, 1, 2].map((i) => (
@@ -310,6 +429,7 @@ export function LedgerPanel({ novelId }: { novelId: string }) {
 
             <div className="divide-y">
               {/* Storylines · 故事线 */}
+              {(activeTab === "all" || activeTab === "storyline") && (
               <section aria-label="Storylines" className="space-y-2 pb-4">
                 <SectionHeader
                   title="Storylines · 故事线"
@@ -331,9 +451,9 @@ export function LedgerPanel({ novelId }: { novelId: string }) {
                             size="sm"
                             className={cn("h-8 shrink-0 px-2 text-[11px]", STORYLINE_STATUS_META[row.status].className)}
                             onClick={() => cycleStatus(row)}
-                            disabled={busy}
+                            disabled={busy || rowLocked("storyline", row)}
                             aria-label={`Storyline “${row.name}” is ${row.status} — click to mark ${STORYLINE_CYCLE[row.status]}`}
-                            title={`Click to mark ${STORYLINE_CYCLE[row.status]}`}
+                            title={rowLocked("storyline", row) ? "已定稿 — 解除定稿后可改状态" : `Click to mark ${STORYLINE_CYCLE[row.status]}`}
                           >
                             {STORYLINE_STATUS_META[row.status].label}
                           </Button>
@@ -343,9 +463,23 @@ export function LedgerPanel({ novelId }: { novelId: string }) {
                               <p className="mt-0.5 text-xs text-muted-foreground">{row.summary}</p>
                             )}
                           </div>
+                          <CanonLockButton
+                            locked={rowLocked("storyline", row)}
+                            busy={busy}
+                            onFinalize={() => void setRowLock("storyline", row.id, true)}
+                            onReopen={() => void setRowLock("storyline", row.id, false)}
+                          />
                           <RowActions
                             onEdit={() => openEdit("storyline", row)}
-                            onDelete={() => setDeleting({ kind: "storyline", id: row.id, label: row.name })}
+                            onDelete={() =>
+                              setDeleting({
+                                kind: "storyline",
+                                id: row.id,
+                                label: row.name,
+                                locked: rowLocked("storyline", row),
+                              })
+                            }
+                            editDisabled={rowLocked("storyline", row)}
                             editLabel={`Edit storyline ${row.name}`}
                             deleteLabel={`Delete storyline ${row.name}`}
                           />
@@ -359,8 +493,10 @@ export function LedgerPanel({ novelId }: { novelId: string }) {
                   </p>
                 )}
               </section>
+              )}
 
               {/* Timeline · 时间线 */}
+              {(activeTab === "all" || activeTab === "timeline") && (
               <section aria-label="Timeline" className="space-y-2 py-4">
                 <SectionHeader
                   title="Timeline · 时间线"
@@ -393,9 +529,23 @@ export function LedgerPanel({ novelId }: { novelId: string }) {
                               <p className="mt-0.5 text-xs text-muted-foreground">{row.detail}</p>
                             )}
                           </div>
+                          <CanonLockButton
+                            locked={rowLocked("timeline", row)}
+                            busy={busy}
+                            onFinalize={() => void setRowLock("timeline", row.id, true)}
+                            onReopen={() => void setRowLock("timeline", row.id, false)}
+                          />
                           <RowActions
                             onEdit={() => openEdit("timeline", row)}
-                            onDelete={() => setDeleting({ kind: "timeline", id: row.id, label: row.label })}
+                            onDelete={() =>
+                              setDeleting({
+                                kind: "timeline",
+                                id: row.id,
+                                label: row.label,
+                                locked: rowLocked("timeline", row),
+                              })
+                            }
+                            editDisabled={rowLocked("timeline", row)}
                             editLabel={`Edit timeline event ${row.label}`}
                             deleteLabel={`Delete timeline event ${row.label}`}
                           />
@@ -409,8 +559,10 @@ export function LedgerPanel({ novelId }: { novelId: string }) {
                   </p>
                 )}
               </section>
+              )}
 
               {/* Character arcs · 人物弧线 */}
+              {(activeTab === "all" || activeTab === "arc") && (
               <section aria-label="Character arcs" className="space-y-2 py-4">
                 <SectionHeader
                   title="Character arcs · 人物弧线"
@@ -444,11 +596,23 @@ export function LedgerPanel({ novelId }: { novelId: string }) {
                                     )}
                                   </div>
                                 </div>
+                                <CanonLockButton
+                                  locked={rowLocked("arc", stage)}
+                                  busy={busy}
+                                  onFinalize={() => void setRowLock("arc", stage.id, true)}
+                                  onReopen={() => void setRowLock("arc", stage.id, false)}
+                                />
                                 <RowActions
                                   onEdit={() => openEdit("arc", stage)}
                                   onDelete={() =>
-                                    setDeleting({ kind: "arc", id: stage.id, label: stage.characterName })
+                                    setDeleting({
+                                      kind: "arc",
+                                      id: stage.id,
+                                      label: stage.characterName,
+                                      locked: rowLocked("arc", stage),
+                                    })
                                   }
+                                  editDisabled={rowLocked("arc", stage)}
                                   editLabel={`Edit arc stage for ${stage.characterName}`}
                                   deleteLabel={`Delete arc stage for ${stage.characterName}`}
                                 />
@@ -465,8 +629,10 @@ export function LedgerPanel({ novelId }: { novelId: string }) {
                   </p>
                 )}
               </section>
+              )}
 
               {/* Promises · 承诺 (Phase 8) */}
+              {(activeTab === "all" || activeTab === "promise") && (
               <section aria-label="Promises" className="space-y-2 py-4">
                 <SectionHeader
                   title="Promises · 承诺"
@@ -517,8 +683,10 @@ export function LedgerPanel({ novelId }: { novelId: string }) {
                   </p>
                 )}
               </section>
+              )}
 
               {/* Clues · 线索 (Phase 8) */}
+              {(activeTab === "all" || activeTab === "clue") && (
               <section aria-label="Clues" className="space-y-2 pt-4">
                 <SectionHeader
                   title="Clues · 线索"
@@ -568,6 +736,7 @@ export function LedgerPanel({ novelId }: { novelId: string }) {
                   </p>
                 )}
               </section>
+              )}
             </div>
           </>
         )}
@@ -631,15 +800,26 @@ function RowActions({
   onDelete,
   editLabel,
   deleteLabel,
+  editDisabled = false,
 }: {
   onEdit: () => void;
   onDelete: () => void;
   editLabel: string;
   deleteLabel: string;
+  /** Canon-locked rows cannot be edited in place (reopen first). */
+  editDisabled?: boolean;
 }) {
   return (
     <div className="flex shrink-0 gap-1">
-      <Button variant="ghost" size="icon" className="h-8 w-8" aria-label={editLabel} onClick={onEdit}>
+      <Button
+        variant="ghost"
+        size="icon"
+        className="h-8 w-8"
+        aria-label={editLabel}
+        onClick={onEdit}
+        disabled={editDisabled}
+        title={editDisabled ? "已定稿 — 解除定稿后可编辑" : undefined}
+      >
         <Pencil className="h-4 w-4" aria-hidden="true" />
       </Button>
       <Button
