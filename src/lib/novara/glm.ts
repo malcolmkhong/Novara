@@ -20,8 +20,23 @@ import ZAI from "z-ai-web-dev-sdk";
 import { withTimeout } from "./api-helpers";
 import { getBudgets } from "./content";
 import type { SdkModelParams } from "./models";
+import {
+  extractRealUsage,
+  recordGlobalUsage,
+  type RealUsage,
+} from "@/lib/usage/ledger";
 
 export type ChatMessage = { role: "assistant" | "user"; content: string };
+
+/** P4 — what a GLM call costs, as the provider billed it. */
+export type { RealUsage };
+
+/** glmChat's return: the text AND the provider's real usage (when present). */
+export interface GlmChatResult {
+  text: string;
+  /** null = the gateway stripped usage (shouldn't happen) — estimate-only. */
+  usage: RealUsage | null;
+}
 
 const TRANSIENT_RE =
   /429|rate.?limit|quota|too many requests|timeout|timed out|502|503|504|bad gateway|service unavailable|overloaded|econn|enet|ehost|fetch failed|network|socket|premature close/i;
@@ -75,12 +90,18 @@ export async function glmChat(opts: {
   timeoutMs?: number;
   signal?: AbortSignal;
   /**
+   * P4 — which app surface this call belongs to ("agent" | "draft" | ...).
+   * Recorded into the global usage ledger alongside the provider's real
+   * usage. Defaults to "other".
+   */
+  surface?: string;
+  /**
    * P2 — resolved registry selection (model id + thinking params). Omitted
    * on non-agent call sites (draft/review/sediment), which keep the gateway
    * default with thinking disabled.
    */
   sdkParams?: SdkModelParams;
-}): Promise<string> {
+}): Promise<GlmChatResult> {
   const budgets = getBudgets();
   const retries = budgets.glm.retryAttempts;
   let lastError: unknown;
@@ -103,7 +124,12 @@ export async function glmChat(opts: {
         );
         const content = completion.choices[0]?.message?.content?.trim() ?? "";
         if (!content) throw new Error("The AI returned an empty response");
-        return content;
+        // P4 — capture the provider's REAL billed usage (T4) and feed the
+        // app-wide ledger (T5). A stripped/missing usage object records
+        // nothing — the ledger only ever holds measured calls.
+        const usage = extractRealUsage(completion);
+        recordGlobalUsage(opts.surface ?? "other", usage);
+        return { text: content, usage };
       } finally {
         releaseSlot();
       }

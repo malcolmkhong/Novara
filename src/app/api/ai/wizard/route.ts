@@ -1,5 +1,6 @@
 import ZAI from "z-ai-web-dev-sdk";
 import { jsonError, parseBody, validationError, withTimeout } from "@/lib/novara/api-helpers";
+import { extractRealUsage, recordGlobalUsage } from "@/lib/usage/ledger";
 import { z } from "zod";
 
 export const dynamic = "force-dynamic";
@@ -133,6 +134,8 @@ export async function POST(req: Request) {
     );
 
     const content = completion.choices[0]?.message?.content?.trim() ?? "";
+    // P4 — feed the app-wide usage ledger (measured calls only).
+    recordGlobalUsage("wizard", extractRealUsage(completion));
     if (!content)
       return jsonError("The AI returned an empty draft. Try again.", 502);
 

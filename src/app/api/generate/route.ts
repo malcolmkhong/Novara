@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import ZAI from "z-ai-web-dev-sdk";
 import { GLM_TIMEOUT_MS, withTimeout } from "@/lib/ai-heuristics";
+import { extractRealUsage, recordGlobalUsage } from "@/lib/usage/ledger";
 
 export const maxDuration = 120;
 
@@ -119,6 +120,8 @@ export async function POST(req: Request) {
       GLM_TIMEOUT_MS,
       "[generate] GLM request",
     );
+    // P4 — feed the app-wide usage ledger (measured calls only).
+    recordGlobalUsage("generate", extractRealUsage(completion));
     const text = extractCompletionContent(completion);
     if (text === null || text.trim().length === 0) {
       return NextResponse.json(

@@ -86,6 +86,18 @@ export interface ContextUsage {
     mcp: number;
   };
   updatedAt: string;
+  /**
+   * P4 — REAL usage the provider billed for this call. `used` equals
+   * real.promptTokens and the sections are the local estimate scaled
+   * proportionally to that measured total (split stays an estimate, total
+   * does not). null = provider usage unavailable, everything is a local
+   * estimate.
+   */
+  real?: {
+    promptTokens: number;
+    completionTokens: number;
+    totalTokens: number;
+  } | null;
 }
 
 // ---------------------------------------------------------------------------

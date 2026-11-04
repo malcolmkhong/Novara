@@ -238,12 +238,13 @@ export async function POST(req: Request) {
     const variantCount = schema.data.variants ?? 1;
     const variants: { content: string; wordCount: number }[] = [];
     for (let i = 0; i < variantCount; i++) {
-      const content = await glmChat({
+      const { text: content } = await glmChat({
         messages: [
           { role: "assistant", content: system },
           { role: "user", content: parts.join("\n\n") },
         ],
         tag: variantCount > 1 ? `AI draft ${String.fromCharCode(65 + i)}` : "AI draft",
+        surface: "draft",
       });
       variants.push({ content, wordCount: countWords(content) });
     }

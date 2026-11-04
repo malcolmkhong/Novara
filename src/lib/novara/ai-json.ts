@@ -29,7 +29,7 @@ export async function chatJson<T>(opts: {
 
   for (let attempt = 0; attempt < attempts; attempt++) {
     try {
-      const raw = await glmChat({ messages, tag: opts.tag });
+      const { text: raw } = await glmChat({ messages, tag: opts.tag, surface: "review" });
       return opts.parse(parseLooseJson(raw));
     } catch (error) {
       lastError = error;

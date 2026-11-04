@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import ZAI from "z-ai-web-dev-sdk";
+import { extractRealUsage, recordGlobalUsage } from "@/lib/usage/ledger";
 import {
   capForGlm,
   clamp,
@@ -108,6 +109,8 @@ async function requestGlmText(messages: GlmMessage[]): Promise<string | null> {
       messages,
       thinking: { type: "disabled" },
     });
+    // P4 — feed the app-wide usage ledger (measured calls only).
+    recordGlobalUsage("detect", extractRealUsage(completion));
     return extractCompletionContent(completion);
   } catch (error) {
     console.error("[detect/ai] GLM request failed:", error);

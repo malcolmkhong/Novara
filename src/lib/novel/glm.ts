@@ -16,6 +16,10 @@
 import ZAI from "z-ai-web-dev-sdk";
 
 import { withTimeout } from "@/lib/ai-heuristics";
+import {
+  extractRealUsage,
+  recordGlobalUsage,
+} from "@/lib/usage/ledger";
 
 export interface GlmMessage {
   role: "assistant" | "user";
@@ -101,6 +105,8 @@ export async function glmJson<T>(
       GLM_JSON_TIMEOUT_MS,
       `[novel/${options.label}]`,
     );
+    // P4 — feed the app-wide usage ledger (measured calls only).
+    recordGlobalUsage("studio", extractRealUsage(completion));
     return extractCompletionContent(completion);
   };
 
@@ -207,6 +213,9 @@ export async function streamGlmProse(
     const decoder = new TextDecoder();
     let buffer = "";
     let completed = false;
+    // P4 — some providers attach the usage object to the final SSE chunk;
+    // record it when it shows up (otherwise the ledger skips this call).
+    let streamUsage: ReturnType<typeof extractRealUsage> = null;
 
     for await (const raw of stream) {
       resetStall();
@@ -232,6 +241,7 @@ export async function streamGlmProse(
             full += delta;
             callbacks.onDelta(delta);
           }
+          if (!streamUsage) streamUsage = extractRealUsage(json);
         } catch {
           // JSON spanning chunk boundaries — reassembled via remaining lines.
         }
@@ -239,6 +249,7 @@ export async function streamGlmProse(
       if (completed) break;
     }
 
+    recordGlobalUsage("studio", streamUsage);
     return { text: full, completed };
   } catch (error) {
     const aborted = controller.signal.aborted;

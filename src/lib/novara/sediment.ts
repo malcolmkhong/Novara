@@ -206,12 +206,13 @@ export async function sedimentChapterCore(chapterId: string): Promise<{
   parts.push(`CHAPTER ${chapter.index} TEXT:\n${chapter.content.slice(0, budgets.glm.chapterContextChars)}`);
   parts.push(isChinese ? SEDIMENT_SPEC_ZH : SEDIMENT_SPEC_EN);
 
-  const raw = await glmChat({
+  const { text: raw } = await glmChat({
     messages: [
       { role: "assistant", content: system },
       { role: "user", content: parts.join("\n\n") },
     ],
     tag: "AI sediment",
+    surface: "sediment",
   });
   const parsed = parseSedimentLines(raw);
   if (!parsed.summary) {

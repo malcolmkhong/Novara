@@ -17,6 +17,7 @@ import type { Prisma } from "@prisma/client";
 
 import { db } from "@/lib/db";
 import { capForGlm, extractJson, withTimeout } from "@/lib/ai-heuristics";
+import { extractRealUsage, recordGlobalUsage } from "@/lib/usage/ledger";
 import {
   buildDelegationRepairMessages,
   buildLeaderSystemPrompt,
@@ -115,6 +116,8 @@ export async function glmText(
         timeoutMs,
         `[team/${label}]`,
       );
+      // P4 — feed the app-wide usage ledger (measured calls only).
+      recordGlobalUsage("ai-team", extractRealUsage(completion));
       return extractCompletionContent(completion);
     } catch (error) {
       console.error(`[team/${label}] GLM request failed:`, error);

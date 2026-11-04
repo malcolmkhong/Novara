@@ -36,8 +36,10 @@ import {
 import {
   createContextMeter,
   formatUsageSummary,
+  reconcileUsageWithReal,
   type ContextMeter,
 } from "@/lib/agent/context-meter";
+import type { RealUsage } from "@/lib/usage/ledger";
 import { countWords } from "@/lib/novara/words";
 import { assessOverwrite } from "@/lib/novara/write-gate";
 import { recordChapterVersion } from "@/lib/novara/versions";
@@ -486,8 +488,17 @@ function resolveRunModel(modelId: string | null, thinkingLevel: string | null): 
 }
 
 /** Fire-and-forget — a telemetry failure must never break the run. */
-function emitUsageEvent(runId: string, meter: ContextMeter, actor: string): void {
-  const usage = meter.snapshot(actor);
+function emitUsageEvent(
+  runId: string,
+  meter: ContextMeter,
+  actor: string,
+  real: RealUsage | null,
+): void {
+  // P4 — the provider's billed prompt_tokens anchors the total (T4); the
+  // section split stays the meter's estimate scaled to it. `real` also
+  // carries THIS call's completion tokens (T3) so the panel's run total
+  // covers output side too — the last reply never falls out of the books.
+  const usage = reconcileUsageWithReal(meter.snapshot(actor), real);
   void emitEvent({
     runId,
     kind: "usage",
@@ -930,8 +941,14 @@ async function leaderLoop(runId: string, goal: string, signal: AbortSignal): Pro
 
   const glmCall = async (tag: string, turn: number): Promise<string> => {
     if (signal.aborted) throw new Error("Run aborted");
-    const reply = await glmChat({ messages, tag, signal, sdkParams: modelCtx.sdk });
-    emitUsageEvent(runId, meter, `atlas · turn ${turn}`);
+    const { text: reply, usage } = await glmChat({
+      messages,
+      tag,
+      signal,
+      sdkParams: modelCtx.sdk,
+      surface: "agent",
+    });
+    emitUsageEvent(runId, meter, `atlas · turn ${turn}`, usage);
     return reply;
   };
 
@@ -1271,9 +1288,15 @@ async function executeTask(params: {
   let callCounter = 0; // repair rounds reuse runTurns — keep labels monotonic
   const glmCall = async (tag: string): Promise<string> => {
     if (signal.aborted) throw new Error("Run aborted");
-    const reply = await glmChat({ messages, tag, signal, sdkParams: params.model.sdk });
+    const { text: reply, usage } = await glmChat({
+      messages,
+      tag,
+      signal,
+      sdkParams: params.model.sdk,
+      surface: "agent",
+    });
     callCounter += 1;
-    emitUsageEvent(runId, meter, `${task.key} · ${assignee} · turn ${callCounter}`);
+    emitUsageEvent(runId, meter, `${task.key} · ${assignee} · turn ${callCounter}`, usage);
     return reply;
   };
 

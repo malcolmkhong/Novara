@@ -1,28 +1,35 @@
 "use client";
 
 // ---------------------------------------------------------------------------
-// Novara AI — ContextUsagePanel (P2).
+// Novara AI — ContextUsagePanel (P2 → P4).
 //
-// Real-time token accounting for the agent team, section by section:
-//   System Prompt · Tools · Skills · Novel Context · Conversation · MCP.
+// Real-time token accounting, three layers of transparency:
+//
+//   1. THIS CALL — what the latest GLM call sent, section by section:
+//      System Prompt · Tools · Skills · Novel Context · Conversation · MCP.
+//      P4: the TOTAL is the provider's billed prompt_tokens (measured, hard
+//      truth); the section split is the local estimate scaled proportionally
+//      to it. Output tokens of that call are shown next to the total.
+//
+//   2. THIS RUN — sums across every usage event of the displayed run:
+//      N calls · Σ prompt · Σ output · Σ billed. Estimated-only events (older
+//      runs, stripped usage) fall back to their estimate and are counted
+//      honestly as "estimated" in the label.
+//
+//   3. ALL AI SURFACES (this server) — GET /api/usage/global: every measured
+//      GLM call the server process made since startup, grouped by surface
+//      (agent / draft / review / sediment / studio / detect / generate /
+//      wizard / ai-team). Token transparency doesn't stop at the run boundary.
 //
 // Data sources, in priority order:
-//   1. The displayed run's latest `usage` event — REAL measured numbers,
-//      updated per GLM call and streamed here via the existing SSE detail
-//      snapshots (live during runs, and correct when browsing history).
+//   1. The displayed run's `usage` events — measured per GLM call, streamed
+//      via the existing SSE detail snapshots (live during runs, correct when
+//      browsing history).
 //   2. GET /api/agent/context-estimate — an honest pre-run estimate assembled
 //      from the same bytes the leader's first turn would send.
 //
 // The MCP row is kept at 0 ON PURPOSE: this system has no MCP server, and the
-// panel answers that question visibly instead of hiding it. Novel Context is
-// this system's equivalent of external knowledge (story snapshot + pinned
-// refs). Token counts are estimates (cl100k for latin, 0.7 tok/char for CJK)
-// and the footer says so.
-//
-// Placement: the COMPOSER TOOLBAR, left cluster (next to the + pin button) —
-// run parameters live on the composer row, not in the pane header. The same
-// button also appears in the run control bar while a run is active, so the
-// live per-call numbers stay visible exactly when they are being produced.
+// panel answers that question visibly instead of hiding it.
 // ---------------------------------------------------------------------------
 
 import { useEffect, useMemo, useState } from "react";
@@ -36,6 +43,7 @@ import {
 import type { AgentEvent, ContextUsage } from "@/lib/novara/agent-types";
 import { latestContextUsage } from "@/lib/novara/agent-types";
 import { getModelDefinition, formatTokenCount } from "@/lib/novara/models";
+import type { GlobalUsageSnapshot, SurfaceUsage } from "@/lib/usage/ledger";
 import { cn } from "@/lib/utils";
 
 const SECTION_META: {
@@ -52,9 +60,76 @@ const SECTION_META: {
   { key: "mcp", label: "MCP", dot: "bg-zinc-400", bar: "bg-zinc-400" },
 ];
 
+/** Friendly labels for the app-wide ledger surfaces (P4 / T5). */
+const SURFACE_LABELS: Record<string, string> = {
+  agent: "Agent team runs",
+  draft: "Chapter drafts",
+  review: "Chapter reviews",
+  sediment: "Memory sediment",
+  studio: "Novel studio (init/plan/write)",
+  detect: "AI detectors",
+  generate: "Concept Q&A",
+  wizard: "Onboarding wizard",
+  "ai-team": "Onboarding team build",
+  other: "Other",
+};
+
+function surfaceLabel(surface: string): string {
+  return SURFACE_LABELS[surface] ?? surface;
+}
+
 function percent(tokens: number, used: number): string {
   if (used <= 0) return "0.0%";
   return `${((tokens / used) * 100).toFixed(1)}%`;
+}
+
+/** Extract the usage payload defensively (older events may lack it). */
+function usageOf(event: AgentEvent): ContextUsage | null {
+  const payload = event.payload as { usage?: ContextUsage } | null;
+  return payload?.usage ?? null;
+}
+
+interface RunStats {
+  calls: number;
+  promptTokens: number;
+  completionTokens: number;
+  billedTokens: number;
+  measuredCalls: number;
+  estimatedCalls: number;
+}
+
+/**
+ * P4 / T2+T3 — run totals across every usage event of the displayed run.
+ * Measured events contribute their billed prompt+completion; estimate-only
+ * events (pre-P4 runs) contribute their prompt estimate and are counted in
+ * `estimatedCalls` so the label never overclaims.
+ */
+function summarizeRun(events: AgentEvent[]): RunStats {
+  const stats: RunStats = {
+    calls: 0,
+    promptTokens: 0,
+    completionTokens: 0,
+    billedTokens: 0,
+    measuredCalls: 0,
+    estimatedCalls: 0,
+  };
+  for (const event of events) {
+    if (event.kind !== "usage") continue;
+    const usage = usageOf(event);
+    if (!usage) continue;
+    stats.calls += 1;
+    if (usage.real) {
+      stats.measuredCalls += 1;
+      stats.promptTokens += usage.real.promptTokens;
+      stats.completionTokens += usage.real.completionTokens;
+      stats.billedTokens += usage.real.totalTokens;
+    } else {
+      stats.estimatedCalls += 1;
+      stats.promptTokens += usage.used;
+      stats.billedTokens += usage.used;
+    }
+  }
+  return stats;
 }
 
 export function ContextUsageButton({
@@ -76,8 +151,11 @@ export function ContextUsageButton({
     key: "",
     usage: null,
   });
+  // App-wide ledger — refetched on every open (it moves while the app runs).
+  const [globalState, setGlobalState] = useState<GlobalUsageSnapshot | null>(null);
 
   const live = useMemo(() => latestContextUsage(events), [events]);
+  const runStats = useMemo(() => summarizeRun(events), [events]);
   const estimateKey = `${novelId}:${modelId}`;
   const estimate = estimateState.key === estimateKey ? estimateState.usage : null;
 
@@ -102,12 +180,31 @@ export function ContextUsageButton({
     };
   }, [live, open, estimateKey, estimateState.key, novelId, modelId]);
 
+  // App-wide surfaces (T5) — fetched when the panel opens.
+  useEffect(() => {
+    if (!open) return;
+    let alive = true;
+    fetch("/api/usage/global", { cache: "no-store" })
+      .then((res) => res.json())
+      .then((body: GlobalUsageSnapshot) => {
+        if (alive) setGlobalState(body);
+      })
+      .catch(() => {
+        if (alive) setGlobalState(null);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [open]);
+
   const usage = live ?? estimate;
   const model = getModelDefinition(usage?.modelId ?? modelId);
   const used = usage?.used ?? 0;
   const window_ = usage?.contextWindow ?? model.contextWindow;
   const usedPct = window_ > 0 ? Math.min((used / window_) * 100, 100) : 0;
   const isLive = live != null;
+  const real = usage?.real ?? null;
+  const isMeasured = isLive && real != null;
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -126,7 +223,8 @@ export function ContextUsageButton({
           </span>
         </Button>
       </PopoverTrigger>
-      <PopoverContent align="start" className="w-72 rounded-xl p-4">
+      <PopoverContent align="start" className="w-80 rounded-xl p-4">
+        {/* Layer 1 — THIS CALL */}
         <div className="flex items-baseline justify-between gap-2">
           <p className="text-xs font-semibold">Context Usage</p>
           <p className="text-[10px] text-muted-foreground">{model.label}</p>
@@ -138,6 +236,12 @@ export function ContextUsageButton({
             {usedPct.toFixed(1)}%
           </span>
         </p>
+        {real && (
+          <p className="mt-0.5 font-mono text-[10px] text-muted-foreground">
+            measured · output {formatTokenCount(real.completionTokens)} · billed{" "}
+            {formatTokenCount(real.totalTokens)}
+          </p>
+        )}
 
         {/* Stacked fill bar — sections in registry order */}
         <div className="mt-2 flex h-2 w-full overflow-hidden rounded-full bg-muted">
@@ -181,13 +285,79 @@ export function ContextUsageButton({
           })}
         </ul>
 
+        {/* Layer 2 — THIS RUN (T2 + T3) */}
+        {runStats.calls > 0 && (
+          <div className="mt-3 border-t pt-2">
+            <div className="flex items-baseline justify-between gap-2">
+              <p className="text-xs font-semibold">
+                Run total
+                <span className="ml-1.5 font-normal text-[10px] text-muted-foreground">
+                  {runStats.calls} {runStats.calls === 1 ? "call" : "calls"}
+                </span>
+              </p>
+              <p className="font-mono text-xs">{formatTokenCount(runStats.billedTokens)}</p>
+            </div>
+            <div className="mt-1 flex items-center justify-between font-mono text-[10px] text-muted-foreground">
+              <span>prompt {formatTokenCount(runStats.promptTokens)}</span>
+              <span>output {formatTokenCount(runStats.completionTokens)}</span>
+            </div>
+            <p className="mt-1 text-[10px] leading-4 text-muted-foreground">
+              {runStats.estimatedCalls === 0
+                ? "All calls measured from provider usage."
+                : `${runStats.measuredCalls} measured · ${runStats.estimatedCalls} estimated (pre-P4 event without provider usage).`}
+            </p>
+          </div>
+        )}
+
+        {/* Layer 3 — ALL AI SURFACES on this server (T5) */}
+        <div className="mt-3 border-t pt-2">
+          <div className="flex items-baseline justify-between gap-2">
+            <p className="text-xs font-semibold">All AI surfaces</p>
+            <p className="text-[10px] text-muted-foreground">this server, since restart</p>
+          </div>
+          {globalState && globalState.surfaces.length > 0 ? (
+            <>
+              <ul className="mt-1.5 space-y-1">
+                {globalState.surfaces.map((surface: SurfaceUsage) => (
+                  <li key={surface.surface} className="flex items-center gap-2 text-[11px]">
+                    <span className="min-w-0 flex-1 truncate text-muted-foreground">
+                      {surfaceLabel(surface.surface)}
+                    </span>
+                    <span className="shrink-0 font-mono text-[10px] text-muted-foreground/70">
+                      ×{surface.calls}
+                    </span>
+                    <span className="w-12 text-right font-mono">
+                      {formatTokenCount(surface.totalTokens)}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+              <p className="mt-1.5 flex items-center justify-between font-mono text-[10px] text-muted-foreground">
+                <span>
+                  {globalState.totalCalls} calls · in {formatTokenCount(globalState.totalPromptTokens)} · out{" "}
+                  {formatTokenCount(globalState.totalCompletionTokens)}
+                </span>
+                <span>Σ {formatTokenCount(globalState.totalTokens)}</span>
+              </p>
+            </>
+          ) : (
+            <p className="mt-1 text-[10px] leading-4 text-muted-foreground">
+              {globalState
+                ? "No measured AI calls yet — streaming surfaces record only when the provider returns usage."
+                : "Loading server-wide usage…"}
+            </p>
+          )}
+        </div>
+
         <p className="mt-3 border-t pt-2 text-[10px] leading-4 text-muted-foreground">
           {usage
             ? isLive
-              ? `Live — ${usage.actor}`
+              ? isMeasured
+                ? `Live — ${usage.actor} · total measured from provider usage, section split estimated`
+                : `Live — ${usage.actor}`
               : "Estimated from the current novel state (first leader turn)"
             : "No data yet — starts counting at the first team call"}
-          {usage && " · cl100k + CJK≈0.7 tok/char estimate"}
+          {(!usage || !isMeasured) && " · cl100k + CJK≈0.7 tok/char estimate"}
         </p>
       </PopoverContent>
     </Popover>

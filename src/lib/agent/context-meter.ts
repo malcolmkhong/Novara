@@ -117,3 +117,46 @@ export function formatUsageSummary(usage: ContextUsage): string {
         : String(n);
   return `${fmt(usage.used)} / ${fmt(usage.contextWindow)} tokens`;
 }
+
+/**
+ * P4 / T4 — anchor a call's usage to the provider's REAL billed numbers.
+ *
+ * The meter's section split stays an estimate (cl100k + CJK heuristic), but
+ * the TOTAL must not be: the provider's prompt_tokens is the hard truth.
+ * This scales every section proportionally so they still sum to the measured
+ * total (rounding drift is absorbed into the largest section), and attaches
+ * the real object — the panel distinguishes "measured" from "estimated" by
+ * its presence. When no real usage exists the estimate passes through
+ * untouched (real: null).
+ */
+export function reconcileUsageWithReal(
+  usage: ContextUsage,
+  real: { promptTokens: number; completionTokens: number; totalTokens: number } | null,
+): ContextUsage {
+  if (!real || real.promptTokens <= 0) return { ...usage, real: real ?? null };
+  const estimateUsed = Math.max(usage.used, 1);
+  const factor = real.promptTokens / estimateUsed;
+  const keys = Object.keys(usage.sections) as (keyof ContextUsage["sections"])[];
+  const sections = { ...usage.sections };
+  // Scale every section, then push the accumulated rounding drift into the
+  // largest one so the sections sum EXACTLY to the measured prompt total.
+  let drift = real.promptTokens;
+  let largestKey = keys[0];
+  for (const key of keys) {
+    const scaled = Math.round(usage.sections[key] * factor);
+    sections[key] = scaled;
+    drift -= scaled;
+    if (usage.sections[key] > usage.sections[largestKey]) largestKey = key;
+  }
+  sections[largestKey] = Math.max(0, sections[largestKey] + drift);
+  return {
+    ...usage,
+    used: real.promptTokens,
+    sections,
+    real: {
+      promptTokens: real.promptTokens,
+      completionTokens: real.completionTokens,
+      totalTokens: real.totalTokens,
+    },
+  };
+}
