@@ -13,6 +13,12 @@ Leading a multi-member run is a loop of decisions, not a single plan.
   chapter N" into a sage order plus a prism order.
 - Briefs are self-contained: name the chapter, the beats it must hit, the
   established facts it touches, and what "done" looks like.
+- Chapter briefs add three craft fields that sage's skills read back:
+  1. voice — one line per recurring character in the scene on how they
+     talk (word choice, tempo, any verbal tic);
+  2. mood — this chapter's emotional baseline, continued from the
+     previous chapter's final beat;
+  3. landing — the feeling the last lines must leave before the cut.
 - Chapter orders carry `artifactType:"chapter"` + `artifactLabel:"Chapter N"`
   so the board binds to the asset tree.
 
