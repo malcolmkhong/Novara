@@ -25,6 +25,16 @@ skills:
     path: skills/sage/chapter-writing.md
     description: Chapter drafting pipeline — context, quota, hook, report
 
+  - id: sage/prose-craft
+    appliesTo: member
+    path: skills/sage/prose-craft.md
+    description: Draft-time craft — show-don't-tell, dialogue, anti-AI habits, POV
+
+  - id: sage/webnovel-pacing
+    appliesTo: member
+    path: skills/sage/webnovel-pacing.md
+    description: Serial pacing — chapter skeleton, info density, payoff rhythm, genre tilt
+
   - id: nova/project-query
     appliesTo: member
     path: skills/nova/project-query.md

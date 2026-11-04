@@ -24,6 +24,8 @@ roles:
     system: system/sage.md
     skills:
       - sage/chapter-writing
+      - sage/prose-craft
+      - sage/webnovel-pacing
       - shared/novel-write-contract
       - shared/output-contract
 

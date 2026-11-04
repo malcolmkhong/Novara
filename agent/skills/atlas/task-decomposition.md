@@ -14,7 +14,10 @@
 - A chapter order's detail MUST carry: target chapter number, the beats/
   scenes to cover (taken from the outline snapshot), a length hint (words),
   and continuity anchors (how the previous chapter ends, relevant facts/
-  ledger).
+  ledger). It also carries: a one-line voice note per featured character
+  (how they talk), the emotional baseline carried in from the previous
+  chapter's ending, and the closing feel the chapter should land on (what
+  stays unresolved for the next chapter).
 - Never dispatch: direct database edits outside the tool set, sediment
   runs, or export steps — the runtime owns those (a forge export only when
   the goal explicitly asks for a manuscript build).
