@@ -219,17 +219,44 @@ export function ContextUsageButton({
         >
           <Gauge className="h-3.5 w-3.5" aria-hidden="true" />
           <span className="font-mono">
-            {used > 0 ? `${formatTokenCount(used)} / ${formatTokenCount(window_)}` : "Context"}
+            {used > 0
+              ? `${isLive ? "" : "~"}${formatTokenCount(used)} / ${formatTokenCount(window_)}`
+              : "Context"}
           </span>
         </Button>
       </PopoverTrigger>
       <PopoverContent align="start" className="w-80 rounded-xl p-4">
-        {/* Layer 1 — THIS CALL */}
+        {/* Layer 1 — THIS CALL (or, before any call: the pre-run estimate) */}
         <div className="flex items-baseline justify-between gap-2">
-          <p className="text-xs font-semibold">Context Usage</p>
+          <p className="text-xs font-semibold">
+            Context Usage
+            {!isLive && usage && (
+              <span className="ml-1.5 rounded-full bg-amber-500/15 px-1.5 py-0.5 align-middle text-[9px] font-medium uppercase tracking-wide text-amber-700 dark:text-amber-400">
+                estimate
+              </span>
+            )}
+          </p>
           <p className="text-[10px] text-muted-foreground">{model.label}</p>
         </div>
+        {/* Honest zero state: no usage events = no call has ever billed a token.
+            The number below is what the FIRST call will send, not what was spent. */}
+        {!isLive && usage && (
+          <div className="mt-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-2.5 py-2">
+            <p className="text-[11px] font-medium text-amber-700 dark:text-amber-400">
+              Nothing consumed yet — 0 API calls
+            </p>
+            <p className="mt-0.5 text-[10px] leading-4 text-amber-700/80 dark:text-amber-400/80">
+              This estimates what your first message will send. Fixed overhead — role
+              card + tools + skills ≈{" "}
+              {formatTokenCount(
+                usage.sections.system + usage.sections.tools + usage.sections.skills
+              )}{" "}
+              — rides along on every call, so it is never zero.
+            </p>
+          </div>
+        )}
         <p className="mt-1 font-mono text-sm">
+          {!isLive && usage ? "~" : ""}
           {formatTokenCount(used)}
           <span className="text-muted-foreground"> / {formatTokenCount(window_)}</span>
           <span className="ml-2 text-xs text-muted-foreground">
@@ -313,7 +340,9 @@ export function ContextUsageButton({
         <div className="mt-3 border-t pt-2">
           <div className="flex items-baseline justify-between gap-2">
             <p className="text-xs font-semibold">All AI surfaces</p>
-            <p className="text-[10px] text-muted-foreground">this server, since restart</p>
+            <p className="max-w-[9rem] text-right text-[10px] leading-3 text-muted-foreground">
+              server process · since restart · not tied to this novel
+            </p>
           </div>
           {globalState && globalState.surfaces.length > 0 ? (
             <>
@@ -355,7 +384,7 @@ export function ContextUsageButton({
               ? isMeasured
                 ? `Live — ${usage.actor} · total measured from provider usage, section split estimated`
                 : `Live — ${usage.actor}`
-              : "Estimated from the current novel state (first leader turn)"
+              : "Pre-run estimate — 0 calls made, nothing consumed yet · first leader turn preview"
             : "No data yet — starts counting at the first team call"}
           {(!usage || !isMeasured) && " · cl100k + CJK≈0.7 tok/char estimate"}
         </p>
