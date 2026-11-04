@@ -142,7 +142,7 @@ export const DEFAULT_BUDGETS: Budgets = {
     fallbackPollMs: 2000,
   },
   prompt: {
-    systemPromptCapChars: 6000,
+    systemPromptCapChars: 8000,
     taskBriefCapChars: 1800,
   },
   memory: {

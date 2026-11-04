@@ -43,7 +43,7 @@ client:
   fallbackPollMs: 2000        # browser polling fallback when SSE dies
 
 prompt:
-  systemPromptCapChars: 6000  # role card + skills concatenation cap
+  systemPromptCapChars: 8000  # role card + skills concatenation cap
   taskBriefCapChars: 1800     # task envelope detail cap
 
 memory:
