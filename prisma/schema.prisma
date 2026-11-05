@@ -785,6 +785,17 @@ model UsageCall {
   promptTokens     Int
   completionTokens Int
   totalTokens      Int
+  // P5-b failed-call accounting (Policy F): "measured" = the provider
+  // returned a usage object and the tokens above ARE its billed truth.
+  // "failed" = the attempt ended with NO completion payload at our boundary
+  // (timeout / transport drop / 429 / 5xx / mid-flight abort); the zero token
+  // values mean UNKNOWN, not zero-billed — provider-side billing of such
+  // attempts is unobservable at our boundary (no billing API). One row per
+  // HTTP attempt: retries are separate rows.
+  status           String   @default("measured")
+  // Why an attempt failed (timeout | rate-limit | server-error | network |
+  // aborted | unknown). Null on measured rows.
+  errorKind        String?
   // Scope links — nullable, plain strings, NO FK (see retention above).
   runId            String?
   taskId           String?

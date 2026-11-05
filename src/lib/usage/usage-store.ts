@@ -1,31 +1,49 @@
 // ---------------------------------------------------------------------------
-// Novara AI — persisted GLM usage ledger store (Phase 5 / P5-a).
+// Novara AI — persisted GLM usage ledger store (Phase 5 / P5-a, extended P5-b).
 //
 // Single source of truth for usage accounting (Ruling 2, user 2026-11-05):
-// ONE row per MEASURED provider call in the UsageCall table, every surface.
-// The in-memory per-process ledger in ./ledger.ts still feeds the Context
-// Usage panel until P5-b swaps its data source; from P5-b on, THIS store is
-// the only thing feeding any UI.
+// ONE row per measured-or-failed provider ATTEMPT in the UsageCall table,
+// every surface. Since P5-b the in-memory per-process ledger is DELETED
+// outright — this store is the only thing feeding any UI, with no debug
+// layer and no dual feed.
 //
 // Ruling 1 (user 2026-11-05): rows are PERMANENT account history — novelId /
 // runId are plain strings with NO foreign key and NO cascade, so deleting a
 // novel or a run never erases account-scope spend history (orphans render as
 // "(deleted novel)"). There is NO purge path in Phase 5 scope.
 //
-// Honesty rules (unchanged from the in-memory ledger):
-//   - Only MEASURED calls are recorded. A null usage object is a no-op —
-//     never guessed, never padded. Estimates never enter this store.
+// Honesty rules (P5-b Policy F, see usage-shapes.ts):
+//   - MEASURED rows: the provider returned a usage object; tokens are billed
+//     truth, never guessed, never padded. A null usage on a successful
+//     completion records NOTHING (F4 — rowless-with-documentation).
+//   - FAILED rows (F1): an attempt that ended with NO completion payload
+//     (timeout / transport / 429 / 5xx / mid-flight abort) records ONE row
+//     with zero tokens — the zeros mean UNKNOWN, never "0 tokens billed" —
+//     plus an errorKind. Retries are separate attempts, hence separate rows.
+//   - Pre-send failures (SDK init, abort before send) record NOTHING (F3 —
+//     the provider was never reached).
 //   - modelId records the REQUEST-side value exactly as sent. Calls that
 //     carried no model field are stored under GATEWAY_DEFAULT_MODEL_ID —
 //     never relabeled to a registry id the request did not carry (the
 //     gateway rewrites response echoes anyway — phase3-stages.md §P3-A-2).
 //
-// Every write is fire-and-forget: a ledger failure must never break a model
-// call (mirrors emitUsageEvent's discipline in the agent runtime).
+// Every write is fire-and-forget (F5): a ledger failure must never break a
+// model call (mirrors emitUsageEvent's discipline in the agent runtime).
 // ---------------------------------------------------------------------------
 
 import { db } from "@/lib/db";
-import type { RealUsage } from "./ledger";
+import type { RealUsage } from "./usage-shapes";
+
+export type {
+  RealUsage,
+  GlmFailureKind,
+  LedgerSurfaceUsage,
+  LedgerNovelUsage,
+  AccountUsageSnapshot,
+  NovelUsageSummary,
+  CountSum,
+} from "./usage-shapes";
+export { extractRealUsage, classifyGlmFailure } from "./usage-shapes";
 
 /**
  * Request-side model label for calls that carried NO model field (the
@@ -43,25 +61,41 @@ export interface UsageCallScope {
   correlationId?: string;
 }
 
+export type UsageCallStatus = "measured" | "failed";
+
 export interface UsageCallEntry extends UsageCallScope {
   surface: string;
   /** Request-side model id exactly as sent; undefined = gateway default. */
   modelId?: string;
-  /** Measured provider truth. null = record NOTHING (measured-only rule). */
+  /**
+   * Measured provider truth. null + no status = record NOTHING (measured-only
+   * rule); null + status:"failed" = one zero-token failed attempt row (F1).
+   */
   usage: RealUsage | null;
+  /** Default "measured". "failed" rows carry errorKind + zero tokens. */
+  status?: UsageCallStatus;
+  /** Policy F taxonomy (timeout | rate-limit | server-error | network | aborted | unknown). */
+  errorKind?: string;
 }
 
-/** Persist one measured call. Fire-and-forget; null usage is a no-op. */
+/**
+ * Persist one ledger row: a MEASURED call (tokens = billed truth) or a
+ * FAILED attempt (zero tokens = unknown cost, errorKind = why). One row per
+ * HTTP attempt — retry loops call this once per attempt. Fire-and-forget.
+ */
 export function recordUsageCall(entry: UsageCallEntry): void {
-  if (!entry.usage) return;
+  const failed = entry.status === "failed";
+  if (!failed && !entry.usage) return; // measured-only rule (F4) stays intact
   void db.usageCall
     .create({
       data: {
         surface: entry.surface,
         modelId: entry.modelId ?? GATEWAY_DEFAULT_MODEL_ID,
-        promptTokens: entry.usage.promptTokens,
-        completionTokens: entry.usage.completionTokens,
-        totalTokens: entry.usage.totalTokens,
+        promptTokens: entry.usage?.promptTokens ?? 0,
+        completionTokens: entry.usage?.completionTokens ?? 0,
+        totalTokens: entry.usage?.totalTokens ?? 0,
+        status: failed ? "failed" : "measured",
+        errorKind: failed ? entry.errorKind ?? "unknown" : null,
         runId: entry.runId ?? null,
         taskId: entry.taskId ?? null,
         conversationId: entry.conversationId ?? null,
@@ -104,46 +138,11 @@ export function recordProvenanceLink(
 }
 
 // ---------------------------------------------------------------------------
-// Read shapes — the account snapshot deliberately mirrors the in-memory
-// GlobalUsageSnapshot surface/totals shape so the P5-b panel swap changes
-// the data source, not the rendering.
+// Read shapes — types live in usage-shapes.ts (client-safe); this module
+// produces them from the persisted table.
 // ---------------------------------------------------------------------------
 
-export interface LedgerSurfaceUsage {
-  surface: string;
-  calls: number;
-  promptTokens: number;
-  completionTokens: number;
-  totalTokens: number;
-}
-
-export interface LedgerNovelUsage {
-  novelId: string;
-  /** null = the novel row no longer exists — render "(deleted novel)". */
-  title: string | null;
-  deleted: boolean;
-  calls: number;
-  promptTokens: number;
-  completionTokens: number;
-  totalTokens: number;
-}
-
-export interface AccountUsageSnapshot {
-  /** Earliest persisted row (the honest epoch — rows before P5-a do not exist). */
-  since: string | null;
-  /** All-time when null (no period filter given). */
-  period: string | null;
-  surfaces: LedgerSurfaceUsage[];
-  novels: LedgerNovelUsage[];
-  totalCalls: number;
-  totalPromptTokens: number;
-  totalCompletionTokens: number;
-  totalTokens: number;
-  /** Permanent-retention disclosure (Ruling 1) for the UI to render. */
-  retention: string;
-}
-
-const RETENTION_NOTE =
+export const RETENTION_NOTE =
   "Permanent account history — usage rows survive novel deletion; there is no purge in this build. Rows before the persisted ledger shipped (Phase 5) do not exist.";
 
 /** Expand "2026-11" into the UTC month window; null when unparseable. */
@@ -194,7 +193,7 @@ export async function accountUsageSnapshot(period?: string): Promise<AccountUsag
   const window = period ? monthWindow(period) : null;
   const where = window ? { createdAt: window } : {};
 
-  const [bySurface, byNovel, earliest] = await Promise.all([
+  const [bySurface, byNovel, earliest, failedCount] = await Promise.all([
     db.usageCall.groupBy({
       by: ["surface"],
       where,
@@ -209,6 +208,7 @@ export async function accountUsageSnapshot(period?: string): Promise<AccountUsag
       _count: { _all: true },
     }),
     db.usageCall.findFirst({ where, orderBy: { createdAt: "asc" }, select: { createdAt: true } }),
+    db.usageCall.count({ where: { ...where, status: "failed" } }),
   ]);
 
   const surfaces = bySurface
@@ -248,28 +248,9 @@ export async function accountUsageSnapshot(period?: string): Promise<AccountUsag
     surfaces,
     novels,
     ...sumsToTotals(surfaces),
+    failedCalls: failedCount,
     retention: RETENTION_NOTE,
   };
-}
-
-export interface NovelUsageSummary {
-  novelId: string;
-  title: string;
-  /** Calls tagged with this novelId at record time. */
-  direct: { calls: number; promptTokens: number; completionTokens: number; totalTokens: number };
-  /** Calls attached via provenance links (pre-novel wizard/init sessions). */
-  linked: { calls: number; promptTokens: number; completionTokens: number; totalTokens: number };
-  surfaces: LedgerSurfaceUsage[];
-  since: string | null;
-  /** direct + linked — the ruling's "complete per-novel total". */
-  total: CountSum;
-}
-
-interface CountSum {
-  calls: number;
-  promptTokens: number;
-  completionTokens: number;
-  totalTokens: number;
 }
 
 const EMPTY: CountSum = { calls: 0, promptTokens: 0, completionTokens: 0, totalTokens: 0 };
@@ -385,5 +366,6 @@ export async function novelUsageSummary(novelId: string): Promise<NovelUsageSumm
     surfaces: [...bySurface.values()].sort((a, b) => b.totalTokens - a.totalTokens),
     since,
     total: addCounts(direct, linked),
+    retention: RETENTION_NOTE,
   };
 }

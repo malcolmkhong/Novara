@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import ZAI from "z-ai-web-dev-sdk";
 import { GLM_TIMEOUT_MS, withTimeout } from "@/lib/ai-heuristics";
-import { extractRealUsage, recordGlobalUsage } from "@/lib/usage/ledger";
+import { classifyGlmFailure, extractRealUsage } from "@/lib/usage/usage-shapes";
 import { recordUsageCall } from "@/lib/usage/usage-store";
 
 export const maxDuration = 120;
@@ -111,8 +111,13 @@ export async function POST(req: Request) {
     ];
   }
 
+  // Policy F (P5-b): ZAI.create() failing below is a PRE-SEND failure — no
+  // row (F3). A sent attempt with no completion payload records one zero-token
+  // failed row (F1); a completion without usage records nothing (F4).
+  let sent = false;
   try {
     const zai = await ZAI.create();
+    sent = true;
     const completion: unknown = await withTimeout(
       zai.chat.completions.create({
         messages,
@@ -121,12 +126,10 @@ export async function POST(req: Request) {
       GLM_TIMEOUT_MS,
       "[generate] GLM request",
     );
-    // P4 — feed the app-wide usage ledger (measured calls only).
-    const usage = extractRealUsage(completion);
-    recordGlobalUsage("generate", usage);
-    // P5 — persist the per-call row (standalone detector tool — global-only,
-    // never culminates in a novel).
-    recordUsageCall({ surface: "generate", usage });
+    // Persist the per-call row (standalone detector tool — global-only,
+    // never culminates in a novel). Measured even when the content check
+    // below fails — the provider billed what it billed.
+    recordUsageCall({ surface: "generate", usage: extractRealUsage(completion) });
     const text = extractCompletionContent(completion);
     if (text === null || text.trim().length === 0) {
       return NextResponse.json(
@@ -140,6 +143,14 @@ export async function POST(req: Request) {
       model: "GLM",
     });
   } catch (error) {
+    if (sent) {
+      recordUsageCall({
+        surface: "generate",
+        usage: null,
+        status: "failed",
+        errorKind: classifyGlmFailure(error),
+      });
+    }
     console.error("[generate] GLM request failed:", error);
     return NextResponse.json(
       {

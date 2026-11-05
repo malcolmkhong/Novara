@@ -17,9 +17,9 @@ import ZAI from "z-ai-web-dev-sdk";
 
 import { withTimeout } from "@/lib/ai-heuristics";
 import {
+  classifyGlmFailure,
   extractRealUsage,
-  recordGlobalUsage,
-} from "@/lib/usage/ledger";
+} from "@/lib/usage/usage-shapes";
 import { recordUsageCall, type UsageCallScope } from "@/lib/usage/usage-store";
 
 export interface GlmMessage {
@@ -104,20 +104,39 @@ export async function glmJson<T>(
 ): Promise<T | null> {
   const generate = async (msgs: GlmMessage[]): Promise<string | null> => {
     const zai = await ZAI.create();
-    const completion: unknown = await withTimeout(
-      zai.chat.completions.create({
-        messages: msgs,
-        thinking: { type: "disabled" },
-      }),
-      GLM_JSON_TIMEOUT_MS,
-      `[novel/${options.label}]`,
-    );
-    // P4 — feed the app-wide usage ledger (measured calls only).
-    const usage = extractRealUsage(completion);
-    recordGlobalUsage("studio", usage);
-    // P5 — persist the per-call row (fire-and-forget, measured-only).
-    recordUsageCall({ surface: "studio", usage, ...options.ledger });
-    return extractCompletionContent(completion);
+    // Policy F (P5-b): one row per HTTP attempt. ZAI.create() above failing
+    // is a PRE-SEND failure — it throws before any provider contact, no row
+    // (F3). Everything below runs once per parse-retry/self-repair call.
+    try {
+      const completion: unknown = await withTimeout(
+        zai.chat.completions.create({
+          messages: msgs,
+          thinking: { type: "disabled" },
+        }),
+        GLM_JSON_TIMEOUT_MS,
+        `[novel/${options.label}]`,
+      );
+      // Measured row when the provider returned usage (billed truth — even
+      // if the content extraction below fails); no usage object ⇒ no row (F4).
+      recordUsageCall({
+        surface: "studio",
+        usage: extractRealUsage(completion),
+        ...options.ledger,
+      });
+      return extractCompletionContent(completion);
+    } catch (error) {
+      // F1 — sent but no completion payload at our boundary: one zero-token
+      // failed row under the same scope. The outer parse-retry loop calls
+      // generate() again — that next HTTP attempt gets its own row.
+      recordUsageCall({
+        surface: "studio",
+        usage: null,
+        status: "failed",
+        errorKind: classifyGlmFailure(error),
+        ...options.ledger,
+      });
+      throw error;
+    }
   };
 
   let lastRaw: string | null = null;
@@ -212,9 +231,21 @@ export async function streamGlmProse(
     stallTimer = setTimeout(() => controller.abort(), CHUNK_STALL_MS);
   };
 
+  // Policy F (P5-b) attempt markers:
+  //   sent     = the stream request was handed to the provider (init done)
+  //   recorded = a row (measured OR failed) already written this attempt
+  //   streamUsage = the usage chunk, when the provider sent one
+  // F3: ZAI.create() throwing before `sent` = pre-send failure, NO row.
+  // F1: sent && no completion payload ⇒ one zero-token failed row.
+  // F4: [DONE] received without a usage chunk ⇒ rowless (tokens unknowable).
+  let sent = false;
+  let recorded = false;
+  let streamUsage: ReturnType<typeof extractRealUsage> = null;
+
   try {
     const zai = await ZAI.create();
     resetStall();
+    sent = true;
     const stream = (await zai.chat.completions.create({
       messages,
       thinking: { type: "disabled" },
@@ -225,9 +256,6 @@ export async function streamGlmProse(
     const decoder = new TextDecoder();
     let buffer = "";
     let completed = false;
-    // P4 — some providers attach the usage object to the final SSE chunk;
-    // record it when it shows up (otherwise the ledger skips this call).
-    let streamUsage: ReturnType<typeof extractRealUsage> = null;
 
     for await (const raw of stream) {
       resetStall();
@@ -261,12 +289,44 @@ export async function streamGlmProse(
       if (completed) break;
     }
 
-    recordGlobalUsage("studio", streamUsage);
-    // P5 — persist the per-call row (fire-and-forget, measured-only).
-    recordUsageCall({ surface: "studio", usage: streamUsage, ...ledger });
+    // Billed truth: a usage chunk (usually the final one) ⇒ measured row,
+    // regardless of whether [DONE] made it (F1's "no completion payload"
+    // does not apply once usage arrived — the provider billed real tokens
+    // and we measured them). [DONE] without any usage chunk ⇒ rowless (F4).
+    if (streamUsage) {
+      recordUsageCall({ surface: "studio", usage: streamUsage, ...ledger });
+      recorded = true;
+    } else if (!completed) {
+      // Stream ended without [DONE] and without usage: no completion payload
+      // at our boundary — one zero-token failed row (F1; kind "timeout" —
+      // the only silent path here is the watchdog/stall cutoff).
+      recordUsageCall({
+        surface: "studio",
+        usage: null,
+        status: "failed",
+        errorKind: "timeout",
+        ...ledger,
+      });
+      recorded = true;
+    }
     return { text: full, completed };
   } catch (error) {
     const aborted = controller.signal.aborted;
+    if (sent && !recorded) {
+      if (streamUsage) {
+        // Transport died AFTER the usage chunk arrived: billed truth stands.
+        recordUsageCall({ surface: "studio", usage: streamUsage, ...ledger });
+      } else {
+        // F1 — no completion payload: one zero-token failed row.
+        recordUsageCall({
+          surface: "studio",
+          usage: null,
+          status: "failed",
+          errorKind: aborted ? "aborted" : classifyGlmFailure(error),
+          ...ledger,
+        });
+      }
+    }
     return {
       text: full,
       completed: false,

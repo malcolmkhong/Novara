@@ -17,7 +17,7 @@ import type { Prisma } from "@prisma/client";
 
 import { db } from "@/lib/db";
 import { capForGlm, extractJson, withTimeout } from "@/lib/ai-heuristics";
-import { extractRealUsage, recordGlobalUsage } from "@/lib/usage/ledger";
+import { classifyGlmFailure, extractRealUsage } from "@/lib/usage/usage-shapes";
 import { recordUsageCall } from "@/lib/usage/usage-store";
 import {
   buildDelegationRepairMessages,
@@ -102,8 +102,14 @@ export async function glmText(
   timeoutMs: number = GLM_TIMEOUT_MS,
 ): Promise<string | null> {
   for (let attempt = 0; ; attempt++) {
+    // Policy F (P5-b): one row per HTTP attempt. ZAI.create() failing below
+    // is a PRE-SEND failure — no row (F3). A sent attempt with no completion
+    // payload records one zero-token failed row (F1); a completion without
+    // usage records nothing (F4).
+    let sent = false;
     try {
       const zai = await ZAI.create();
+      sent = true;
       const completion: unknown = await withTimeout(
         zai.chat.completions.create({
           messages: messages.map((message) => ({
@@ -117,16 +123,21 @@ export async function glmText(
         timeoutMs,
         `[team/${label}]`,
       );
-      // P4 — feed the app-wide usage ledger (measured calls only).
-      const usage = extractRealUsage(completion);
-      recordGlobalUsage("ai-team", usage);
-      // P5 — persist the per-call row (surface DORMANT — TEAM-1 in
+      // Persist the per-call row (surface DORMANT — TEAM-1 in
       // agent-ctx/risk-register.md: its backend tables are absent from the
       // current schema, so this path cannot fire today; instrumentation kept
       // at parity so a revival is ledger-visible from the first call).
-      recordUsageCall({ surface: "ai-team", usage });
+      recordUsageCall({ surface: "ai-team", usage: extractRealUsage(completion) });
       return extractCompletionContent(completion);
     } catch (error) {
+      if (sent) {
+        recordUsageCall({
+          surface: "ai-team",
+          usage: null,
+          status: "failed",
+          errorKind: classifyGlmFailure(error),
+        });
+      }
       console.error(`[team/${label}] GLM request failed:`, error);
       // Retry ONLY transient rate limits; timeouts and other errors fail
       // immediately so request budgets stay bounded.

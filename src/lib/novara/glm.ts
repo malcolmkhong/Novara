@@ -21,10 +21,10 @@ import { withTimeout } from "./api-helpers";
 import { getBudgets } from "./content";
 import type { SdkModelParams } from "./models";
 import {
+  classifyGlmFailure,
   extractRealUsage,
-  recordGlobalUsage,
   type RealUsage,
-} from "@/lib/usage/ledger";
+} from "@/lib/usage/usage-shapes";
 import { recordUsageCall, type UsageCallScope } from "@/lib/usage/usage-store";
 
 export type ChatMessage = { role: "assistant" | "user"; content: string };
@@ -105,7 +105,8 @@ export async function glmChat(opts: {
   /**
    * P5 — scope links for the persisted usage ledger (UsageCall row). The
    * request-side model id comes from sdkParams.model when present, else the
-   * row records "gateway-default" (never a guessed registry id).
+   * row records "gateway-default" (never a guessed registry id). P5-b: failed
+   * attempts record their own zero-token rows under the same scope (Policy F).
    */
   ledger?: UsageCallScope;
 }): Promise<GlmChatResult> {
@@ -115,10 +116,22 @@ export async function glmChat(opts: {
 
   for (let attempt = 0; attempt <= retries; attempt++) {
     if (opts.signal?.aborted) throw new Error("Aborted before GLM call");
+    // Policy F (P5-b failed-call accounting) — one row per HTTP attempt:
+    //   sent     = the request was handed to the SDK (init succeeded)
+    //   received = a completion payload came back at our boundary
+    //   recorded = a MEASURED row already written for THIS attempt
+    // failed rows exist only when sent && !received (F1); pre-send failures
+    // (init / slot-wait abort) leave NO row (F3); a received completion
+    // without a usage object leaves NO row either (F4 — rowless, tokens
+    // unknowable, never "0 billed"); retries are separate rows (F1).
+    let sent = false;
+    let received = false;
+    let recorded = false;
     try {
       await acquireSlot(opts.signal);
       try {
         const zai = await ZAI.create();
+        sent = true;
         const completion = await withTimeout(
           zai.chat.completions.create({
             messages: opts.messages,
@@ -129,26 +142,42 @@ export async function glmChat(opts: {
           opts.timeoutMs ?? budgets.glm.timeoutMs,
           opts.tag
         );
+        received = true;
+        // P4 — capture the provider's REAL billed usage (T4). A stripped/
+        // missing usage object records nothing — token counts are never
+        // guessed or padded. P5-b fix: extraction now happens BEFORE the
+        // empty-content check, so a completion that came back WITH usage but
+        // empty content still lands its billed row (billed-truth completeness).
+        const usage = extractRealUsage(completion);
+        if (usage) {
+          recordUsageCall({
+            surface: opts.surface ?? "other",
+            modelId: opts.sdkParams?.model,
+            usage,
+            ...opts.ledger,
+          });
+          recorded = true;
+        }
         const content = completion.choices[0]?.message?.content?.trim() ?? "";
         if (!content) throw new Error("The AI returned an empty response");
-        // P4 — capture the provider's REAL billed usage (T4) and feed the
-        // app-wide ledger (T5). A stripped/missing usage object records
-        // nothing — the ledger only ever holds measured calls.
-        const usage = extractRealUsage(completion);
-        recordGlobalUsage(opts.surface ?? "other", usage);
-        // P5 — persist the per-call row (single source of truth from P5-b;
-        // fire-and-forget, measured-only, null usage records nothing).
-        recordUsageCall({
-          surface: opts.surface ?? "other",
-          modelId: opts.sdkParams?.model,
-          usage,
-          ...opts.ledger,
-        });
         return { text: content, usage };
       } finally {
         releaseSlot();
       }
     } catch (error) {
+      if (sent && !received && !recorded) {
+        // F1 — the attempt reached (or at least left toward) the provider and
+        // produced NO completion payload: one zero-token failed row. Whether
+        // the provider billed it is unobservable at our boundary.
+        recordUsageCall({
+          surface: opts.surface ?? "other",
+          modelId: opts.sdkParams?.model,
+          usage: null,
+          status: "failed",
+          errorKind: classifyGlmFailure(error),
+          ...opts.ledger,
+        });
+      }
       lastError = error;
       if (opts.signal?.aborted) throw error;
       const retryable = attempt < retries && isTransientGlmError(error);

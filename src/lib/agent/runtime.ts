@@ -50,7 +50,7 @@ import {
   reconcileUsageWithReal,
   type ContextMeter,
 } from "@/lib/agent/context-meter";
-import type { RealUsage } from "@/lib/usage/ledger";
+import type { RealUsage } from "@/lib/usage/usage-shapes";
 import { countWords } from "@/lib/novara/words";
 import { assessOverwrite } from "@/lib/novara/write-gate";
 import { recordChapterVersion } from "@/lib/novara/versions";

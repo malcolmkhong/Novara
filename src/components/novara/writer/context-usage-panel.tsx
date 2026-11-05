@@ -16,10 +16,13 @@
 //      runs, stripped usage) fall back to their estimate and are counted
 //      honestly as "estimated" in the label.
 //
-//   3. ALL AI SURFACES (this server) — GET /api/usage/global: every measured
-//      GLM call the server process made since startup, grouped by surface
-//      (agent / draft / review / sediment / studio / detect / generate /
-//      wizard / ai-team). Token transparency doesn't stop at the run boundary.
+//   3. ALL AI SURFACES (this account) — GET /api/usage/ledger: every measured
+//      GLM call the PERSISTED ledger holds since tracking began (Phase 5),
+//      grouped by surface (agent / draft / review / sediment / studio / detect /
+//      generate / wizard / ai-team). Token transparency doesn't stop at the run
+//      boundary. P5-b (Ruling 2): this is the ONE source of truth — the
+//      in-memory process ledger was deleted outright, and the discontinuity
+//      (rows before Phase 5 do not exist) renders from the persisted `since`.
 //
 // Data sources, in priority order:
 //   1. The displayed run's `usage` events — measured per GLM call, streamed
@@ -43,7 +46,10 @@ import {
 import type { AgentEvent, ContextUsage } from "@/lib/novara/agent-types";
 import { latestContextUsage } from "@/lib/novara/agent-types";
 import { getModelDefinition, formatTokenCount } from "@/lib/novara/models";
-import type { GlobalUsageSnapshot, SurfaceUsage } from "@/lib/usage/ledger";
+import type {
+  AccountUsageSnapshot,
+  LedgerSurfaceUsage,
+} from "@/lib/usage/usage-shapes";
 import { cn } from "@/lib/utils";
 
 const SECTION_META: {
@@ -151,8 +157,9 @@ export function ContextUsageButton({
     key: "",
     usage: null,
   });
-  // App-wide ledger — refetched on every open (it moves while the app runs).
-  const [globalState, setGlobalState] = useState<GlobalUsageSnapshot | null>(null);
+  // App-wide persisted ledger (Ruling 2) — refetched on every open (it moves
+  // while the app runs). since/retention render the Phase-5 discontinuity.
+  const [globalState, setGlobalState] = useState<AccountUsageSnapshot | null>(null);
 
   const live = useMemo(() => latestContextUsage(events), [events]);
   const runStats = useMemo(() => summarizeRun(events), [events]);
@@ -180,13 +187,13 @@ export function ContextUsageButton({
     };
   }, [live, open, estimateKey, estimateState.key, novelId, modelId]);
 
-  // App-wide surfaces (T5) — fetched when the panel opens.
+  // App-wide persisted ledger (P5-b swap) — fetched when the panel opens.
   useEffect(() => {
     if (!open) return;
     let alive = true;
-    fetch("/api/usage/global", { cache: "no-store" })
+    fetch("/api/usage/ledger", { cache: "no-store" })
       .then((res) => res.json())
-      .then((body: GlobalUsageSnapshot) => {
+      .then((body: AccountUsageSnapshot) => {
         if (alive) setGlobalState(body);
       })
       .catch(() => {
@@ -336,18 +343,29 @@ export function ContextUsageButton({
           </div>
         )}
 
-        {/* Layer 3 — ALL AI SURFACES on this server (T5) */}
+        {/* Layer 3 — ALL AI SURFACES on this account (persisted ledger, P5-b) */}
         <div className="mt-3 border-t pt-2">
           <div className="flex items-baseline justify-between gap-2">
             <p className="text-xs font-semibold">All AI surfaces</p>
             <p className="max-w-[9rem] text-right text-[10px] leading-3 text-muted-foreground">
-              server process · since restart · not tied to this novel
+              this account · persisted ledger · not tied to this novel
             </p>
           </div>
           {globalState && globalState.surfaces.length > 0 ? (
             <>
+              <p className="mt-1 text-[10px] leading-4 text-muted-foreground">
+                Tracking began{" "}
+                {globalState.since
+                  ? new Date(globalState.since).toLocaleDateString(undefined, {
+                      year: "numeric",
+                      month: "short",
+                      day: "numeric",
+                    })
+                  : "—"}
+                {" "}· earlier calls were not recorded · history is permanent
+              </p>
               <ul className="mt-1.5 space-y-1">
-                {globalState.surfaces.map((surface: SurfaceUsage) => (
+                {globalState.surfaces.map((surface: LedgerSurfaceUsage) => (
                   <li key={surface.surface} className="flex items-center gap-2 text-[11px]">
                     <span className="min-w-0 flex-1 truncate text-muted-foreground">
                       {surfaceLabel(surface.surface)}
@@ -372,8 +390,16 @@ export function ContextUsageButton({
           ) : (
             <p className="mt-1 text-[10px] leading-4 text-muted-foreground">
               {globalState
-                ? "No measured AI calls yet — streaming surfaces record only when the provider returns usage."
-                : "Loading server-wide usage…"}
+                ? "No usage rows yet — persisted tracking began with Phase 5; calls before it were never recorded. Streaming surfaces record only when the provider returns usage."
+                : "Loading account usage…"}
+            </p>
+          )}
+          {globalState && (
+            <p
+              className="mt-1 cursor-help text-[10px] leading-4 text-muted-foreground/70"
+              title={globalState.retention}
+            >
+              Permanent account history — survives novel deletion · no purge in this build
             </p>
           )}
         </div>

@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import ZAI from "z-ai-web-dev-sdk";
-import { extractRealUsage, recordGlobalUsage } from "@/lib/usage/ledger";
+import { classifyGlmFailure, extractRealUsage } from "@/lib/usage/usage-shapes";
+import { recordUsageCall } from "@/lib/usage/usage-store";
 import {
   capForGlm,
   clamp,
@@ -103,19 +104,30 @@ function extractCompletionContent(completion: unknown): string | null {
  * (transport error, empty content, unexpected shape). Never throws.
  */
 async function requestGlmText(messages: GlmMessage[]): Promise<string | null> {
+  // Policy F (P5-b): ZAI.create() failing below is a PRE-SEND failure — no
+  // row (F3). A sent attempt that produces no completion payload records one
+  // zero-token failed row (F1); a completion without usage records nothing (F4).
+  let sent = false;
   try {
     const zai = await ZAI.create();
+    sent = true;
     const completion: unknown = await zai.chat.completions.create({
       messages,
       thinking: { type: "disabled" },
     });
-    // P4 — feed the app-wide usage ledger (measured calls only).
-    const usage = extractRealUsage(completion);
-    recordGlobalUsage("detect", usage);
-    // P5 — persist the per-call row (standalone detector — global-only).
-    recordUsageCall({ surface: "detect", usage });
+    // Persist the per-call row (standalone detector — global-only, never
+    // culminates in a novel).
+    recordUsageCall({ surface: "detect", usage: extractRealUsage(completion) });
     return extractCompletionContent(completion);
   } catch (error) {
+    if (sent) {
+      recordUsageCall({
+        surface: "detect",
+        usage: null,
+        status: "failed",
+        errorKind: classifyGlmFailure(error),
+      });
+    }
     console.error("[detect/ai] GLM request failed:", error);
     return null;
   }

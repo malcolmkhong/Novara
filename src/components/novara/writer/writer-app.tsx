@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { ArrowLeft, PenLine } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 import {
@@ -17,6 +16,7 @@ import type { ChapterDTO, NovelDetail, NovelSummary } from "@/lib/novara/types";
 import { useWriterStore } from "@/hooks/use-writer-store";
 import { NovelDashboard } from "./novel-dashboard";
 import { WorkbenchShell } from "./workbench-shell";
+import { UsageBalanceBadge } from "./usage-balance-badge";
 
 export function WriterApp({ onExit }: { onExit: () => void }) {
   const { toast } = useToast();
@@ -154,17 +154,10 @@ export function WriterApp({ onExit }: { onExit: () => void }) {
             <span className="font-display font-bold">AI Writer</span>
           </div>
           <span className="ml-auto">
-            <Badge
-              variant="outline"
-              className="text-[11px] text-muted-foreground"
-              title={
-                guestAt
-                  ? `Guest session started ${new Date(guestAt).toLocaleString()} — accounts and authentication arrive later.`
-                  : "Guest session — accounts and authentication arrive later."
-              }
-            >
-              Guest session
-            </Badge>
+            {/* P5-b — the central "Usage & balance" view lives AT the
+                account-like anchor (Guest session badge; proposal §5). The
+                badge visual is unchanged; it now opens the account view. */}
+            <UsageBalanceBadge guestAt={guestAt} />
           </span>
         </div>
       </header>

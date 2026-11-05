@@ -16,9 +16,10 @@
 //       is IDEMPOTENT (double link ⇒ one row, totals unchanged); direct and
 //       linked are disjoint (no double counting).
 //   S5. Restart survival: fixture rows are readable through a SECOND, freshly
-//       constructed PrismaClient (persistence beyond process memory); the
-//       in-memory global ledger does NOT see them (the contrast that makes
-//       Ruling 2's retirement meaningful).
+//       constructed PrismaClient (persistence beyond process memory). P5-b
+//       update: the in-memory global ledger is RETIRED — the module file is
+//       gone and no src/ module imports it (Ruling 2: deleted outright, no
+//       debug layer, no dual feed).
 //   S6. Double-book reconciliation (§4.5, fixture-level): AgentEvent
 //       kind="usage" payloads and UsageCall rows for the same calls agree
 //       ROW-FOR-ROW (sorted token triples); source pin: every glmChat result
@@ -37,7 +38,8 @@
 // back to its pre-run shape. Fire-and-forget writes are awaited via polling.
 // ---------------------------------------------------------------------------
 
-import { readFileSync } from "fs";
+import { existsSync, readFileSync } from "fs";
+import { execSync } from "child_process";
 import { PrismaClient } from "@prisma/client";
 import { getBudgets } from "../src/lib/novara/content";
 import {
@@ -342,11 +344,28 @@ async function main() {
     viaDb2.length === 9,
     `db2 rows=${viaDb2.length} (1 S2 + 6 S3 + 2 S6)`
   );
-  const inMemorySurfaces = (globalThis as { __novaraUsageLedger?: { surfaces?: Map<string, unknown> } }).__novaraUsageLedger?.surfaces;
+  const inMemoryRetired =
+    !existsSync("src/lib/usage/ledger.ts") &&
+    !existsSync("src/app/api/usage/global/route.ts");
+  let importers: string[] = [];
+  try {
+    const out = execSync(
+      `rg -l 'from "@/lib/usage/ledger"|from "\./ledger"|from "../usage/ledger"' src/`,
+      { encoding: "utf8", stdio: ["pipe", "pipe", "ignore"] }
+    ).trim();
+    importers = out ? out.split("\n") : [];
+  } catch {
+    // rg exits 1 when NOTHING matches — that is the retirement proof.
+    importers = [];
+  }
   check(
-    "S5 the in-memory ledger does NOT see the fixture rows (contrast proof for Ruling 2)",
-    !(inMemorySurfaces instanceof Map) || !inMemorySurfaces.has(SURFACE),
-    inMemorySurfaces instanceof Map ? `in-memory surfaces: ${[...inMemorySurfaces.keys()].join(",") || "(none)"}` : "in-memory ledger not initialized in this process"
+    "S5 in-memory ledger RETIRED (P5-b): module file + /api/usage/global gone, zero src/ imports",
+    inMemoryRetired && importers.length === 0,
+    inMemoryRetired
+      ? importers.length === 0
+        ? "deleted outright — no debug layer, no dual feed (Ruling 2)"
+        : `importers remain: ${importers.join(",")}`
+      : "module or route still present"
   );
 
   // ---------- cleanup + final shape assertions ----------

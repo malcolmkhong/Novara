@@ -1,6 +1,6 @@
 import ZAI from "z-ai-web-dev-sdk";
 import { jsonError, parseBody, validationError, withTimeout } from "@/lib/novara/api-helpers";
-import { extractRealUsage, recordGlobalUsage } from "@/lib/usage/ledger";
+import { classifyGlmFailure, extractRealUsage } from "@/lib/usage/usage-shapes";
 import { recordUsageCall } from "@/lib/usage/usage-store";
 import { z } from "zod";
 
@@ -125,8 +125,14 @@ export async function POST(req: Request) {
 
   const user = parts.join("\n\n");
 
+  // Policy F (P5-b): ZAI.create() failing below is a PRE-SEND failure — no
+  // row (F3). A sent attempt with no completion payload records one zero-token
+  // failed row under the SAME session correlationId (F1) — failed wizard
+  // attempts retro-tag onto the novel exactly like measured ones.
+  let sent = false;
   try {
     const zai = await ZAI.create();
+    sent = true;
     const completion = await withTimeout(
       zai.chat.completions.create({
         messages: [
@@ -140,14 +146,12 @@ export async function POST(req: Request) {
     );
 
     const content = completion.choices[0]?.message?.content?.trim() ?? "";
-    // P4 — feed the app-wide usage ledger (measured calls only).
-    const usage = extractRealUsage(completion);
-    recordGlobalUsage("wizard", usage);
-    // P5 — persist the per-call row; correlationId retro-tags this session
-    // onto the novel it culminates in (provenance link written at creation).
+    // Persist the per-call row; correlationId retro-tags this session onto
+    // the novel it culminates in (provenance link written at creation).
+    // Measured even when the content check below fails — billed is billed.
     recordUsageCall({
       surface: "wizard",
-      usage,
+      usage: extractRealUsage(completion),
       ...(sessionId ? { correlationId: sessionId } : {}),
     });
     if (!content)
@@ -155,6 +159,15 @@ export async function POST(req: Request) {
 
     return Response.json({ content });
   } catch (error) {
+    if (sent) {
+      recordUsageCall({
+        surface: "wizard",
+        usage: null,
+        status: "failed",
+        errorKind: classifyGlmFailure(error),
+        ...(sessionId ? { correlationId: sessionId } : {}),
+      });
+    }
     const message =
       error instanceof Error ? error.message : "Unknown AI service error";
     return jsonError(`AI generation failed: ${message}`, 502);
