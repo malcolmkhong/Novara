@@ -16,8 +16,15 @@
 // summary writer (writeCompactionSummary) is the only DB-mutating primitive
 // and is called between turns by the runtime in P2-c. Contiguity violations
 // and corrupt chain state fail LOUD: console.error here + fallbackWarnings
-// for the caller to raise an AgentEvent(kind="error") — content is never
-// silently dropped (the fallback is always the full raw replay).
+// for the caller to raise an AgentEvent(kind="error") via
+// fallbackErrorSummary() — content is never silently dropped (the fallback is
+// always the full raw replay).
+//
+// Adjacency ownership (design §2.1.y, amendment M2): EVERY assembled output —
+// disabled replay, projected replay, fallback replay — passes through ONE
+// normalization step, finalizeWire(), as the single owner of the
+// adjacent-user-messages decision (Phase-2 contract: preserved 1:1 verbatim,
+// NEVER merged; transcript rows untouched on disk).
 // ---------------------------------------------------------------------------
 
 import { Prisma } from "@prisma/client";
@@ -76,11 +83,37 @@ function isMarker(kind: string): boolean {
   return MARKER_KINDS.has(kind);
 }
 
-/** Deterministic clip: collapse whitespace runs, trim, hard-cap with "…". */
+/**
+ * Deterministic clip: collapse whitespace runs, trim, hard-cap with "…".
+ */
 function clip(text: string, max: number): string {
   const t = text.replace(/\s+/g, " ").trim();
   if (t.length <= max) return t;
   return `${t.slice(0, Math.max(1, max - 1))}…`;
+}
+
+// ---------------------------------------------------------------------------
+// Assembly-output normalization — the ONE adjacency owner (design §2.1.y, M2)
+// ---------------------------------------------------------------------------
+
+/**
+ * The single normalization step applied to EVERY assembled wire — disabled
+ * replay, projected replay, and fallback replay alike. Contract (Phase-2
+ * shipped state):
+ *   - adjacent user messages are preserved 1:1 VERBATIM — NEVER merged
+ *     (projection→user-tail adjacency AND transcript-internal pairs). This is
+ *     the provider-proven Phase 1 wire shape; keeping it also keeps the
+ *     disabled path byte-identical (this step is identity-preserving on real
+ *     wires).
+ *   - the ONLY mutation: messages with empty/whitespace-only content are
+ *     dropped (a contentless wire message is protocol garbage no provider
+ *     path benefits from; real appends never produce one).
+ *   - order, roles, and all other content pass through byte-verbatim.
+ * If a provider constraint ever forces a merge, THIS function is the single
+ * place to change — one owner, one diff (design §2.1.y).
+ */
+export function finalizeWire(messages: WireMessage[]): WireMessage[] {
+  return messages.filter((m) => m.content.trim().length > 0);
 }
 
 // ---------------------------------------------------------------------------
@@ -95,9 +128,11 @@ function clip(text: string, max: number): string {
  * this reference to prove byte identity.
  */
 export function legacyReplay(rows: SequencedRow[]): WireMessage[] {
-  return rows
-    .filter((r) => !isMarker(r.kind))
-    .map((r) => ({ role: r.role, content: r.content }));
+  return finalizeWire(
+    rows
+      .filter((r) => !isMarker(r.kind))
+      .map((r) => ({ role: r.role, content: r.content }))
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -237,12 +272,13 @@ export function assembleWire(params: {
   const legacy = legacyReplay(rows);
 
   if (summaries.length === 0) {
-    return { messages: legacy, projected: null, fallbackWarnings: [] };
+    // M2: the disabled path flows through the same single normalization owner.
+    return { messages: finalizeWire(legacy), projected: null, fallbackWarnings: [] };
   }
 
   const fail = (warnings: string[]): AssembleWireResult => {
     for (const w of warnings) console.error(`[wire] compaction fallback — ${w}`);
-    return { messages: legacy, projected: null, fallbackWarnings: warnings };
+    return { messages: finalizeWire(legacy), projected: null, fallbackWarnings: warnings };
   };
 
   if (summaries.length > 1) {
@@ -258,6 +294,8 @@ export function assembleWire(params: {
 
   // v1 wire: system card rides as the fake assistant message, the envelope
   // stays verbatim, then the projection block, then the verbatim tail.
+  // Adjacent user messages (projection → first tail row when it is a user
+  // row) pass through finalizeWire 1:1 — never merged (design §2.1.y).
   const systemNote = rows.find((r) => r.kind === "system_note");
   const envelope = rows.find((r) => r.kind === "envelope");
   const tail = rows.filter((r) => r.seq > summary.toSeq && !isMarker(r.kind));
@@ -268,16 +306,37 @@ export function assembleWire(params: {
   for (const r of tail) messages.push({ role: r.role, content: r.content });
 
   return {
-    messages,
+    messages: finalizeWire(messages),
     projected: { fromSeq: summary.fromSeq, toSeq: summary.toSeq, text: summary.summary },
     fallbackWarnings: [],
   };
 }
 
 // ---------------------------------------------------------------------------
+// Fallback → error-event bridge (the runtime's AgentEvent(kind="error") body)
+// ---------------------------------------------------------------------------
+
+/**
+ * The EXACT summary string the runtime emits as AgentEvent(kind="error") when
+ * the assembler reports fallbackWarnings (design §2.2: fail loud, name the
+ * row and the gap). Single owner of that wording so the harness can assert
+ * the wiring without executing the runtime loop.
+ */
+export function fallbackErrorSummary(warnings: string[]): string {
+  return `Context compaction fell back to the FULL raw transcript replay — ${warnings.join(" | ")}`;
+}
+
+// ---------------------------------------------------------------------------
 // Lease-fenced summary writer (the only DB-mutating primitive)
 // ---------------------------------------------------------------------------
 
+/**
+ * P2002 idempotence rule (design §2.3, amendment M3): a retry at an existing
+ * cut completes the interrupted link ONLY when the existing row is ACTIVE.
+ * A P2002 against a SUPERSEDED row is NOT "done" — the writer returns
+ * ok:false("cut already superseded") and the caller skips loudly, never
+ * adopting the dead row.
+ */
 export interface WriteSummaryResult {
   ok: boolean;
   /** true ⇒ an active row already existed at this cut (idempotent retry). */

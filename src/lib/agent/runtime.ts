@@ -18,6 +18,10 @@
 //   - honesty rule — task `done` flips happen only after verified commits;
 //     finalReport compares claimed (model) vs verified (measured) numbers;
 //     review-found blocking issues without a repair order are flagged.
+//   - context compaction (Phase 2, lib/agent/wire.ts) — LEADER loop only,
+//     fires between turns: a deterministic zero-GLM projection replaces the
+//     covered span on the next wire; canonical rows are never rewritten;
+//     metered as sent (agent-ctx/p2-design.md).
 //
 // Resumability (Phase 1): the canonical transcript lives in AgentMessage and
 // the loop cursor in AgentRun.stateJson (lib/agent/messages.ts). The executor
@@ -98,6 +102,14 @@ import {
   type ExecutorLease,
   type RunLoopState,
 } from "./messages";
+import {
+  assembleWire,
+  decideCut,
+  fallbackErrorSummary,
+  writeCompactionSummary,
+  type AssembleWireResult,
+  type WriteSummaryResult,
+} from "./wire";
 
 // ---------------------------------------------------------------------------
 // Module state — in-process executor registry (one loop per run).
@@ -1365,19 +1377,43 @@ async function leaderLoop(
   let fromTranscript = false;
   if (isResume) {
     // Rebuild the conversation from the CANONICAL transcript only — never
-    // from AgentEvent (the truncated UI stream). HISTORICAL gate_stop /
-    // resume_note rows are audit markers, not replayed wire content; the
-    // CURRENT resume's resume_note is appended fresh below (after wire init)
-    // and pushed onto the live wire as a user message.
+    // from AgentEvent (the truncated UI stream). P2-c: the rebuild goes
+    // through the ONE assembler (lib/agent/wire.ts) — compaction disabled (or
+    // no active summary) ⇒ byte-identical legacy replay; one contiguous
+    // active summary ⇒ [system_note][envelope][projection][verbatim tail].
+    // HISTORICAL gate_stop / resume_note rows are audit markers — excluded
+    // from transcript rendering; the CURRENT resume's resume_note is appended
+    // fresh below (after wire init) and rides the live wire as a per-assembly
+    // injection (design §2.0.1 — the M1 carve-out), so compaction can never
+    // filter the anti-blind-re-dispatch signal.
     const rows = await loadConversation(runId, LEADER_CONVERSATION);
     if (rows.length > 0) {
-      const wireRows = rows.filter((r) => r.kind !== "gate_stop" && r.kind !== "resume_note");
-      restoredMessages = wireRows.map((r) => ({ role: r.role, content: r.content }));
+      const activeSummaries = await db.contextSummary.findMany({
+        where: { runId, conversationId: LEADER_CONVERSATION, supersededAt: null },
+      });
+      const assembled = assembleWire({ rows, activeSummaries });
+      if (assembled.fallbackWarnings.length > 0) {
+        // Corrupt chain state (head gap / double head / overshoot): the
+        // assembler already fell back to the FULL raw replay — fail LOUD
+        // (design §2.2) and continue on the safe replay.
+        await emitEvent({
+          runId,
+          kind: "error",
+          summary: fallbackErrorSummary(assembled.fallbackWarnings),
+        });
+      }
+      restoredMessages = assembled.messages;
       // The transcript IS the loop cursor: one reply row per completed model
-      // turn (appended atomically with its tool_results batch).
-      restoredTurnsUsed = wireRows.filter((r) => r.kind === "reply").length;
+      // turn (appended atomically with its tool_results batch). Compaction
+      // never changes cursor arithmetic — it is derived from canonical rows,
+      // never from the projected wire.
+      restoredTurnsUsed = rows.filter((r) => r.kind === "reply").length;
       fromTranscript = true;
       const envelopeRow = rows.find((r) => r.kind === "envelope");
+      // Meter attribution mirrors the replayed wire: the envelope anchor
+      // rides `novel`, everything after messages[0..1] is conversation —
+      // INCLUDING the projection block when present (metered as sent,
+      // design §1 — never the raw transcript size).
       restoredMeter = createContextMeter({
         modelId: modelCtx.selection.modelId,
         contextWindow: modelCtx.contextWindow,
@@ -1385,10 +1421,28 @@ async function leaderLoop(
         tools: atlasPrompt.parts.tools,
         skills: atlasPrompt.parts.skills.map((s) => s.body),
         novel: envelopeRow ? [envelopeRow.content] : [],
-        conversation: wireRows
-          .filter((r) => r.kind !== "system_note" && r.kind !== "envelope")
-          .map((r) => r.content),
+        conversation: assembled.messages.slice(2).map((m) => m.content),
       });
+      if (assembled.projected) {
+        // Persisted proof of the restored wire shape (P1×P2 seam evidence):
+        // projection + verbatim tail; the resume_note injection (if any)
+        // lands after this and is logged by its own path below.
+        const tailRows = assembled.messages.length - 3;
+        await emitEvent({
+          runId,
+          kind: "message",
+          summary:
+            `Resume replayed the compaction projection (seq ${assembled.projected.fromSeq}..${assembled.projected.toSeq}) ` +
+            `+ ${tailRows} verbatim tail rows — originals remain in canonical history.`,
+          payload: {
+            projected: true,
+            fromSeq: assembled.projected.fromSeq,
+            toSeq: assembled.projected.toSeq,
+            tailRows,
+            wireMessages: assembled.messages.length,
+          },
+        });
+      }
     }
   }
 
@@ -1547,8 +1601,43 @@ async function leaderLoop(
     );
   }
   if (!restoredMessages || !restoredMeter) throw new Error("leader loop: conversation init failed");
-  const messages: ChatMessage[] = restoredMessages;
-  const meter: ContextMeter = restoredMeter;
+  let messages: ChatMessage[] = restoredMessages;
+  let meter: ContextMeter = restoredMeter;
+
+  // P2-c (M1 carve-out, design §2.0.1) — DYNAMIC PER-ASSEMBLY INJECTIONS:
+  // the current resume's note (and any future resume-time board state) rides
+  // EVERY wire this session assembles. Transcript rendering never sees them;
+  // every wire rebuild (compaction rewire, fallback rewire) re-applies them,
+  // so compaction/cut position can never filter the anti-blind-re-dispatch
+  // signal. They die with the executor session — a NEW resume injects a NEW
+  // note (historical ones stay unrendered markers).
+  const liveInjections: string[] = [];
+
+  /**
+   * Rewire the live wire + meter onto an assembled replay (P2-c). Single
+   * owner of the wire/meter rebuild used by the between-turns compaction
+   * rewire and the fallback rewire — the meter conversation section is
+   * rebuilt from EXACTLY the pieces the next call sends (projection + tail
+   * + live injections), so usage is metered AS SENT, never retro-inflated
+   * to the uncompacted size (design §1, evidence #5). messages[0]/[1] are
+   * the system_note + envelope anchors (fixed meter sections); everything
+   * after them is conversation.
+   */
+  const applyAssembly = (assembled: AssembleWireResult, novelParts: string[]): void => {
+    messages = [
+      ...assembled.messages,
+      ...liveInjections.map((content) => ({ role: "user" as const, content })),
+    ];
+    meter = createContextMeter({
+      modelId: modelCtx.selection.modelId,
+      contextWindow: modelCtx.contextWindow,
+      system: [atlasPrompt.parts.system],
+      tools: atlasPrompt.parts.tools,
+      skills: atlasPrompt.parts.skills.map((s) => s.body),
+      novel: novelParts,
+      conversation: [...assembled.messages.slice(2).map((m) => m.content), ...liveInjections],
+    });
+  };
 
   // Phase 1/C — the leader is TOLD about the interruption. The replay filter
   // above excludes only HISTORICAL marker rows; the CURRENT resume's
@@ -1572,6 +1661,10 @@ async function leaderLoop(
       kind: "resume_note",
       content: resumeNote,
     });
+    // M1 carve-out (design §2.0.1): per-assembly injection — appears on this
+    // wire AND on every rewire this session performs, regardless of any
+    // compaction projection or cut position. Metered as sent.
+    liveInjections.push(resumeNote);
     messages.push({ role: "user", content: resumeNote });
     meter.addConversation(resumeNote);
   }
@@ -1599,6 +1692,11 @@ async function leaderLoop(
   let turnsUsed = restoredTurnsUsed;
   let leaderBlocked: string | null = null;
 
+  // Last call's PROVIDER-RECONCILED prompt tokens (billed truth for the wire
+  // just sent) — the compaction trigger's primary measure; the meter's raw
+  // estimate is the fallback (see maybeCompact below).
+  let lastCallRealTokens: number | null = null;
+
   const glmCall = async (tag: string, turn: number): Promise<string> => {
     if (signal.aborted) throw new Error("Run aborted");
     const { text: reply, usage } = await glmChat({
@@ -1608,8 +1706,104 @@ async function leaderLoop(
       sdkParams: modelCtx.sdk,
       surface: "agent",
     });
+    lastCallRealTokens = usage?.promptTokens ?? lastCallRealTokens;
     emitUsageEvent(runId, meter, `atlas · turn ${turn}`, usage);
     return reply;
+  };
+
+  // P2-c — compaction fires BETWEEN turns (design §2.3): after the turn's
+  // transcript batch is appended and the cursor checkpointed, before the
+  // next model call. LEADER-ONLY wiring (members stay deliberately inert —
+  // see executeTask): eligibility keys off budgets.contextCompaction ONLY,
+  // never off contextSpec (design §1). Zero GLM, deterministic, fenced.
+  // Trigger measure: the last call's PROVIDER-RECONCILED prompt tokens (the
+  // billed truth for the wire just sent) when available, else the meter's
+  // raw estimate. Measured live in the P2-c probe: the raw estimate
+  // undercounts this CJK-heavy corpus ~1.4× vs the provider's billing —
+  // the reconciliation exists precisely because the estimate alone cannot
+  // be trusted for a threshold decision.
+  const maybeCompact = async (turn: number): Promise<void> => {
+    const cc = budgets.contextCompaction;
+    if (!cc.enabled) return; // shipped inert — the flip lives in budgets.yaml only
+    const beforeTokens = lastCallRealTokens ?? meter.snapshot("compaction-check").used;
+    if (beforeTokens < cc.triggerTokens) return;
+    const rows = await loadConversation(runId, LEADER_CONVERSATION);
+    const decision = decideCut(rows, cc.tailTurns, cc.minCompactableRows);
+    if (!decision) return; // too few coverable rows — absorption cannot pay for itself
+    let written: WriteSummaryResult;
+    try {
+      written = await writeCompactionSummary({
+        runId,
+        conversationId: LEADER_CONVERSATION,
+        taskId: null,
+        agent: "atlas",
+        rows,
+        newCut: decision.cut,
+        lease: guard.lease,
+      });
+    } catch (error) {
+      if (error instanceof LeaseLostError) throw error; // evicted — abort like any fenced write
+      // Compaction must never kill a run: fail loud, continue on the raw wire.
+      const reason = error instanceof Error ? error.message : String(error);
+      console.error(`[compaction] leader turn ${turn}: summary write threw — ${reason}`);
+      await emitEvent({
+        runId,
+        kind: "error",
+        summary: `Context compaction failed between turns — continuing on the full transcript (${truncate(reason, 200)})`,
+      });
+      return;
+    }
+    if (!written.ok) {
+      // Includes M3: P2002 against a SUPERSEDED row at this cut is NOT
+      // "done" — recompute/skip LOUDLY, never adopt the dead row (§2.3).
+      console.error(`[compaction] leader turn ${turn}: summary write refused (${written.reason})`);
+      await emitEvent({
+        runId,
+        kind: "error",
+        summary: `Context compaction skipped loudly (reason: ${written.reason ?? "unknown"}) — continuing on the full transcript.`,
+      });
+      return;
+    }
+    const [freshRows, activeSummaries] = await Promise.all([
+      loadConversation(runId, LEADER_CONVERSATION),
+      db.contextSummary.findMany({
+        where: { runId, conversationId: LEADER_CONVERSATION, supersededAt: null },
+      }),
+    ]);
+    const assembled = assembleWire({ rows: freshRows, activeSummaries });
+    const envelopeRow = freshRows.find((r) => r.kind === "envelope");
+    if (assembled.fallbackWarnings.length > 0) {
+      // Unreachable for a row this process just wrote — but corrupt state is
+      // NEVER silent: the assembler already fell back to the raw replay.
+      console.error(
+        `[compaction] leader turn ${turn}: post-write assembly fell back`,
+        assembled.fallbackWarnings
+      );
+      await emitEvent({
+        runId,
+        kind: "error",
+        summary: fallbackErrorSummary(assembled.fallbackWarnings),
+      });
+    }
+    applyAssembly(assembled, envelopeRow ? [envelopeRow.content] : []);
+    const afterTokens = meter.snapshot("compaction-check").used;
+    await emitEvent({
+      runId,
+      kind: "message",
+      summary:
+        `Context compacted after leader turn ${turn}: rows seq ${written.row?.fromSeq}..${written.row?.toSeq} → ` +
+        `deterministic projection (active context ≈ ${beforeTokens} → ${afterTokens} est. tokens). ` +
+        "Originals remain in canonical history; read tools retrieve exact detail.",
+      payload: {
+        projected: true,
+        fromSeq: written.row?.fromSeq ?? null,
+        toSeq: written.row?.toSeq ?? null,
+        coverableRows: decision.coverableRows,
+        beforeTokens,
+        afterTokens,
+        wireMessages: messages.length,
+      },
+    });
   };
 
   // loopExhausted — the loop can exit early via break (blocked / finish: both
@@ -1821,6 +2015,10 @@ async function leaderLoop(
       impactReport,
       wrapUpGranted,
     });
+    // P2-c — the between-turns compaction window (append → bump → compact):
+    // the next iteration's model call sees the projected wire when a
+    // compaction fired; disabled ⇒ this returns immediately (inert).
+    await maybeCompact(turn);
   }
 
   if (signal.aborted) return;
@@ -2096,6 +2294,13 @@ async function executeTask(params: {
   );
 
   // P2 — conversation-scoped meter; snapshot per call = what that call sent.
+  // P2-c compaction wiring scope (declared, evidence #4): the LEADER loop is
+  // the ONLY compaction consumer in this phase. Member conversations are
+  // per-task, never replayed on resume (an interrupted member task is marked
+  // failed and re-dispatched on a FRESH wire), and measured member wires max
+  // out ~1.5K tokens — far below triggerTokens — so wiring compaction here
+  // would be dead speculative code. Deliberately inert; revisit only if
+  // member conversations ever grow a replay path.
   const meter = createContextMeter({
     modelId: params.model.selection.modelId,
     contextWindow: params.model.contextWindow,

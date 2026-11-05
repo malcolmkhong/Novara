@@ -55,17 +55,27 @@ memory:
   recencyHalfLifeChapters: 12 # chapters until an item's recency ≈ 0.75
   staleLoopChapters: 10       # doctor: open loop untouched for N chapters → warn
 
-# Phase 2 — context compaction (agent-ctx/p2-design.md). Inert in every live
-# run: enabled stays false until P2-c's confirmed probe. Eligibility keys off
+# Phase 2 — context compaction (agent-ctx/p2-design.md). Eligibility keys off
 # THIS section only — never off contextSpec (which decides system-note wire
-# delivery exclusively).
+# delivery exclusively). Wiring scope (P2-c, declared): the LEADER loop is the
+# only consumer; the member loop stays deliberately inert (member
+# conversations are never replayed and never approach the trigger).
 contextCompaction:
-  enabled: false        # master switch — shipped inert; flipped only in a P2-c probe run
+  # SHIPPED STATE (P2-c final): enabled=false — the P1×P2 seam, the
+  # counterfactual harnesses and the P2-c probe run have proven the machinery,
+  # but turning compaction on for real production runs is an explicit product
+  # decision, not a phase side-effect. The P2-c report carries the recommended
+  # enablement pack (measured, not predicted) for when that decision is made.
+  enabled: false
   # REACHABLE default: the §8-predicted conversation-section ceiling of a
   # full-budget 22-turn leader run is ~9–10K tok, so 24K could never fire.
   # 6000 fires on busy leader runs (measured per-call conversation totals in
   # the P2-b report); P2-c may tune further. Validated by measurement, never
   # hand math.
-  triggerTokens: 6000   # compact when the metered active context reaches this
+  triggerTokens: 6000   # compact when the METERED ACTIVE CONTEXT (the meter's total `used` snapshot — the full next-call wire) reaches this
   tailTurns: 8          # verbatim reply+tool_results turns kept after the cut
   minCompactableRows: 12 # never compact below this many coverable rows (absorption must pay for itself)
+  # P2-c PROBE PACK (temporary, already restored after the probe run):
+  #   enabled: true, triggerTokens: 4000, tailTurns: 2, minCompactableRows: 6
+  # — the only lowered-threshold values the one live flash run ever saw; the
+  # harness asserts the shipped file never carries them at rest.

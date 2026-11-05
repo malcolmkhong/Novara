@@ -1,8 +1,8 @@
 # Novara Phase 2 — Context Compaction Design (CORRECTED, post-review)
 
-Status: **v2 draft — supersedes the original proposal's §3/§8.** Points 1–3 of the
-review are folded in here. P2-a/P2-b proceed under this document; **P2-c does not
-start until this corrected design is explicitly confirmed.**
+Status: **v3 — supersedes the original proposal's §3/§8.** Review points 1–3 are
+folded in (v2), and the three P2-c gate amendments M1/M2/M3 (reviewer-confirmed)
+are now folded into §2 below — P2-c proceeds under this document.
 
 Review deltas honored:
 1. **STRUCTURAL** — compaction eligibility decoupled from `contextSpec` (§1 below).
@@ -23,7 +23,13 @@ Phase 2 (all Phase 2 runs are v1; the v2 wire flip is Phase 3's first step).
 
 - Compaction eligibility is governed ONLY by `budgets.contextCompaction`:
   - `enabled: true`, AND
-  - metered active-context tokens ≥ `triggerTokens`, AND
+  - **metered active-context tokens ≥ `triggerTokens`** — measured as the
+    last model call's PROVIDER-RECONCILED prompt tokens (the billed truth for
+    the wire just sent) when available, else the meter's raw `used` estimate.
+    Pinned live in the P2-c probe: the raw estimator undercounts this
+    CJK-heavy corpus ~1.4× vs the provider's billing, so the estimate alone
+    can never be trusted for a threshold decision — the reconciliation
+    (context-meter.ts) exists for exactly this reason, AND
   - coverable rows (envelope-boundary → candidate cut) ≥ `minCompactableRows`.
   `contextSpec` plays **no** role in eligibility.
 - `contextSpec` governs ONLY system-prompt delivery on the wire:
@@ -79,6 +85,41 @@ Consequences, all intended:
   `resume_note`) are covered by the seq range (density, no holes) but are NOT
   rendered — consistent with their existing never-replayed contract.
 
+### 2.0.1 Marker precedence — the M1 carve-out (BINDING)
+
+The "never rendered" rule above governs **transcript rendering only** — i.e.
+what a projection builder or a replay filter may lift out of persisted
+`AgentMessage` rows. It deliberately does NOT govern **dynamic per-assembly
+injections**, which live in the ASSEMBLER/RUNTIME layer, outside transcript
+rendering. This is the precedence rule that resolves the collision between the
+never-replayed marker contract and Phase 1's point-3 fix (the FRESH
+`resume_note` is pushed onto `messages` + metered so the first resumed call
+sees it — under a naive reading, a compaction cut covering the tail span would
+filter it out and silently disable the anti-blind-re-dispatch signal):
+
+> **Precedence rule (M1):**
+> 1. Marker ROWS (`gate_stop`, `resume_note`) are excluded from PROJECTION
+>    RENDERING and from every replay of transcript history — historical
+>    markers never appear on any wire, compacted or not.
+> 2. DYNAMIC PER-ASSEMBLY INJECTIONS — the CURRENT resume's `resume_note`,
+>    resume-time board state — are produced by the runtime's wire-assembly
+>    step AFTER the transcript replay/projection is built, and ALWAYS appear
+>    on every wire assembled while the injection is current, regardless of
+>    compaction, cut position, or cover range. Compaction never filters them
+>    (it cannot see them: they are not transcript-rendered content).
+>
+> Implementation shape: the runtime keeps the session's live injections in a
+> dedicated list; every wire rebuild (resume init, between-turns compaction
+> rewire, fallback rewire) is `assembly output + live injections`, and the
+> meter conversation section is rebuilt from exactly those pieces — metered
+> as sent.
+
+Consequence: the Phase 1 anti-blind-re-dispatch guarantee survives compaction
+UNCONDITIONALLY — a resume after N compactions still shows the fresh note as
+the last wire message. Harness-asserted (verify-p2-c §M1) and exercised live
+by the P2-c kill→resume probe (the orphaned member task makes the fresh note
+fire on a compacted wire).
+
 ### 2.1 Chain shape and replay
 
 - At any moment there is **exactly one ACTIVE** `ContextSummary` row per
@@ -115,6 +156,30 @@ per covered replayable row in seq order (`seq {n} · {kind}: {clipped text}`;
 clips are fixed constants in `src/lib/agent/wire.ts`), so identical inputs
 yield byte-identical blocks — required for stable counterfactual comparison.
 
+### 2.1.y Adjacency ownership — ONE normalization at assembly output (M2)
+
+The projection block is a USER message and the first tail row is often user
+(`tool_results`) — and transcript-internal adjacent user pairs already exist
+(`tool_results` + `repair`, the resume wire tail `…tool_results, resume_note`).
+The adjacency decision therefore has EXACTLY ONE OWNER, at assembly output:
+
+> **M2 rule:** wire assembly ends with a single normalization step
+> (`finalizeWire` in `src/lib/agent/wire.ts`) applied to the FULL assembled
+> output — disabled replay, projected replay, and fallback replay all flow
+> through it. Transcript rows are untouched on disk, always. The normalization's
+> contract (Phase-2 shipped state): **adjacent user messages are preserved
+> 1:1 VERBATIM — never merged** — covering every adjacency kind: projection →
+> user-tail AND transcript-internal pairs. This matches the provider-proven
+> Phase 1 wire (consecutive user rows sent and consumed unmerged on live
+> resume runs) and keeps the disabled path byte-identical (the step is
+> identity-preserving on legacy wires). If a provider constraint ever forces
+> a merge, this function is the single place to change it — one owner, one
+> diff, one version-token bump on the projection framing if framing shifts.
+
+Harness-asserted as a MATRIX (verify-p2-c §M2): every combination of
+{projection present? × tail-first kind ∈ reply / tool_results / resume-note}
+— shape asserted when enabled, BYTE IDENTITY asserted when disabled.
+
 ### 2.2 Contiguity invariant (fail loud, never silent)
 
 On every compacted replay, the active summary must form ONE contiguous cover
@@ -150,9 +215,16 @@ in P2-c) turns into an `AgentEvent(kind="error")` naming the row and the gap.
   summary text, so there is nothing to trust and no drift to inherit.
 - **Idempotence per cut point:** `@@unique([runId, conversationId, toSeq])`. A
   crash→retry that re-attempts the same cut hits P2002 and treats the existing
-  ACTIVE row at that `toSeq` as done (byte-identical anyway — same inputs,
-  same deterministic builder). Re-compaction after new turns gets a new
-  `toSeq` — a new chain link, per 2.1.
+  row at that `toSeq` as done — **but ONLY if it is ACTIVE** (`supersededAt
+  IS NULL`), and only after completing its supersede step (M3, one-line code
+  rule in `writeCompactionSummary`: `if (existing.supersededAt !== null)
+  return { ok: false, reason: "cut already superseded" }`). **A P2002 against
+  a SUPERSEDED row at that `toSeq` is NOT "done"** — the writer returns
+  `ok:false` and the caller recompute/SKIPS LOUDLY (`console.error` +
+  `AgentEvent(kind="error")`), never adopting the dead row and never writing
+  a duplicate at the same cut. Byte-identity anyway holds for the true
+  retry (same inputs → same deterministic builder). Re-compaction after new
+  turns gets a new `toSeq` — a new chain link, per 2.1.
 - Compaction fires **between turns** (after a turn's transcript batch is
   appended, before the next model call) — never mid-turn, never concurrent with
   a fenced append of the same conversation.
@@ -224,9 +296,9 @@ NEVER rewritten — compaction summaries coexist with the transcript by range.
 ## §5 — Stage plan & harness assertions
 
 Stages: P2-a (inert schema+config+harness) → P2-b (assembler + counterfactual
-byte-identity + disabled-default) → P2-c (one short flash run, lowered threshold,
-summary range + absorb-chain + fence evidence) → P2-d (wrap-up report).
-Report after each; wait for confirmation before the next.
+byte-identity + disabled-default) → P2-c (runtime wiring + one short flash run,
+lowered threshold, kill→resume seam, summary range + chain + fence evidence) →
+P2-d (wrap-up report). Report after each; wait for confirmation before the next.
 
 `verify-stage-a.ts` stays green at every stage. Sibling harnesses carry the
 P2-stage assertions:
@@ -247,6 +319,18 @@ P2-stage assertions:
   table (legacy vs projected, per corpus conversation) pasted in the report.
 - **P2-c:** live-run evidence — summary row range correct, chain head unique,
   fence verdicts, measured-vs-predicted §8 table, usage reconciliation.
+  Amendment-driven additions: **§M1** — fresh `resume_note` rides a COMPACTED
+  resume wire (projection present, cover would otherwise swallow its seq) and
+  historical markers stay unrendered everywhere; **§M2** — the full adjacency
+  matrix {projection? × tail-first kind ∈ reply/tool_results/resume-note} with
+  byte identity when disabled; **§M3** — P2002 against a SUPERSEDED row ⇒
+  `ok:false("cut already superseded")`, active head unchanged; **fallback
+  wiring** — corrupt-summary fixture ⇒ `fallbackErrorSummary` names the row
+  and the gap + fallback replay byte-identical to the raw replay; **resume
+  seam** — kill the live run after ≥1 compaction, resume, restored wire =
+  projection + tail + injected markers, transcript gapless, counters intact;
+  **usage semantics** — post-compaction usage events reflect the projected
+  wire (no retroactive inflation).
 
 GLM discipline: P2-c = 1 short flash run with lowered threshold; everything
 else zero-GLM.

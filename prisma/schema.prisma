@@ -660,11 +660,13 @@ model AgentMessage {
 // [fromSeq..toSeq] so any projection is re-derivable and auditable
 // (agent-ctx/p2-design.md §2).
 //
-// Absorb-chain: each row compresses (prior active summary text + verbatim
-// rows since the prior cut) into ONE row whose fromSeq reaches back to the
-// FIRST compacted seq (envelope.seq + 1); replay = newest active row only +
-// verbatim tail, keeping the active-context cap flat no matter how many
-// compactions fire. Exactly one active row per (runId, conversationId)
+// Absorb-chain: each row is a DETERMINISTIC, ZERO-GLM projection RECOMPUTED
+// from the raw canonical AgentMessage rows over [fromSeq..toSeq] ONLY (design
+// §2.0 — prior summary text is NEVER an input; the superseded row exists to
+// define the prior cut and as the audit trail of cuts). One row reaches back
+// to the FIRST compacted seq (envelope.seq + 1); replay = newest active row
+// only + verbatim tail, keeping the active-context cap flat no matter how
+// many compactions fire. Exactly one active row per (runId, conversationId)
 // (supersededAt IS NULL) — the prior row is fenced-superseded when the new
 // one lands.
 //
@@ -694,7 +696,8 @@ model ContextSummary {
   // the chain head; toSeq is the cut point.
   fromSeq        Int
   toSeq          Int
-  // Absorbed summary text (prior summary + rows since the prior cut).
+  // Deterministic projection text (raw rows over [fromSeq..toSeq] ONLY —
+  // design §2.0; prior summary text is never an input).
   summary        String
   // Lease fencing token at write time (AgentRun.leaseEpoch when written).
   leaseEpoch     Int       @default(0)
