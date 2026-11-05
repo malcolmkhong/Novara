@@ -1,9 +1,10 @@
 # Phase 3 Proposal — Provider Cache Capability & Wire Evolution
 
-**Status: P3-a + P3-c EXECUTED 2026-11-05 — evidence in `agent-ctx/phase3-stages.md`.
-Stop condition TRIGGERED (cache fields absent at our boundary). P3-b challenged —
-argument + defer recommendation in phase3-stages.md §P3-B, AWAITING USER RULING;
-no wire-format code touched.** Proposal date: 2026-11-05.
+**Status: PHASE 3 CLOSED (user ruling 2026-11-05).** P3-a executed — stop
+condition TRIGGERED (cache fields absent at our boundary; §P3-A in
+`phase3-stages.md`). P3-b DEFERRED by ruling — flip consciously declined with
+three revisit triggers (§P3-B). P3-c shipped (§P3-C). Billing-attribution
+loose end from R3 checked and pinned (§P3-A-2). Proposal date: 2026-11-05.
 Rules honored: additive-only, zero new deps, no business-logic/UI changes, GLM
 discipline (probe spend disclosed: 2 calls, 2,654 tok ≈ $0.001 on glm-4.6).
 

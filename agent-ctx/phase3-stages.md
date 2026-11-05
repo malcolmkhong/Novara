@@ -198,15 +198,22 @@ cost, by contrast, is concrete and permanent (dual assembly branches, doubled
 harness surface, a wider wire type, re-validation of the most battle-tested
 invariant in the codebase).
 
-Record the flip as consciously declined, with three concrete revisit triggers:
-(i) the gateway starts rejecting the v1 head shape (strictness signal);
-(ii) the provider ships role-keyed cache discounts or an explicit cache API
-(billing signal); (iii) a debugging/attribution need is actually blocked on
-role semantics (functional signal). Until one fires, v1 stays the one and only
-wire shape.
+**RULING (user, 2026-11-05): DEFER — approved.** v1 stays the one and only
+wire shape; the flip is recorded as **consciously declined** with three
+concrete revisit triggers:
+1. **Strictness signal** — the gateway starts rejecting the v1 head shape
+   (non-system opening message).
+2. **Billing signal** — the provider ships role-keyed cache discounts or an
+   explicit cache API.
+3. **Functional signal** — a real debugging/attribution need is blocked on
+   role semantics.
 
-**STOPPING HERE per the process rule — no wire-format code touched until the
-P3-b ruling.**
+Until one fires, no wire-format work touches the role union.
+
+**PHASE 3 CLOSED** (user, 2026-11-05): P3-a negative finding pinned (§P3-A R1–R4,
+stop condition honored), P3-c shipped (§P3-C), P3-b declined with triggers
+(above). Phase 3 total GLM spend: 4 billable calls, 5,308 billed tokens ≈
+$0.003 — "well-spent" per reviewer.
 
 ---
 
@@ -235,12 +242,13 @@ P2-C: ALL CHECKS PASSED (46 checks)
 | verify-p2-b.ts | 35 | ALL CHECKS PASSED |
 | verify-p2-c.ts | 46 (incl. P3-C) | ALL CHECKS PASSED |
 
-**Labelled discrepancy (re-derive-and-label):** the Phase 1–2 close-out
-remembered verify-p2-b as "39". Today's measured truth from the committed file
-(byte-identical to HEAD) is **35** runtime PASS lines; "39" cannot be
-re-derived from any surviving artifact and is superseded by the measured
-number above. The historic numbers for stage-a (17) and p2-a (13) reproduce
-exactly.
+**Labelled correction (re-derive-and-label):** an intermediate session summary
+claimed the close-out remembered verify-p2-b as "39". The close-out artifact
+itself (`phase1-2-closeout.md` §2, row 7) reads **"17 / 13 / 35 / 45 — all
+green"** — it agrees exactly with today's measured quartet. The "39" figure
+appears in NO surviving artifact; it was an artifact of context compaction in
+the intermediate summary, not of the project record. Today's measured numbers
+stand uncorrected: 17 / 13 / 35 / 46 (P3-C added one assertion to p2-c).
 
 ### Ship health
 
@@ -251,3 +259,73 @@ exactly.
   `scripts/verify-p2-c.ts` (+32 lines, one assertion), `agent-ctx/phase3-stages.md`
   (this file), one status line in `agent-ctx/phase3-proposal.md`. No app code,
   no wire format, no deps, no UI.
+
+---
+
+## §P3-A-2 — Billing attribution check (R3 loose end; executed 2026-11-05, zero billable GLM)
+
+**Question:** the gateway rewrites response `model` to `"glm-4-plus"` for BOTH
+requested models (R3). Our ledger/usage events attribute by the REQUEST-side
+modelId from the registry. Does billing follow the requested model (registry
+pricing correct), or could the rewrite mean tokens are billed at a tier
+different from what we record?
+
+### Evidence (embedded at production time)
+
+**(a) The echo is a CONSTANT label — 3rd live observation.** Requested
+glm-4.5-flash (free tier, the approved single call), response verbatim:
+```
+{"choices":[{"finish_reason":"stop","index":0,"message":{"content":"BILLING-CHECK","role":"assistant"}}],"created":1793885277,"id":"20261105212756cec6dd2549324db8","model":"glm-4-plus","object":"chat.completion","request_id":"20261105212756cec6dd2549324db8","usage":{"completion_tokens":5,"prompt_tokens":24,"total_tokens":29}}
+```
+`response model echo for requested glm-4.5-flash: glm-4-plus` — same constant
+label as both glm-4.6 calls earlier today. The echo carries ZERO model identity.
+
+**(b) Gateway rate-limit budgets are IDENTICAL across requested models** (flash
+today vs glm-4.6 today, from the recorded header sets):
+```
+x-ratelimit-limit-daily:        flash=300 | glm-4.6=300 | SAME
+x-ratelimit-limit-qps:          flash=2   | glm-4.6=2   | SAME
+x-ratelimit-user-10min-limit:   flash=30  | glm-4.6=30  | SAME
+x-ratelimit-user-daily-remaining: flash=364 | glm-4.6=370 | DIFFERENT (consumption counter, not a tier signal)
+```
+No observable per-model differentiation exists in any response header.
+
+**(c) NO code path reads the echo field** (grep, this day): `glmChat`
+(`src/lib/novara/glm.ts`) reads `choices[0].message.content` only;
+`extractRealUsage` (`src/lib/usage/ledger.ts`) reads only
+`usage.{prompt_tokens, completion_tokens, total_tokens}`; the meter's
+`modelId` comes from the REQUEST-side selection passed at construction
+(`createContextMeter({ modelId: params.model.selection.modelId … })`); the
+global ledger records per-SURFACE token totals (calls/prompt/completion/total)
+and stores NO model field at all. The `model` echo is display-and-dead.
+
+**(d) NO $-conversion code exists.** There is no pricing table, no cost
+computation anywhere in `src` (grep `price|billing|costPerM|inputCost` → one
+comment only). Every $ figure in project reports is hand-computed from the
+docs' per-requested-model price rows (proposal §F2 citations).
+
+### Verdict
+
+- **The echo field is COSMETIC — evidence (a)+(c).** Nothing in the product
+  reads or displays it; token records are the provider's billed counts keyed
+  by the request-side selection (what we sent), which is the API contract's
+  routing selector and the docs' pricing key. Registry-side attribution is
+  correct under the documented contract.
+- **The invoice-tier residual is genuinely ambiguous — evidence (b)+(d) — and
+  is flagged as a PHASE 5 DEPENDENCY.** Whether the provider's invoice tiers a
+  given request at the requested model's price row is NOT observable from
+  inside this sandbox: no billing/usage-query API is cited in the docs, the
+  gateway's config is unreachable, and its headers expose a shared user quota
+  with no per-model split. This has ZERO product surface today (no $ display
+  exists to be wrong) — but Phase 5's cost-display credibility requires
+  reconciling one real invoice/dashboard row against request-side attribution
+  before any $ number is shown to the author.
+- **Pinned note (the approved harness/doc pin, doc-note form chosen — there is
+  no pricing code for a harness to assert):** this section IS the pin. The
+  invariant it states: *our ledger records measured provider tokens keyed by
+  request-side selection; the response model echo is unread; $ attribution
+  does not exist in code today and, when it arrives (Phase 5), must first
+  reconcile against the provider's invoice side.*
+
+Probe cost: 1 free flash call (24+5 tok, $0). Billable calls spent on this
+check: **0**.
