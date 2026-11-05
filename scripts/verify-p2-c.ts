@@ -57,6 +57,7 @@ import {
   writeCompactionSummary,
   type ActiveSummary,
   type SequencedRow,
+  type WireMessage,
 } from "../src/lib/agent/wire";
 import { countTokens, createContextMeter, reconcileUsageWithReal } from "../src/lib/agent/context-meter";
 import { getBudgets } from "../src/lib/novara/content";
@@ -517,6 +518,37 @@ async function main() {
     check(
       "G5 slack is the documented design constant 256 (wire.ts, not budgets.yaml)",
       COMPACTION_SLACK_TOKENS === 256
+    );
+
+    // ------------------------------------------------------------- P3-C --
+    // Stable-prefix audit (Phase 3 proposal §2.3, approved scope): the FIRST
+    // TWO wire messages — the per-agent system card + the goal envelope, the
+    // cache-eligible stable head (proposal F4) — must be BYTE-IDENTICAL
+    // before and after EVERY compaction cycle exercised in this harness.
+    // Compaction may rewrite the middle (projection) but never the head;
+    // this pins the provider-documented caching shape (stable head first,
+    // variable tail after) as the wire evolves.
+    const p3cCycles: { name: string; before: WireMessage[]; after: WireMessage[] }[] = matrix.map(
+      (m) => ({
+        name: m.conv,
+        before: legacyReplay(m.rows),
+        after: assembleWire({ rows: m.rows, activeSummaries: [summaryFor(m.rows, 3, m.cut)] }).messages,
+      })
+    );
+    if (normalDecision) {
+      p3cCycles.push({
+        name: "g-normal",
+        before: legacyReplay(normal),
+        after: assembleWire({ rows: normal, activeSummaries: [summaryFor(normal, 3, normalDecision.cut)] })
+          .messages,
+      });
+    }
+    const headStable = (c: { before: WireMessage[]; after: WireMessage[] }) =>
+      same(c.before.slice(0, 2), c.after.slice(0, 2));
+    check(
+      "P3-C wire head stable across compaction — [system card][envelope] byte-identical in every cycle",
+      p3cCycles.length >= 4 && p3cCycles.every((c) => headStable(c) && c.after.length >= 3),
+      p3cCycles.map((c) => `${c.name}=${headStable(c) ? "stable" : "CHANGED"}`).join(", ")
     );
 
     // ----------------------------------------------------------------- §7 --

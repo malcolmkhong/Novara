@@ -1,6 +1,9 @@
 # Phase 3 Proposal — Provider Cache Capability & Wire Evolution
 
-**Status: READ-ONLY — no code shipped, awaiting approval.** Date: 2026-11-05.
+**Status: P3-a + P3-c EXECUTED 2026-11-05 — evidence in `agent-ctx/phase3-stages.md`.
+Stop condition TRIGGERED (cache fields absent at our boundary). P3-b challenged —
+argument + defer recommendation in phase3-stages.md §P3-B, AWAITING USER RULING;
+no wire-format code touched.** Proposal date: 2026-11-05.
 Rules honored: additive-only, zero new deps, no business-logic/UI changes, GLM
 discipline (probe spend disclosed: 2 calls, 2,654 tok ≈ $0.001 on glm-4.6).
 
