@@ -700,12 +700,24 @@ export async function cancelRun(runId: string): Promise<AgentRunDetail> {
     throw new ConflictError("This run is already finished");
   }
 
-  executors.get(runId)?.controller.abort();
+  const localExecutor = executors.get(runId);
+  localExecutor?.controller.abort();
   await db.agentTask.updateMany({
     where: { runId, status: { in: ["in_progress", "needs_approval"] } },
     data: { status: "blocked" },
   });
   await db.agentRun.update({ where: { id: runId }, data: { status: "cancelled" } });
+  // Dangling-lease cleanup (Stage C): with no in-process executor there is no
+  // finally-block to run releaseLease — a crashed executor's lease would
+  // linger alive-looking on this now-terminal run indefinitely (healStaleRuns
+  // only scans active runs; resume 409s on terminal status before the lease
+  // check). Cancel owns the terminal flip, so it also owns clearing the
+  // orphaned lease columns. When a live executor DOES exist, its own finally
+  // releases promptly (run #2: 439ms after the cancel event) — touching the
+  // lease here would only race its in-flight fenced appends.
+  if (!localExecutor) {
+    await db.agentRun.updateMany({ where: { id: runId }, data: { leaseOwner: null } });
+  }
   await emitEvent({ runId, kind: "message", summary: "Run cancelled by author. Unsettled drafts were discarded." });
 
   const detail = await getRunDetail(runId);
@@ -895,7 +907,7 @@ async function deriveQcLedger(novelId: string, repairs: Record<string, number>):
 }
 
 /**
- * Phase 1 create-probe — the two interruption shapes that would otherwise
+ * Phase 1 create-probe — the interruption shapes that would otherwise
  * duplicate a chapter row on re-dispatch:
  *   1. commit landed, feedback lost: a chapter with the SAME title AND
  *      content already exists (the natural key the approval-commit path uses
@@ -903,19 +915,28 @@ async function deriveQcLedger(novelId: string, repairs: Record<string, number>):
  *   2. the leader re-delegated an interrupted task and the member regenerated
  *      different prose for the same intended chapter: this run's event stream
  *      already recorded a create_chapter commit for the same title.
- * Returns the chapter to adopt, or null when the write is genuinely new.
+ *   3. commit landed inside the commit→event window (Stage C E2E live proof:
+ *      a SIGKILL landed 5ms after db.chapter.create and BEFORE emitEvent —
+ *      the row exists, the event stream has no create_chapter record): a
+ *      chapter with the intended title created AFTER this run started. The
+ *      row itself is the commit evidence. Callers must emit the missing
+ *      reconciliation event (reconcileEvent: true) so event-derived counters
+ *      keep DB parity; shapes 1-2 adopt silently (their event already
+ *      exists, or shape 1 matched identical content).
+ * Returns the chapter to adopt (plus whether the event stream needs
+ * reconciliation), or null when the write is genuinely new.
  */
 async function findAdoptableChapter(
   runId: string,
   novelId: string,
   title: string,
   prose: string
-): Promise<{ id: string; index: number; wordCount: number } | null> {
+): Promise<{ id: string; index: number; wordCount: number; reconcileEvent: boolean } | null> {
   const exact = await db.chapter.findFirst({
     where: { novelId, title, content: prose },
     select: { id: true, index: true, wordCount: true },
   });
-  if (exact) return exact;
+  if (exact) return { ...exact, reconcileEvent: false };
   const events = await db.agentEvent.findMany({
     where: { runId, kind: { in: ["write", "approval"] } },
     orderBy: { createdAt: "desc" },
@@ -931,10 +952,77 @@ async function findAdoptableChapter(
         where: { id: payload.chapterId },
         select: { id: true, index: true, wordCount: true },
       });
-      if (chapter) return chapter;
+      if (chapter) return { ...chapter, reconcileEvent: false };
     }
   }
+  const runStart = await db.agentRun.findUnique({
+    where: { id: runId },
+    select: { createdAt: true },
+  });
+  if (runStart) {
+    const sameTitleThisRun = await db.chapter.findFirst({
+      where: { novelId, title, createdAt: { gte: runStart.createdAt } },
+      orderBy: { createdAt: "desc" },
+      select: { id: true, index: true, wordCount: true },
+    });
+    if (sameTitleThisRun) return { ...sameTitleThisRun, reconcileEvent: true };
+  }
   return null;
+}
+
+/**
+ * Stage C — resume-path event reconciliation (ZERO-GLM, deterministic).
+ * A crash inside the commit→event window (db.chapter.create landed,
+ * emitEvent never ran — Stage C E2E run cmw37k70w…: SIGKILL landed 5ms
+ * after the commit) leaves a committed chapter with NO create_chapter
+ * event, so event-derived counters undercount it forever — even when the
+ * resume-side probe or the leader's own DB-aware re-planning avoids the
+ * duplicate row. On resume, BEFORE measured is derived, re-emit the
+ * missing create event for any chapter this run committed. All three
+ * discriminators are required:
+ *   - created after the run started (createdAt >= run.createdAt);
+ *   - carries an agent-authored ChapterVersion (author-UI creates record
+ *     none, so author writes mid-run are never misattributed);
+ *   - no non-pending create_chapter event for its id in this run's stream.
+ * Idempotent: once emitted, later resumes skip it (event check) and the
+ * member-side create-probe shape 2 then adopts silently — never double-counts.
+ * Scope note: the update_chapter commit→event window is the same class of
+ * hole but requires version-row↔event diffing (multiple updates per
+ * chapter); it stays in the risk register, not here.
+ */
+async function reconcileMissingCreateEvents(runId: string, novelId: string): Promise<void> {
+  const run = await db.agentRun.findUnique({ where: { id: runId }, select: { createdAt: true } });
+  if (!run) return;
+  const events = await db.agentEvent.findMany({
+    where: { runId, kind: { in: ["write", "approval"] } },
+    select: { payload: true },
+  });
+  const eventedChapterIds = new Set<string>();
+  for (const e of events) {
+    const payload = parseJsonSafe<Record<string, unknown> | null>(e.payload, null);
+    if (!payload || payload.pending === true) continue;
+    if (payload.op === "create_chapter" && typeof payload.chapterId === "string") {
+      eventedChapterIds.add(payload.chapterId);
+    }
+  }
+  const candidates = await db.chapter.findMany({
+    where: { novelId, createdAt: { gte: run.createdAt } },
+    select: { id: true, index: true, title: true, wordCount: true },
+  });
+  for (const ch of candidates) {
+    if (eventedChapterIds.has(ch.id)) continue;
+    const agentVersion = await db.chapterVersion.findFirst({
+      where: { chapterId: ch.id, createdBy: "agent" },
+      select: { id: true },
+    });
+    if (!agentVersion) continue;
+    await emitEvent({
+      runId,
+      kind: "write",
+      summary: `Created Chapter ${ch.index} "${truncate(ch.title, 80)}" — ${ch.wordCount.toLocaleString()} words (verified in DB; reconciled on resume — the commit landed but its create event was lost in the crash window).`,
+      payload: { artifact: "chapter", chapterId: ch.id, index: ch.index, words: ch.wordCount, op: "create_chapter", title: ch.title, reconciled: true },
+    });
+  }
 }
 
 /**
@@ -1136,6 +1224,11 @@ async function runLoop(
 ): Promise<void> {
   const run = await db.agentRun.findUnique({ where: { id: runId } });
   if (!run) return;
+  // Cancel-vs-resume race guard: the resume route checks run status BEFORE
+  // claiming the lease; a cancel landing between that check and the claim
+  // must not start an executor on a terminal run. (executeRun's finally
+  // releases the just-claimed lease on this early return.)
+  if (TERMINAL_STATUSES.includes(run.status as AgentRunStatus)) return;
 
   // Abort from a previous process instance (e.g. after hot reload) is not our
   // signal; only honor fresh cancels from here on.
@@ -1240,7 +1333,11 @@ async function leaderLoop(
 
   // Orphaned in_progress tasks: their executor is gone. Mark them failed —
   // the leader's re-dispatch adopts any already-committed writes through the
-  // tool-level idempotency probes (never duplicates).
+  // tool-level idempotency probes (never duplicates). The keys are collected
+  // so the freshly appended leader resume_note (below, after wire init) can
+  // TELL the leader what was interrupted — live run #2 proved the leader
+  // otherwise re-plans blind and re-dispatches identical work uninformed.
+  const orphanKeys: string[] = [];
   if (isResume) {
     const orphans = await db.agentTask.findMany({
       where: { runId, status: "in_progress" },
@@ -1248,6 +1345,7 @@ async function leaderLoop(
     });
     for (const orphan of orphans) {
       await db.agentTask.update({ where: { id: orphan.id }, data: { status: "failed" } });
+      orphanKeys.push(orphan.key);
       await emitEvent({
         runId,
         kind: "error",
@@ -1267,8 +1365,10 @@ async function leaderLoop(
   let fromTranscript = false;
   if (isResume) {
     // Rebuild the conversation from the CANONICAL transcript only — never
-    // from AgentEvent (the truncated UI stream). gate_stop / resume_note rows
-    // are audit markers, not wire messages, and are excluded from the replay.
+    // from AgentEvent (the truncated UI stream). HISTORICAL gate_stop /
+    // resume_note rows are audit markers, not replayed wire content; the
+    // CURRENT resume's resume_note is appended fresh below (after wire init)
+    // and pushed onto the live wire as a user message.
     const rows = await loadConversation(runId, LEADER_CONVERSATION);
     if (rows.length > 0) {
       const wireRows = rows.filter((r) => r.kind !== "gate_stop" && r.kind !== "resume_note");
@@ -1450,9 +1550,41 @@ async function leaderLoop(
   const messages: ChatMessage[] = restoredMessages;
   const meter: ContextMeter = restoredMeter;
 
+  // Phase 1/C — the leader is TOLD about the interruption. The replay filter
+  // above excludes only HISTORICAL marker rows; the CURRENT resume's
+  // resume_note is appended fresh (fenced) and pushed onto the live wire, so
+  // the first resumed model call sees it as a user message. Without this the
+  // leader resumes with no signal that Task N was marked failed — live run #2
+  // (05:55:15 resume) showed it re-dispatching identical work uninformed:
+  // safe through the probes, but wasteful and invisible on the wire.
+  if (isResume && orphanKeys.length > 0) {
+    const resumeNote =
+      "[resume] The executor was interrupted and has recovered from the canonical transcript. " +
+      `Interrupted task(s) marked failed: ${orphanKeys.join(", ")}. Any writes they already committed ` +
+      "are adopted by the idempotency probes — never duplicated. Do not assume those tasks succeeded; " +
+      "continue from your last completed turn and re-dispatch only what remains unfinished.";
+    await guard.append({
+      runId,
+      conversationId: LEADER_CONVERSATION,
+      taskId: null,
+      agent: "atlas",
+      role: "user",
+      kind: "resume_note",
+      content: resumeNote,
+    });
+    messages.push({ role: "user", content: resumeNote });
+    meter.addConversation(resumeNote);
+  }
+
   // Phase 1 — loop state: in-memory on a fresh start, DB-derived on resume
   // (task rows + the event stream are the source of truth; the checkpoint
   // only carries what the DB cannot derive — claimed/issues/qcRepairs).
+  if (fromTranscript) {
+    // Stage C — re-emit create events lost to a commit→event-window crash
+    // BEFORE deriving counters, so the resumed loop and the final report
+    // measure the DB as it IS (see reconcileMissingCreateEvents).
+    await reconcileMissingCreateEvents(runId, novelId);
+  }
   const measured: Measured = fromTranscript ? await deriveMeasuredFromEvents(runId) : { ...ZERO_MEASURED };
   const qc: QcLedger = fromTranscript
     ? await deriveQcLedger(novelId, savedState?.qcRepairs ?? {})
@@ -2456,12 +2588,27 @@ export async function executeTool(params: ExecuteToolParams): Promise<ToolResult
       if (!prose) {
         return { ok: false, feed: "create_chapter → error: provide the chapter prose in a ```novel-write block in the SAME turn." };
       }
-      // Phase 1 idempotency probe (create): both interruption shapes that
+      // Phase 1 idempotency probe (create): all interruption shapes that
       // would duplicate a chapter row on re-dispatch (exact title+content
-      // match, or this run already committed a create for the same title).
-      // See findAdoptableChapter.
+      // match; this run's create event for the same title; or the commit→
+      // event window kill — row exists, event lost). See findAdoptableChapter.
       const adoptable = await findAdoptableChapter(params.runId, params.novelId, action.title, prose);
       if (adoptable) {
+        if (adoptable.reconcileEvent) {
+          // Shape 3 — the commit landed but its event never did (executor died
+          // inside the commit→event window). Emit the missing create event so
+          // event-derived counters keep DB parity; without this the final
+          // report would undercount a chapter that IS in the DB.
+          params.measured.chaptersWritten += 1;
+          params.measured.words += adoptable.wordCount;
+          await emitEvent({
+            runId: params.runId,
+            taskId: params.taskId,
+            kind: "write",
+            summary: `Created Chapter ${adoptable.index} "${truncate(action.title, 80)}" — ${adoptable.wordCount.toLocaleString()} words (verified in DB; reconciled from an interrupted commit — adopted on re-dispatch, no duplicate row).`,
+            payload: { artifact: "chapter", chapterId: adoptable.id, index: adoptable.index, words: adoptable.wordCount, op: "create_chapter", title: action.title, reconciled: true },
+          });
+        }
         return {
           ok: true,
           adopted: "write",
@@ -2759,7 +2906,16 @@ async function pauseForApproval(params: {
       return { ok: true, feed: "gate approved → commit verified in DB. Task complete." };
     }
     if (run.status === "paused" || run.status === "cancelled") {
-      return { ok: false, feed: "gate rejected by the author — run paused.", stopped: true };
+      // Feed must state the ACTUAL terminal status — run #2's transcript said
+      // "run paused" for a cancelled run (the audit rows misreported it).
+      return {
+        ok: false,
+        feed:
+          run.status === "cancelled"
+            ? "gate aborted by the author — run cancelled."
+            : "gate rejected by the author — run paused.",
+        stopped: true,
+      };
     }
   }
   return { ok: false, feed: "gate timed out", stopped: true };

@@ -61,7 +61,9 @@ export type MessageKind =
   | "gate_stop" // appended when a gate stop drops out of the loop (audit marker,
   //   NOT replayed into a model context)
   | "wrap_up" // the one-shot budget wrap-up directive (a real wire message)
-  | "resume_note"; // appended by the resume path (audit marker, NOT replayed)
+  | "resume_note"; // appended by the resume path (audit marker; HISTORICAL rows
+  //   are not replayed — the CURRENT resume's note is pushed onto the live
+  //   wire as a user message for the first resumed model turn)
 
 export interface ExecutorLease {
   owner: string;
