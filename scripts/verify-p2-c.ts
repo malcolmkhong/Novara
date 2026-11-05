@@ -22,6 +22,13 @@
 //       fallbackErrorSummary() that names the row and the gap.
 //   CF. Shipped config at rest: budgets.yaml carries enabled=false with the
 //       reachable defaults — the probe pack exists only in the probe script.
+//   G.  P2-d monotone cost guard (design §2.3.1): feed-heavy fixture ⇒ SKIP
+//       (no row, telemetry wording via guardSkipSummary), normal fixture ⇒
+//       PROCEED, candidate preview byte-equals the persisted builder output,
+//       slack = documented constant 256.
+//   §7. Meter observability subfields: compacted/tail/shared always sum to
+//       sections.conversation; injections → shared; provider reconciliation
+//       keeps the sum invariant at billed truth.
 // Usage: bun scripts/verify-p2-c.ts
 // ---------------------------------------------------------------------------
 
@@ -35,17 +42,23 @@ import {
   type ExecutorLease,
 } from "../src/lib/agent/messages";
 import {
+  COMPACTION_SLACK_TOKENS,
+  countWireTokens,
   PROJECTION_VERSION,
   assembleWire,
   buildProjectionBody,
+  decideCut,
   fallbackErrorSummary,
   finalizeWire,
+  guardSkipSummary,
   legacyReplay,
+  monotoneGuardCheck,
   renderProjection,
   writeCompactionSummary,
   type ActiveSummary,
   type SequencedRow,
 } from "../src/lib/agent/wire";
+import { countTokens, createContextMeter, reconcileUsageWithReal } from "../src/lib/agent/context-meter";
 import { getBudgets } from "../src/lib/novara/content";
 
 const db = new PrismaClient();
@@ -403,6 +416,170 @@ async function main() {
         { role: "user", content: "b" },
       ]) &&
         finalizeWire([{ role: "user", content: "  " }, { role: "assistant", content: "keep" }]).length === 1
+    );
+
+    // ------------------------------------------------------------------ G --
+    // P2-d MONOTONE COST GUARD (design §2.3.1): an ENABLED compaction must
+    // never make the NEXT call more expensive than not compacting. Zero-GLM:
+    // both candidate next-call wires are assembled and compared before any
+    // row is written.
+    //   G1  feed-heavy fixture (the live turn-6 shape: the turn-counted tail
+    //       carries multi-K tool feeds) ⇒ SKIP — projected ≥ baseline − slack;
+    //   G2  normal fixture (clips bind, absorption genuinely pays) ⇒ PROCEED;
+    //   G3  the guard's candidate preview is the SAME deterministic builder
+    //       the writer persists (byte-equal — no divergence possible);
+    //   G4  loud-skip telemetry wording names the guard, both token counts,
+    //       and the no-row promise;
+    //   G5  the slack is the documented design constant, not config.
+    // G1 — the live turn-6 shape: short replies, turns 5-6 carry multi-K feeds
+    // so the turn-counted tail outweighs the covered span.
+    const feedHeavy: RowSpec[] = [
+      { kind: "system_note", role: "assistant", content: SYS },
+      { kind: "envelope", role: "user", content: ENV },
+    ];
+    for (let i = 1; i <= 6; i++) {
+      feedHeavy.push({ kind: "reply", role: "assistant", content: reply(i) });
+      feedHeavy.push({
+        kind: "tool_results",
+        role: "user",
+        content: i >= 5 ? `TOOL RESULTS:\n${"FEED-BULK ".repeat(400)}` : feed(i),
+      });
+    }
+    const heavyRows = await persist(runId, "g-heavy", feedHeavy, lease!);
+    const heavyDecision = decideCut(heavyRows, 2, 6);
+    check("G fixture: decideCut finds a cut in the feed-heavy corpus", !!heavyDecision, JSON.stringify(heavyDecision));
+    if (heavyDecision) {
+      const candidate = assembleWire({
+        rows: heavyRows,
+        activeSummaries: [summaryFor(heavyRows, 3, heavyDecision.cut)],
+      });
+      // First compaction cycle: the skip baseline IS the legacy full replay.
+      const heavyGuard = monotoneGuardCheck({
+        baselineMessages: legacyReplay(heavyRows),
+        candidateMessages: candidate.messages,
+      });
+      check(
+        "G1 feed-heavy fixture ⇒ SKIP (projected ≥ baseline − slack, no adoption)",
+        heavyGuard.proceed === false &&
+          heavyGuard.projectedTokens >= heavyGuard.baselineTokens - heavyGuard.slackTokens,
+        `baseline=${heavyGuard.baselineTokens} projected=${heavyGuard.projectedTokens} slack=${heavyGuard.slackTokens}`
+      );
+      check(
+        "G1 skip verdict holds with the meter's own estimator (both wires, same basis)",
+        heavyGuard.projectedTokens === countWireTokens(candidate.messages) &&
+          heavyGuard.baselineTokens === countWireTokens(legacyReplay(heavyRows))
+      );
+      const skipEvent = guardSkipSummary(6, heavyGuard);
+      check(
+        "G4 loud-skip telemetry wording: names the guard, both counts, no-row promise",
+        skipEvent.includes("monotone cost guard") &&
+          skipEvent.includes(String(heavyGuard.projectedTokens)) &&
+          skipEvent.includes(String(heavyGuard.baselineTokens)) &&
+          skipEvent.includes("No summary row written")
+      );
+    }
+    // G2 — normal fixture: rows long enough that the fixed clips (220/160)
+    // bind, so absorption genuinely pays more than the slack.
+    const inflate = (s: string, bulk: string, n: number) => `${s}\n${bulk.repeat(n)}`;
+    const normalRows: RowSpec[] = [
+      { kind: "system_note", role: "assistant", content: SYS },
+      { kind: "envelope", role: "user", content: ENV },
+    ];
+    for (let i = 1; i <= 22; i++) {
+      normalRows.push({ kind: "reply", role: "assistant", content: inflate(reply(i), "PROSE-BULK ", 30) });
+      normalRows.push({ kind: "tool_results", role: "user", content: inflate(feed(i), "DATA-BULK ", 25) });
+    }
+    const normal = await persist(runId, "g-normal", normalRows, lease!);
+    const normalDecision = decideCut(normal, 2, 6);
+    check("G fixture: decideCut finds a cut in the normal corpus", !!normalDecision, JSON.stringify(normalDecision));
+    if (normalDecision) {
+      const candidate = assembleWire({
+        rows: normal,
+        activeSummaries: [summaryFor(normal, 3, normalDecision.cut)],
+      });
+      const normalGuard = monotoneGuardCheck({
+        baselineMessages: legacyReplay(normal),
+        candidateMessages: candidate.messages,
+      });
+      check(
+        "G2 normal fixture ⇒ PROCEED (projected < baseline − slack)",
+        normalGuard.proceed === true &&
+          normalGuard.projectedTokens < normalGuard.baselineTokens - normalGuard.slackTokens,
+        `baseline=${normalGuard.baselineTokens} projected=${normalGuard.projectedTokens} saved=${normalGuard.baselineTokens - normalGuard.projectedTokens}`
+      );
+    }
+    // G3 — the guard's candidate preview is the writer's own builder output.
+    check(
+      "G3 candidate preview byte-equals the persisted row text (same deterministic builder, §2.0)",
+      summaryFor(mxReply, 3, 12).summary === renderProjection(3, 12, buildProjectionBody(mxReply, 3, 12))
+    );
+    // G5 — the slack is the documented design constant, not config.
+    check(
+      "G5 slack is the documented design constant 256 (wire.ts, not budgets.yaml)",
+      COMPACTION_SLACK_TOKENS === 256
+    );
+
+    // ----------------------------------------------------------------- §7 --
+    // Meter observability subfields (design §7): compacted / tail / shared
+    // always sum EXACTLY to sections.conversation; injections land in
+    // `shared`; provider reconciliation scales the buckets to billed truth.
+    const projectedText = summaryFor(mxReply, 3, 12).summary;
+    const subMeter = createContextMeter({
+      modelId: "harness-test",
+      contextWindow: 128000,
+      system: [SYS],
+      novel: [ENV],
+      conversationSub: { compacted: [projectedText], tail: [reply(6), feed(6)], shared: [] },
+    });
+    const snap1 = subMeter.snapshot("harness");
+    check(
+      "§7 sub-buckets present; compacted+tail+shared === sections.conversation",
+      !!snap1.conversationSub &&
+        snap1.conversationSub.compacted > 0 &&
+        snap1.conversationSub.tail > 0 &&
+        snap1.conversationSub.compacted + snap1.conversationSub.tail + snap1.conversationSub.shared ===
+          snap1.sections.conversation,
+      JSON.stringify(snap1.conversationSub)
+    );
+    subMeter.addConversation("[resume] CURRENT session note — shared injection", "shared");
+    subMeter.addConversation(reply(7)); // transcript-bound row — tail by default
+    const snap2 = subMeter.snapshot("harness");
+    check(
+      "§7 addConversation tagging: injection → shared, transcript row → tail; sum invariant holds",
+      !!snap2.conversationSub &&
+        snap2.conversationSub.shared === countTokens("[resume] CURRENT session note — shared injection") &&
+        snap2.conversationSub.tail === snap1.conversationSub!.tail + countTokens(reply(7)) &&
+        snap2.conversationSub.compacted + snap2.conversationSub.tail + snap2.conversationSub.shared ===
+          snap2.sections.conversation
+    );
+    const reconciled = reconcileUsageWithReal(snap2, {
+      promptTokens: 9999,
+      completionTokens: 10,
+      totalTokens: 10009,
+    });
+    check(
+      "§7 provider reconciliation scales sub-buckets to billed truth (sum invariant survives)",
+      !!reconciled.conversationSub &&
+        reconciled.sections.conversation > 0 &&
+        reconciled.conversationSub.compacted +
+          reconciled.conversationSub.tail +
+          reconciled.conversationSub.shared ===
+          reconciled.sections.conversation,
+      JSON.stringify(reconciled.conversationSub)
+    );
+    const untagged = createContextMeter({
+      modelId: "harness-test",
+      contextWindow: 128000,
+      conversation: [reply(1), feed(1)],
+    });
+    const untaggedSnap = untagged.snapshot("harness");
+    check(
+      "§7 untagged meters (members / legacy init) still sum — replay lands in tail",
+      !!untaggedSnap.conversationSub &&
+        untaggedSnap.conversationSub.tail > 0 &&
+        untaggedSnap.conversationSub.compacted === 0 &&
+        untaggedSnap.conversationSub.tail + untaggedSnap.conversationSub.shared ===
+          untaggedSnap.sections.conversation
     );
   } finally {
     await db.agentRun.delete({ where: { id: runId } }).catch(() => undefined);

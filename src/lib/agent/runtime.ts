@@ -104,10 +104,17 @@ import {
 } from "./messages";
 import {
   assembleWire,
+  buildProjectionBody,
+  COMPACTION_SLACK_TOKENS,
   decideCut,
   fallbackErrorSummary,
+  findEnvelopeSeq,
+  guardSkipSummary,
+  monotoneGuardCheck,
+  renderProjection,
   writeCompactionSummary,
   type AssembleWireResult,
+  type WireMessage,
   type WriteSummaryResult,
 } from "./wire";
 
@@ -1421,7 +1428,20 @@ async function leaderLoop(
         tools: atlasPrompt.parts.tools,
         skills: atlasPrompt.parts.skills.map((s) => s.body),
         novel: envelopeRow ? [envelopeRow.content] : [],
-        conversation: assembled.messages.slice(2).map((m) => m.content),
+        // P2-d (design §7): tagged pieces — the projection (if any) is
+        // `compacted`, everything replayed after it is the verbatim `tail`;
+        // the resume_note injection (added below) lands in `shared`.
+        conversationSub: assembled.projected
+          ? {
+              compacted: [assembled.projected.text],
+              tail: assembled.messages.slice(3).map((m) => m.content),
+              shared: [],
+            }
+          : {
+              compacted: [],
+              tail: assembled.messages.slice(2).map((m) => m.content),
+              shared: [],
+            },
       });
       if (assembled.projected) {
         // Persisted proof of the restored wire shape (P1×P2 seam evidence):
@@ -1635,7 +1655,22 @@ async function leaderLoop(
       tools: atlasPrompt.parts.tools,
       skills: atlasPrompt.parts.skills.map((s) => s.body),
       novel: novelParts,
-      conversation: [...assembled.messages.slice(2).map((m) => m.content), ...liveInjections],
+      // P2-d (design §7): tagged pieces metered AS SENT — the projection
+      // block is `compacted`, the verbatim rows after it are `tail`, and the
+      // live per-assembly injections are `shared` (they ride every wire this
+      // session assembles, §2.0.1). On the fallback replay everything after
+      // the anchors is tail (compacted stays 0).
+      conversationSub: assembled.projected
+        ? {
+            compacted: [assembled.projected.text],
+            tail: assembled.messages.slice(3).map((m) => m.content),
+            shared: liveInjections,
+          }
+        : {
+            compacted: [],
+            tail: assembled.messages.slice(2).map((m) => m.content),
+            shared: liveInjections,
+          },
     });
   };
 
@@ -1663,10 +1698,10 @@ async function leaderLoop(
     });
     // M1 carve-out (design §2.0.1): per-assembly injection — appears on this
     // wire AND on every rewire this session performs, regardless of any
-    // compaction projection or cut position. Metered as sent.
+    // compaction projection or cut position. Metered as sent (§7 `shared`).
     liveInjections.push(resumeNote);
     messages.push({ role: "user", content: resumeNote });
-    meter.addConversation(resumeNote);
+    meter.addConversation(resumeNote, "shared");
   }
 
   // Phase 1 — loop state: in-memory on a fresh start, DB-derived on resume
@@ -1730,6 +1765,68 @@ async function leaderLoop(
     const rows = await loadConversation(runId, LEADER_CONVERSATION);
     const decision = decideCut(rows, cc.tailTurns, cc.minCompactableRows);
     if (!decision) return; // too few coverable rows — absorption cannot pay for itself
+
+    // P2-d — MONOTONE COST GUARD (design §2.3.1): an enabled compaction must
+    // never make the NEXT call more expensive than not compacting. Zero-GLM:
+    // assemble BOTH candidate next-call wires from the same canonical rows —
+    //   baseline  = the current live wire (what the next call sends if this
+    //               cycle SKIPS; on the FIRST cycle this IS the legacy full
+    //               replay, so the comparison is "legacy vs projected"
+    //               exactly);
+    //   candidate = the new projection + its verbatim tail + live injections
+    //               (what the next call sends if this cycle ADOPTS).
+    // Adopt only if candidate < baseline − COMPACTION_SLACK_TOKENS; otherwise
+    // skip this cycle LOUDLY — telemetry event, NO summary row written, the
+    // live wire stays untouched. The live-fire lesson (P2-c turn 6: the
+    // turn-counted tail can transiently outweigh the covered span) is exactly
+    // what this guard makes impossible to ship.
+    const envelopeSeq = findEnvelopeSeq(rows);
+    let skipReason: string | null = null;
+    let guardVerdict: ReturnType<typeof monotoneGuardCheck> | null = null;
+    if (envelopeSeq === null) {
+      skipReason = "no envelope row in conversation — nothing to anchor the projection to";
+    } else {
+      const candidateText = renderProjection(
+        envelopeSeq + 1,
+        decision.cut,
+        buildProjectionBody(rows, envelopeSeq + 1, decision.cut)
+      );
+      const candidate = assembleWire({
+        rows,
+        activeSummaries: [
+          { fromSeq: envelopeSeq + 1, toSeq: decision.cut, summary: candidateText },
+        ],
+      });
+      if (candidate.fallbackWarnings.length > 0) {
+        skipReason = `candidate assembly fell back — ${candidate.fallbackWarnings.join(" | ")}`;
+      } else {
+        guardVerdict = monotoneGuardCheck({
+          baselineMessages: messages,
+          candidateMessages: [
+            ...candidate.messages,
+            ...liveInjections.map((content) => ({ role: "user" as const, content })),
+          ],
+        });
+        if (!guardVerdict.proceed) skipReason = guardSkipSummary(turn, guardVerdict);
+      }
+    }
+    if (skipReason !== null) {
+      console.warn(`[compaction] leader turn ${turn}: skip — ${skipReason}`);
+      await emitEvent({
+        runId,
+        kind: "message",
+        summary: truncate(skipReason, 400),
+        payload: {
+          guard: "monotone-cost",
+          skipped: true,
+          baselineTokens: guardVerdict?.baselineTokens ?? null,
+          projectedTokens: guardVerdict?.projectedTokens ?? null,
+          slackTokens: guardVerdict?.slackTokens ?? COMPACTION_SLACK_TOKENS,
+        },
+      });
+      return;
+    }
+
     let written: WriteSummaryResult;
     try {
       written = await writeCompactionSummary({

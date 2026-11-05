@@ -29,6 +29,7 @@
 
 import { Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
+import { countTokens } from "./context-meter";
 import { LeaseLostError, type ExecutorLease, type MessageKind } from "./messages";
 
 // ---------------------------------------------------------------------------
@@ -324,6 +325,78 @@ export function assembleWire(params: {
  */
 export function fallbackErrorSummary(warnings: string[]): string {
   return `Context compaction fell back to the FULL raw transcript replay — ${warnings.join(" | ")}`;
+}
+
+// ---------------------------------------------------------------------------
+// Monotone cost guard (P2-d, design §2.3.1)
+// ---------------------------------------------------------------------------
+
+/**
+ * The margin the candidate must beat the skip-baseline by before a summary
+ * row is written and the live wire is rewired. Below this saving a projection
+ * rewrite is churn (a row write + a rewire + telemetry noise inside the
+ * estimator's own precision band) — the cycle skips instead. Documented
+ * constant, NOT config: changing it is a design-doc event (§2.3.1).
+ */
+export const COMPACTION_SLACK_TOKENS = 256;
+
+/** Token estimate for a full next-call wire — the meter's own estimator. */
+export function countWireTokens(messages: WireMessage[]): number {
+  return messages.reduce((sum, m) => sum + countTokens(m.content), 0);
+}
+
+export interface GuardVerdict {
+  /** true ⇒ write the summary row and rewire; false ⇒ skip this cycle loudly. */
+  proceed: boolean;
+  baselineTokens: number;
+  projectedTokens: number;
+  slackTokens: number;
+}
+
+/**
+ * MONOTONE COST GUARD (design §2.3.1): an ENABLED compaction must never make
+ * the NEXT model call more expensive than not compacting. Zero-GLM: both
+ * candidate next-call wires are assembled in memory and compared with the
+ * meter's estimator —
+ *   baseline  = the wire that would be sent if this cycle SKIPS (the current
+ *               live wire — on the FIRST compaction cycle this IS the legacy
+ *               full replay, so the comparison is "legacy vs projected"
+ *               exactly; on re-compaction cycles it is the STRONGER, correct
+ *               baseline that makes the monotone promise literal);
+ *   candidate = the wire that would be sent if this cycle ADOPTS (new
+ *               projection + its verbatim tail + live injections).
+ * Adopt only if candidate < baseline − slack. Otherwise the caller skips
+ * LOUDLY (telemetry event, NO row written) and the live wire stays untouched.
+ * Pure + deterministic: same inputs ⇒ same verdict, zero GLM, no I/O.
+ */
+export function monotoneGuardCheck(params: {
+  baselineMessages: WireMessage[];
+  candidateMessages: WireMessage[];
+  slackTokens?: number;
+}): GuardVerdict {
+  const slackTokens = params.slackTokens ?? COMPACTION_SLACK_TOKENS;
+  const baselineTokens = countWireTokens(params.baselineMessages);
+  const projectedTokens = countWireTokens(params.candidateMessages);
+  return {
+    proceed: projectedTokens < baselineTokens - slackTokens,
+    baselineTokens,
+    projectedTokens,
+    slackTokens,
+  };
+}
+
+/**
+ * Single owner of the loud-skip telemetry wording (harness-asserted, the
+ * fallbackErrorSummary pattern): the caller emits this as a kind="message"
+ * AgentEvent when monotoneGuardCheck refuses the cycle.
+ */
+export function guardSkipSummary(turn: number, v: GuardVerdict): string {
+  return (
+    `Context compaction skipped after leader turn ${turn} — monotone cost guard: projected wire ` +
+    `≈ ${v.projectedTokens} tok ≥ skip-baseline ${v.baselineTokens} tok − slack ${v.slackTokens} tok ` +
+    "(the turn-counted tail outweighs the covered span this cycle). " +
+    "No summary row written; the live wire stays unchanged."
+  );
 }
 
 // ---------------------------------------------------------------------------

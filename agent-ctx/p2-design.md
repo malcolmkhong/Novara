@@ -1,8 +1,10 @@
 # Novara Phase 2 — Context Compaction Design (CORRECTED, post-review)
 
-Status: **v3 — supersedes the original proposal's §3/§8.** Review points 1–3 are
-folded in (v2), and the three P2-c gate amendments M1/M2/M3 (reviewer-confirmed)
-are now folded into §2 below — P2-c proceeds under this document.
+Status: **v4 — supersedes v3.** v2 folded review points 1–3; v3 folded the
+P2-c gate amendments M1/M2/M3; **v4 folds the P2-c acceptance additions: the
+MONOTONE COST GUARD (§2.3.1, also stated as a fourth eligibility gate in §1),
+the §7 meter observability subfields, and the final 1:1-adjacency decision
+(risk register #2)** — P2-d proceeds under this document.
 
 Review deltas honored:
 1. **STRUCTURAL** — compaction eligibility decoupled from `contextSpec` (§1 below).
@@ -11,6 +13,9 @@ Review deltas honored:
 3. **TIGHTENING** — §8 arithmetic demoted to predictions; all projected caps and
    Σprompt reductions are measured from the P2-b/P2-c counterfactual harness and
    pasted as numbers in those stage reports (§3 below).
+4. **P2-c ACCEPTANCE (v4)** — enabled compaction must never make the next call
+   more expensive than not compacting: both candidate wires are assembled and
+   compared at `maybeCompact` time, zero-GLM, before anything is written (§2.3.1).
 
 ---
 
@@ -30,7 +35,12 @@ Phase 2 (all Phase 2 runs are v1; the v2 wire flip is Phase 3's first step).
     CJK-heavy corpus ~1.4× vs the provider's billing, so the estimate alone
     can never be trusted for a threshold decision — the reconciliation
     (context-meter.ts) exists for exactly this reason, AND
-  - coverable rows (envelope-boundary → candidate cut) ≥ `minCompactableRows`.
+  - coverable rows (envelope-boundary → candidate cut) ≥ `minCompactableRows`,
+    AND
+  - **the MONOTONE COST GUARD clears (§2.3.1)** — the candidate projected
+    wire must be strictly cheaper than the skip baseline by more than the
+    documented slack; a compaction that would make the NEXT call more
+    expensive than not compacting is not a compaction, it is a cost increase.
   `contextSpec` plays **no** role in eligibility.
 - `contextSpec` governs ONLY system-prompt delivery on the wire:
   - `"v1"` — system card replayed as the fake assistant message (`system_note`
@@ -229,6 +239,47 @@ in P2-c) turns into an `AgentEvent(kind="error")` naming the row and the gap.
   appended, before the next model call) — never mid-turn, never concurrent with
   a fenced append of the same conversation.
 
+### 2.3.1 Monotone cost guard — "compaction must never cost more" (BINDING, v4)
+
+The P2-c live probe measured the failure mode this guard makes impossible to
+ship: with `tailTurns` counted in TURNS, a tail of heavy tool-feed turns can
+transiently OUTWEIGH the covered span — the first projected wire billed MORE
+than the uncompacted wire (measured 8726 → 12345 tok on turn 6). "It converges
+once the heavy feeds enter the cover" is TRUE but not acceptable shipped
+behavior: an enabled compaction must never make the NEXT call more expensive
+than not compacting.
+
+> **Guard rule (§2.3.1):** at `maybeCompact` time — zero-GLM, before ANY row is
+> written — assemble BOTH candidate next-call wires from the same canonical
+> rows and compare them with the meter's estimator (same basis on both sides):
+> - **baseline (skip)** = the wire the next call sends if this cycle SKIPS —
+>   the current live wire. On the FIRST compaction cycle this IS the legacy
+>   full replay, so the comparison is "legacy vs projected" exactly; on
+>   re-compaction cycles it is the STRONGER baseline that makes the monotone
+>   promise literal (the legacy raw replay could mask a wire that GROWS
+>   against the current compacted wire — the current wire cannot).
+> - **candidate (adopt)** = the new projection + its verbatim tail + live
+>   per-assembly injections.
+>
+> **Adopt only if `candidate < baseline − COMPACTION_SLACK_TOKENS` (256, a
+> documented constant in `src/lib/agent/wire.ts`, not config). Otherwise the
+> cycle SKIPS LOUDLY: a telemetry event (kind "message", payload
+> `guard: "monotone-cost", skipped: true` + both token counts) via
+> `guardSkipSummary()` — the single owner of that wording — plus
+> `console.warn`; NO summary row is written; the live wire stays untouched.**
+
+Properties, all intended:
+- **Zero-GLM and deterministic** — pure functions (`monotoneGuardCheck`,
+  `countWireTokens` in wire.ts); same inputs ⇒ same verdict.
+- **No divergence between preview and write** — the guard's candidate text is
+  built by the SAME `buildProjectionBody`/`renderProjection` the fenced writer
+  persists; on adoption the bytes are identical (§2.0 determinism).
+- **The guard ordering is fixed**: guard → write → rewire. A refused cycle
+  never touches `ContextSummary`.
+- Harness-asserted (verify-p2-c §G): feed-heavy fixture ⇒ SKIP (the measured
+  turn-6 shape), normal fixture (clips bind) ⇒ PROCEED, wording + constant
+  asserted.
+
 ---
 
 ## §3 — §8 arithmetic demoted to predictions (TIGHTENING)
@@ -331,6 +382,76 @@ P2-stage assertions:
   projection + tail + injected markers, transcript gapless, counters intact;
   **usage semantics** — post-compaction usage events reflect the projected
   wire (no retroactive inflation).
+- **P2-d (v4 additions, same harness `verify-p2-c.ts`):** **§G** — the monotone
+  cost guard: feed-heavy fixture (the measured turn-6 shape) ⇒ SKIP with NO row
+  written + `guardSkipSummary` telemetry wording asserted; normal fixture
+  (fixed clips bind) ⇒ PROCEED; candidate preview byte-equals the persisted
+  builder output; slack = documented constant 256. **§7** — meter
+  observability subfields: compacted/tail/shared always sum EXACTLY to
+  `sections.conversation`; per-assembly injections land in `shared`;
+  provider reconciliation scales the buckets and the sum invariant survives at
+  billed truth; untagged meters (members/legacy init) attribute the replay to
+  `tail`.
 
 GLM discipline: P2-c = 1 short flash run with lowered threshold; everything
-else zero-GLM.
+else zero-GLM. P2-d = ZERO GLM (harness + wiring only).
+
+---
+
+## §7 — Meter observability subfields (P2-d)
+
+The Context Usage panel's rendering is UNCHANGED (P2-d is additive telemetry,
+no UI diff). The usage event payload gains ONE optional field,
+`conversationSub`, splitting the conversation section into compaction-relevant
+buckets that ALWAYS sum exactly to `sections.conversation` (harness-asserted,
+including after provider reconciliation scales them to billed truth):
+
+- **`compacted`** — the projection block (the deterministic compaction
+  summary). 0 on every wire without one (disabled replay, fallback replay,
+  every member conversation).
+- **`tail`** — verbatim tail rows replayed after the projection (the whole
+  replay when no projection is present — disabled and fallback paths
+  attribute everything here).
+- **`shared`** — per-assembly injections (the M1 carve-out set: the current
+  resume's `resume_note` and future resume-time board state): they ride EVERY
+  wire this session assembles regardless of compaction, so their cost is
+  attributed to NEITHER compaction bucket — the shared attribution.
+
+Implementation: `MeterInit.conversationSub` (tagged init pieces) +
+`addConversation(text, tag)` (default `tail` = transcript-bound rows;
+`shared` for injections). `reconcileUsageWithReal` scales the buckets with the
+same factor as the sections and folds rounding drift into the largest bucket,
+so the sum invariant survives reconciliation to the provider's billed total.
+Purpose: post-run analysis can answer "what did compaction actually cost vs
+save on this conversation" from persisted usage events alone — no replay
+needed.
+
+---
+
+## §8 — P2 risk register (final state, v4)
+
+1. **Trigger honesty** — CLOSED (P2-c). Threshold pins to the
+   PROVIDER-RECONCILED prompt tokens (billed truth); the raw estimate is
+   fallback only. Measured lesson: the estimator undercounts this CJK-heavy
+   corpus ~1.4× vs billing.
+2. **Adjacency (1:1 user pairs)** — CLOSED (final decision, v4). Consecutive
+   user messages accepted, provider-tolerated, single owner = finalizeWire,
+   no merge.
+3. **Transient wire increase on compaction** — CLOSED (P2-d, §2.3.1). The
+   monotone cost guard refuses any cycle whose candidate wire is not cheaper
+   than the skip baseline by more than the slack; refused cycles skip loudly
+   with telemetry and write nothing.
+4. **Corrupt chain state / silent content loss** — CLOSED (P2-c). Contiguity
+   violations fall back to the full raw replay + fail loud
+   (`fallbackErrorSummary` → `AgentEvent(kind="error")`); P2002 against a
+   superseded row refuses (M3); the absorb-input sentinel proves projections
+   never consume prior summary text.
+5. **Estimate vs billed divergence in the meter** — CLOSED (P4 reconciliation
+   + P2-d §7). Total = billed truth; sections/sub-buckets = estimate scaled to
+   it, sum invariants asserted.
+6. **GLM discipline** — HELD. P2-c spent exactly its 1 permitted flash run
+   (plus its honest retry cost — see the P2-d report's budget note); P2-d
+   spends zero.
+7. **Compaction never touches canonical history** — HELD by construction
+   (read-side projection + derived rows; AgentMessage append-only, dense,
+   immutable; harness-asserted transcript-untouched checks).

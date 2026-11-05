@@ -98,6 +98,16 @@ export interface ContextUsage {
     completionTokens: number;
     totalTokens: number;
   } | null;
+  /**
+   * P2-d (design §7) — observability split of the conversation section into
+   * compaction-relevant buckets; the three values always sum to
+   * `sections.conversation`. `compacted` = the projection block;
+   * `tail` = verbatim tail rows; `shared` = per-assembly injections that ride
+   * every wire regardless of compaction. Absent (null) only on payloads
+   * persisted before P2-d; the Context Usage panel rendering is unchanged —
+   * this is telemetry data, not a UI change.
+   */
+  conversationSub?: { compacted: number; tail: number; shared: number } | null;
 }
 
 // ---------------------------------------------------------------------------
