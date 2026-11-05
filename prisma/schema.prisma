@@ -542,8 +542,21 @@ model AgentRun {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  // Phase 1 resume — leader-loop cursor + scalar state (turnsUsed,
+  // taskCounter, delegateCount, claimed, issues, qcRepairs, impactReport).
+  // Serialized by lib/agent/messages.ts; null = fresh run / nothing
+  // checkpointed yet. Written via lease-fenced CAS only.
+  stateJson String?
+  // Executor lease (lib/agent/messages.ts): CAS-claimed, heartbeat-renewed,
+  // epoch-fenced so a stale executor can never advance run state or append
+  // to a conversation it no longer owns.
+  leaseOwner      String?
+  leaseHeartbeatAt DateTime?
+  leaseEpoch      Int      @default(0)
+
   tasks  AgentTask[]
   events AgentEvent[]
+  messages AgentMessage[]
 
   @@index([novelId, status])
   @@index([updatedAt])
@@ -590,6 +603,43 @@ model AgentEvent {
   createdAt DateTime @default(now())
 
   @@index([runId, createdAt])
+}
+
+// ---------------------------------------------------------------------------
+// AgentMessage (Phase 1) — CANONICAL conversation transcript, one row per
+// chat message, FULL verbatim content (AgentEvent stays the truncated UI
+// event stream and is never replayed into a model context). One conversation
+// per leader (conversationId="leader") and one per member task
+// (conversationId=taskId), isolated by the (runId, conversationId, seq)
+// unique index. seq is allocated inside the same transaction as the insert
+// (SQLite single-writer serialization) and the unique index is the hard
+// backstop — duplicates are impossible to commit, not merely unlikely.
+// Restore order is seq ASC only; createdAt is never used for ordering.
+// ---------------------------------------------------------------------------
+
+model AgentMessage {
+  id             String   @id @default(cuid())
+  runId          String
+  run            AgentRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  // Owning member task; null on leader conversation rows.
+  taskId         String?
+  // Conversation key within the run: "leader" | taskId.
+  conversationId String
+  // Conversation owner: atlas | sage | nova | prism | forge
+  agent          String
+  // LLM chat role of this message: "user" | "assistant"
+  role           String
+  // 1-based monotonic per conversation.
+  seq            Int
+  // FULL verbatim content — never truncated (canonical transcript).
+  content        String
+  // system_note | envelope | reply | tool_results | repair | gate_stop | resume_note
+  kind           String
+  createdAt      DateTime @default(now())
+
+  @@unique([runId, conversationId, seq])
+  @@index([runId, conversationId, seq])
+  @@index([taskId])
 }
 
 // Phase 5 telemetry — which skills were injected into which member task.
