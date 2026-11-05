@@ -85,6 +85,8 @@ import {
   renderSnapshot,
   type StorySnapshotData,
 } from "./snapshot";
+// P4 — member snapshot slicing (see executeTask novelParts comment).
+import { buildMemberSnapshotSlice } from "./snapshot-slice";
 import {
   appendAgentMessages,
   claimLease,
@@ -2351,7 +2353,12 @@ async function executeTask(params: {
   const novelParts: string[] = [
     "",
     "STORY SNAPSHOT (measured at run start; use read tools for fresher data):",
-    renderSnapshot(snapshot),
+    // P4 (O1, A2/A4) — task-specific member snapshot slice via the declared
+    // map (lib/agent/snapshot-slice.ts): gated on budgets.contextSlicing
+    // (shipped false ⇒ FULL bytes, pre-P4-identical), fail-open on unknown
+    // shapes, A2 guard force-includes brief-referenced sections whole. The
+    // pinned block below stays outside the slice entirely (A3 — always whole).
+    buildMemberSnapshotSlice(snapshot, task, { enabled: budgets.contextSlicing.enabled }),
   ];
   if (params.pinnedContext) {
     novelParts.push("", params.pinnedContext);

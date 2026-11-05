@@ -109,6 +109,14 @@ export const budgetsSchema = z.object({
     tailTurns: z.number().int().min(1).max(64),
     minCompactableRows: z.number().int().min(2),
   }),
+  // Phase 4 — member snapshot slicing (agent-ctx/phase4-proposal.md, O1).
+  // enabled=false ships inert exactly like compaction: the runtime passes the
+  // flag to buildMemberSnapshotSlice and every member gets the FULL snapshot
+  // byte-identical to pre-P4. Production enablement is an explicit product
+  // decision — the first optimization that changes model-visible bytes.
+  contextSlicing: z.object({
+    enabled: z.boolean(),
+  }),
 });
 
 export type Budgets = z.infer<typeof budgetsSchema>;
@@ -168,6 +176,9 @@ export const DEFAULT_BUDGETS: Budgets = {
     triggerTokens: 6_000,  // reachable default (§8-predicted leader ceiling ~9–10K; 24K could never fire)
     tailTurns: 8,          // verbatim turns kept after the cut
     minCompactableRows: 12, // never compact below this many coverable rows
+  },
+  contextSlicing: {
+    enabled: false, // Phase 4 ships inert (A4 rollback knob) — flipped only in a P4 probe run
   },
 };
 

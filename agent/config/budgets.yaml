@@ -79,3 +79,20 @@ contextCompaction:
   #   enabled: true, triggerTokens: 4000, tailTurns: 2, minCompactableRows: 6
   # — the only lowered-threshold values the one live flash run ever saw; the
   # harness asserts the shipped file never carries them at rest.
+
+# Phase 4 — member snapshot slicing (agent-ctx/phase4-proposal.md, O1 + A4).
+# Gated HERE, shipped inert exactly like compaction: when false, every member
+# envelope carries the FULL story snapshot byte-identical to pre-P4. The
+# declared per-shape slice map lives in src/lib/agent/snapshot-slice.ts with
+# its A2 conservative-by-default rule + deterministic brief-reference guard.
+# Production enablement is an explicit product decision (first optimization
+# that changes model-visible bytes).
+contextSlicing:
+  # SHIPPED STATE (P4): enabled=false — the P4 harness proves the machinery
+  # (structure, floor byte-identity, guard, fail-open); flipping it on for
+  # real runs is a product decision, not a phase side-effect.
+  enabled: false
+  # P4 PROBE PACK (temporary, already restored after the A1 live-fire run):
+  #   enabled: true
+  # — the only value the one free flash acceptance run ever saw; the harness
+  # asserts the shipped file never carries it at rest.
