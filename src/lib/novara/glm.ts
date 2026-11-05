@@ -25,6 +25,7 @@ import {
   recordGlobalUsage,
   type RealUsage,
 } from "@/lib/usage/ledger";
+import { recordUsageCall, type UsageCallScope } from "@/lib/usage/usage-store";
 
 export type ChatMessage = { role: "assistant" | "user"; content: string };
 
@@ -101,6 +102,12 @@ export async function glmChat(opts: {
    * default with thinking disabled.
    */
   sdkParams?: SdkModelParams;
+  /**
+   * P5 — scope links for the persisted usage ledger (UsageCall row). The
+   * request-side model id comes from sdkParams.model when present, else the
+   * row records "gateway-default" (never a guessed registry id).
+   */
+  ledger?: UsageCallScope;
 }): Promise<GlmChatResult> {
   const budgets = getBudgets();
   const retries = budgets.glm.retryAttempts;
@@ -129,6 +136,14 @@ export async function glmChat(opts: {
         // nothing — the ledger only ever holds measured calls.
         const usage = extractRealUsage(completion);
         recordGlobalUsage(opts.surface ?? "other", usage);
+        // P5 — persist the per-call row (single source of truth from P5-b;
+        // fire-and-forget, measured-only, null usage records nothing).
+        recordUsageCall({
+          surface: opts.surface ?? "other",
+          modelId: opts.sdkParams?.model,
+          usage,
+          ...opts.ledger,
+        });
         return { text: content, usage };
       } finally {
         releaseSlot();

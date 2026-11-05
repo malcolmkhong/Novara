@@ -1742,6 +1742,8 @@ async function leaderLoop(
       signal,
       sdkParams: modelCtx.sdk,
       surface: "agent",
+      // P5 — the leader call's ledger scope (run + novel, leader conversation).
+      ledger: { runId, novelId, conversationId: "leader" },
     });
     lastCallRealTokens = usage?.promptTokens ?? lastCallRealTokens;
     emitUsageEvent(runId, meter, `atlas · turn ${turn}`, usage);
@@ -2434,6 +2436,8 @@ async function executeTask(params: {
       signal,
       sdkParams: params.model.sdk,
       surface: "agent",
+      // P5 — the member call's ledger scope (per-run + per-member-task).
+      ledger: { runId, novelId, taskId: task.id, conversationId: task.id },
     });
     callCounter += 1;
     emitUsageEvent(runId, meter, `${task.key} · ${assignee} · turn ${callCounter}`, usage);

@@ -76,6 +76,10 @@ export interface CreateNovelInput {
   outlineBeats?: { title: string; summary?: string }[];
   // Phase 9 — written at creation by the wizard (构想快照 verbatim baseline).
   conceptSnapshot?: string;
+  // P5 — the wizard session id (client crypto.randomUUID) that generated
+  // this foundation; persisted as a UsageProvenance link so the session's
+  // ledger rows retro-tag onto the created novel. Manual creates omit it.
+  wizardSessionId?: string;
 }
 
 export function createNovel(
@@ -103,6 +107,9 @@ export interface WizardGenerateInput {
   premise?: string;
   characters?: string;
   targetWords?: number;
+  // P5 — same session id on every section call of one wizard session, and
+  // on the CreateNovelInput that culminates — the retro-tag thread.
+  sessionId?: string;
 }
 
 export function generateWizardSection(

@@ -18,6 +18,7 @@ import type { Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
 import { capForGlm, extractJson, withTimeout } from "@/lib/ai-heuristics";
 import { extractRealUsage, recordGlobalUsage } from "@/lib/usage/ledger";
+import { recordUsageCall } from "@/lib/usage/usage-store";
 import {
   buildDelegationRepairMessages,
   buildLeaderSystemPrompt,
@@ -117,7 +118,13 @@ export async function glmText(
         `[team/${label}]`,
       );
       // P4 — feed the app-wide usage ledger (measured calls only).
-      recordGlobalUsage("ai-team", extractRealUsage(completion));
+      const usage = extractRealUsage(completion);
+      recordGlobalUsage("ai-team", usage);
+      // P5 — persist the per-call row (surface DORMANT — TEAM-1 in
+      // agent-ctx/risk-register.md: its backend tables are absent from the
+      // current schema, so this path cannot fire today; instrumentation kept
+      // at parity so a revival is ledger-visible from the first call).
+      recordUsageCall({ surface: "ai-team", usage });
       return extractCompletionContent(completion);
     } catch (error) {
       console.error(`[team/${label}] GLM request failed:`, error);

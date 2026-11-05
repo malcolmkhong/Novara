@@ -138,12 +138,17 @@ export async function POST(req: Request, ctx: RouteContext) {
       };
 
       let accumulated = "";
-      const outcome = await streamGlmProse(messages, {
-        onDelta: (text) => {
-          accumulated += text;
-          send({ type: "delta", text });
+      const outcome = await streamGlmProse(
+        messages,
+        {
+          onDelta: (text) => {
+            accumulated += text;
+            send({ type: "delta", text });
+          },
         },
-      });
+        // P5 — prose-stream spend lands on the novel in the ledger.
+        { novelId: id },
+      );
 
       const prose = stripProseArtifacts(accumulated);
       const wordCount = chineseWordCount(prose);

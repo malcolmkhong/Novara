@@ -101,6 +101,8 @@ export async function POST(req: Request, ctx: RouteContext) {
     const review = await glmJson(buildReviewMessages(brief), {
       label: "review",
       parse: parseReviewResponse,
+      // P5 — review spend lands on the novel in the ledger.
+      ledger: { novelId: id },
     });
     if (review === null) {
       return NextResponse.json(

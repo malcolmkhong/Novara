@@ -213,6 +213,8 @@ export async function sedimentChapterCore(chapterId: string): Promise<{
     ],
     tag: "AI sediment",
     surface: "sediment",
+    // P5 — sediment spend lands on the novel in the ledger.
+    ledger: { novelId: novel.id },
   });
   const parsed = parseSedimentLines(raw);
   if (!parsed.summary) {

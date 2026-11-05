@@ -194,6 +194,11 @@ export const createNovelSchema = z.object({
   // team" wizard: the logline/premise/cast/outline the author confirmed,
   // kept verbatim as the audit baseline (构想/构想快照.md analog).
   conceptSnapshot: z.string().max(100000).optional(),
+  // P5 — the wizard session id that generated this novel's foundation (the
+  // client's crypto.randomUUID). Written as a UsageProvenance link so the
+  // wizard session's ledger rows retro-tag onto the created novel. Absent on
+  // manual creates — nothing to link.
+  wizardSessionId: z.string().trim().min(8).max(100).optional(),
 });
 
 export const updateNovelSchema = createNovelSchema

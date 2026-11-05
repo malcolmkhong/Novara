@@ -245,6 +245,8 @@ export async function POST(req: Request) {
         ],
         tag: variantCount > 1 ? `AI draft ${String.fromCharCode(65 + i)}` : "AI draft",
         surface: "draft",
+        // P5 — draft spend lands on the novel in the ledger.
+        ledger: { novelId: novel.id },
       });
       variants.push({ content, wordCount: countWords(content) });
     }

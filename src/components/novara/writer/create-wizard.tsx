@@ -155,6 +155,11 @@ export function CreateWizard({
   const [fields, setFields] = useState<WizardState>(EMPTY_STATE);
   const [generating, setGenerating] = useState<WizardField | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  // P5 — one usage-ledger session id per wizard session: every GLM section
+  // call and the final create carry it, so the ledger retro-tags the whole
+  // session's consumption onto the novel it culminates in. Regenerated on
+  // every open (a fresh wizard is a fresh correlation thread).
+  const [wizardSessionId, setWizardSessionId] = useState<string | null>(null);
 
   // Fresh wizard every time it opens.
   useEffect(() => {
@@ -163,6 +168,11 @@ export function CreateWizard({
       setFields(EMPTY_STATE);
       setGenerating(null);
       setSubmitting(false);
+      setWizardSessionId(
+        typeof crypto !== "undefined" && "randomUUID" in crypto
+          ? crypto.randomUUID()
+          : `wizard-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+      );
     }
   }, [open]);
 
@@ -194,6 +204,7 @@ export function CreateWizard({
         premise: fields.premise.trim() || undefined,
         characters: field === "beats" ? fields.characters.trim() || undefined : undefined,
         targetWords: parseTarget(),
+        sessionId: wizardSessionId ?? undefined,
       });
       setFields((f) => {
         switch (field) {
@@ -256,6 +267,7 @@ export function CreateWizard({
       ...(worldEntries.length > 0 ? { worldEntries } : {}),
       ...(outlineBeats.length > 0 ? { outlineBeats } : {}),
       ...(conceptSnapshot ? { conceptSnapshot } : {}),
+      ...(wizardSessionId ? { wizardSessionId } : {}),
     };
 
     let ok = false;

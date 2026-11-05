@@ -20,6 +20,7 @@ import {
   extractRealUsage,
   recordGlobalUsage,
 } from "@/lib/usage/ledger";
+import { recordUsageCall, type UsageCallScope } from "@/lib/usage/usage-store";
 
 export interface GlmMessage {
   role: "assistant" | "user";
@@ -83,6 +84,12 @@ interface GlmJsonOptions<T> {
    * extractJson/repairJson internally.
    */
   parse: (raw: string) => T | null;
+  /**
+   * P5 — persisted-ledger scope links. Pre-creation init passes a
+   * correlationId (retro-tagged at novel creation); novel-scoped routes pass
+   * novelId directly.
+   */
+  ledger?: UsageCallScope;
 }
 
 /**
@@ -106,7 +113,10 @@ export async function glmJson<T>(
       `[novel/${options.label}]`,
     );
     // P4 — feed the app-wide usage ledger (measured calls only).
-    recordGlobalUsage("studio", extractRealUsage(completion));
+    const usage = extractRealUsage(completion);
+    recordGlobalUsage("studio", usage);
+    // P5 — persist the per-call row (fire-and-forget, measured-only).
+    recordUsageCall({ surface: "studio", usage, ...options.ledger });
     return extractCompletionContent(completion);
   };
 
@@ -190,6 +200,8 @@ function toBytes(raw: unknown): Uint8Array | null {
 export async function streamGlmProse(
   messages: GlmMessage[],
   callbacks: StreamCallbacks,
+  /** P5 — persisted-ledger scope links (novel-scoped write route). */
+  ledger?: UsageCallScope,
 ): Promise<StreamOutcome> {
   let full = "";
   const controller = new AbortController();
@@ -250,6 +262,8 @@ export async function streamGlmProse(
     }
 
     recordGlobalUsage("studio", streamUsage);
+    // P5 — persist the per-call row (fire-and-forget, measured-only).
+    recordUsageCall({ surface: "studio", usage: streamUsage, ...ledger });
     return { text: full, completed };
   } catch (error) {
     const aborted = controller.signal.aborted;

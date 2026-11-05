@@ -1,6 +1,7 @@
 import { jsonrepair } from "jsonrepair";
 import { glmChat } from "./glm";
 import { parseLooseJson } from "./parse-json";
+import type { UsageCallScope } from "@/lib/usage/usage-store";
 
 /**
  * GLM JSON helper: asks the model for a strict JSON object, then parses and
@@ -19,6 +20,8 @@ export async function chatJson<T>(opts: {
   /** Zod-style validator: parse the raw JSON, throw to trigger a retry. */
   parse: (json: unknown) => T;
   attempts?: number;
+  /** P5 — persisted-ledger scope links (e.g. novelId for review calls). */
+  ledger?: UsageCallScope;
 }): Promise<T> {
   const attempts = opts.attempts ?? 2;
   const messages = [
@@ -29,7 +32,7 @@ export async function chatJson<T>(opts: {
 
   for (let attempt = 0; attempt < attempts; attempt++) {
     try {
-      const { text: raw } = await glmChat({ messages, tag: opts.tag, surface: "review" });
+      const { text: raw } = await glmChat({ messages, tag: opts.tag, surface: "review", ledger: opts.ledger });
       return opts.parse(parseLooseJson(raw));
     } catch (error) {
       lastError = error;

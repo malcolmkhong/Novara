@@ -2,6 +2,7 @@ import { db } from "@/lib/db";
 import { createNovelSchema } from "@/lib/novara/schemas";
 import { parseBody, validationError } from "@/lib/novara/api-helpers";
 import { toSummary } from "@/lib/novara/summary";
+import { recordProvenanceLink } from "@/lib/usage/usage-store";
 
 export const dynamic = "force-dynamic";
 
@@ -25,7 +26,7 @@ export async function POST(req: Request) {
   const schema = createNovelSchema.safeParse(parsed.data);
   if (!schema.success) return validationError(schema.error);
 
-  const { title, genre, synopsis, targetWords, characters, worldEntries, outlineBeats, conceptSnapshot } =
+  const { title, genre, synopsis, targetWords, characters, worldEntries, outlineBeats, conceptSnapshot, wizardSessionId } =
     schema.data;
 
   const novel = await db.novel.create({
@@ -91,6 +92,13 @@ export async function POST(req: Request) {
         summary: b.summary ?? "",
       })),
     });
+  }
+
+  // P5 — the retro-tag link (Ruling: provenance created at novel creation):
+  // the wizard session's ledger rows (recorded under correlationId) now
+  // belong to the created novel. Idempotent per (sessionId, novelId).
+  if (wizardSessionId) {
+    recordProvenanceLink("wizard", wizardSessionId, novel.id);
   }
 
   return Response.json({ novel: toSummary(novel) }, { status: 201 });

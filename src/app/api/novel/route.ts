@@ -3,6 +3,7 @@ import { z } from "zod";
 
 import { db } from "@/lib/db";
 import { glmJson } from "@/lib/novel/glm";
+import { recordProvenanceLink } from "@/lib/usage/usage-store";
 import {
   buildInitMessages,
   parseInitResponse,
@@ -94,6 +95,11 @@ export async function POST(req: Request) {
   }
   const input = parsedBody.data;
 
+  // P5 — request-scoped correlation id: every GLM call of this init request
+  // records it; the provenance link (written after db.novel.create below)
+  // retro-tags all of them onto the created novel. Zero client changes.
+  const ledgerCorrelationId = crypto.randomUUID();
+
   try {
     // GLM init: 设定集（世界观/力量体系/金手指/角色/反派）+ 总纲（分卷）。
     const parsed = await glmJson<InitParsed>(
@@ -105,7 +111,7 @@ export async function POST(req: Request) {
         volumeCount: input.volumeCount,
         platform: input.platform,
       }),
-      { label: "init", parse: parseInitResponse },
+      { label: "init", parse: parseInitResponse, ledger: { correlationId: ledgerCorrelationId } },
     );
 
     if (parsed === null) {
@@ -152,6 +158,10 @@ export async function POST(req: Request) {
       },
       select: { id: true },
     });
+
+    // P5 — the retro-tag link: this init request's ledger rows (recorded
+    // under correlationId, pre-novel) now belong to the created novel.
+    recordProvenanceLink("studio", ledgerCorrelationId, novel.id);
 
     return NextResponse.json({ success: true, id: novel.id });
   } catch (error) {

@@ -1,6 +1,7 @@
 import ZAI from "z-ai-web-dev-sdk";
 import { jsonError, parseBody, validationError, withTimeout } from "@/lib/novara/api-helpers";
 import { extractRealUsage, recordGlobalUsage } from "@/lib/usage/ledger";
+import { recordUsageCall } from "@/lib/usage/usage-store";
 import { z } from "zod";
 
 export const dynamic = "force-dynamic";
@@ -38,6 +39,11 @@ const wizardSchema = z.object({
   premise: z.string().trim().max(20000).optional(),
   characters: z.string().trim().max(20000).optional(),
   targetWords: z.number().int().min(1000).max(5000000).optional(),
+  // P5 — client-generated wizard session id: every section call of one
+  // wizard session carries the same id so the ledger can retro-tag the
+  // whole session onto the novel it culminates in (UsageProvenance, written
+  // by POST /api/novels). Absent on older clients — rows stay global-only.
+  sessionId: z.string().trim().min(8).max(100).optional(),
 });
 
 // POST /api/ai/wizard — GLM generation for the "New with the AI team" wizard.
@@ -53,7 +59,7 @@ export async function POST(req: Request) {
   const schema = wizardSchema.safeParse(parsed.data);
   if (!schema.success) return validationError(schema.error);
 
-  const { section, genre, logline, premise, characters, targetWords } =
+  const { section, genre, logline, premise, characters, targetWords, sessionId } =
     schema.data;
 
   const languageSample = `${genre ?? ""}\n${logline ?? ""}\n${premise ?? ""}`;
@@ -135,7 +141,15 @@ export async function POST(req: Request) {
 
     const content = completion.choices[0]?.message?.content?.trim() ?? "";
     // P4 — feed the app-wide usage ledger (measured calls only).
-    recordGlobalUsage("wizard", extractRealUsage(completion));
+    const usage = extractRealUsage(completion);
+    recordGlobalUsage("wizard", usage);
+    // P5 — persist the per-call row; correlationId retro-tags this session
+    // onto the novel it culminates in (provenance link written at creation).
+    recordUsageCall({
+      surface: "wizard",
+      usage,
+      ...(sessionId ? { correlationId: sessionId } : {}),
+    });
     if (!content)
       return jsonError("The AI returned an empty draft. Try again.", 502);
 

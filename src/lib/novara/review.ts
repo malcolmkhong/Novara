@@ -125,6 +125,8 @@ Rules: be faithful to the text, list only real issues (zero issues is valid: {"i
     user: parts.join("\n\n"),
     tag: "AI review",
     parse: (json) => reviewPayloadSchema.parse(json),
+    // P5 — review spend lands on the chapter's novel in the ledger.
+    ledger: { novelId: chapter.novelId },
   });
 
   const issues: ReviewIssue[] = payload.issues.map((issue, i) => {

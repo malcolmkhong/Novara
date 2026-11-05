@@ -755,3 +755,72 @@ model AssetVersion {
   @@index([novelId, assetType, assetId])
   @@index([assetId, createdAt])
 }
+
+// ---------------------------------------------------------------------------
+// UsageCall (Phase 5 / P5-a) — the PERSISTED, account-level GLM usage ledger.
+// ONE row per MEASURED provider call, every surface (agent | draft | review |
+// sediment | studio | wizard | detect | generate | ai-team). Single source of
+// truth for usage (Ruling 2, user 2026-11-05); the in-memory per-process
+// ledger it supersedes is retired in P5-b.
+//
+// RETENTION (Ruling 1, user 2026-11-05): rows are PERMANENT account history.
+// novelId / runId are PLAIN STRINGS — NO foreign key, NO cascade: deleting a
+// novel or a run must never erase account-scope spend history (orphans render
+// as "(deleted novel)" in the account view). There is NO purge path in
+// Phase 5 scope; if one is ever built it must be an explicit account-level
+// action, never a side effect of content deletion.
+//
+// HONESTY RULE: measured calls only — a null/stripped usage object records
+// NOTHING (never guessed, never padded). Estimates live in the agent usage
+// events (panel payloads), never here. modelId records the REQUEST-side
+// value exactly as sent (the docs' pricing key); "gateway-default" means the
+// request carried no model field (response echoes are rewritten by the
+// gateway — phase3-stages.md §P3-A-2).
+// ---------------------------------------------------------------------------
+
+model UsageCall {
+  id               String   @id @default(cuid())
+  surface          String
+  modelId          String
+  promptTokens     Int
+  completionTokens Int
+  totalTokens      Int
+  // Scope links — nullable, plain strings, NO FK (see retention above).
+  runId            String?
+  taskId           String?
+  // Agent conversation key: "leader" | taskId. Null elsewhere.
+  conversationId   String?
+  novelId          String?
+  // Request/session correlation id for retro-tagging (studio-init request id,
+  // wizard client session id); resolves via UsageProvenance at novel creation.
+  correlationId    String?
+  createdAt        DateTime @default(now())
+
+  @@index([surface, createdAt])
+  @@index([novelId, createdAt])
+  @@index([runId])
+  @@index([correlationId])
+  @@index([createdAt])
+}
+
+// ---------------------------------------------------------------------------
+// UsageProvenance (Phase 5 / P5-a) — the retro-tag link (user ruling
+// 2026-11-05): a pre-novel surface's consumption is attached to the novel it
+// culminated in, AT THE MOMENT OF CREATION. One row per (correlationId,
+// novelId) — the unique index makes link creation idempotent (a retried
+// create cannot double-link). Sessions that never produce a novel simply
+// never appear here — their calls stay in the global account ledger only.
+// Same retention rule as UsageCall: novelId is a plain string, no cascade.
+// ---------------------------------------------------------------------------
+
+model UsageProvenance {
+  id            String   @id @default(cuid())
+  correlationId String
+  // studio-init (server-generated request id) | wizard (client session id)
+  surface       String
+  novelId       String
+  createdAt     DateTime @default(now())
+
+  @@unique([correlationId, novelId])
+  @@index([novelId])
+}

@@ -120,7 +120,10 @@ async function requestGlmText(messages: GlmMessage[]): Promise<string | null> {
       thinking: { type: "disabled" },
     });
     // P4 — feed the app-wide usage ledger (measured calls only).
-    recordGlobalUsage("detect", extractRealUsage(completion));
+    const usage = extractRealUsage(completion);
+    recordGlobalUsage("detect", usage);
+    // P5 — persist the per-call row (standalone detector — global-only).
+    recordUsageCall({ surface: "detect", usage });
     return extractCompletionContent(completion);
   } catch (error) {
     console.error("[detect/hallucination] GLM request failed:", error);

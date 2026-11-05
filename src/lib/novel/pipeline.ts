@@ -127,6 +127,8 @@ export async function ensureChapterReview(
   const review = await glmJson(buildReviewMessages(ctx.brief), {
     label: "chapter-review",
     parse: parseReviewResponse,
+    // P5 — review spend lands on the novel in the ledger.
+    ledger: { novelId },
   });
   if (review === null) return null;
   await db.novelChapter.update({
