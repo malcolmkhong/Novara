@@ -78,7 +78,7 @@ async function main() {
 
     const fencedWrite = await writeLoopState(runId, leaseA!, {
       phase: "leading", turnsUsed: 99, taskCounter: 0, delegateCount: 0,
-      claimed: {}, issues: [], qcRepairs: {}, impactReport: null,
+      claimed: {}, issues: [], qcRepairs: {}, impactReport: null, wrapUpGranted: false,
     });
     check("STALE owner's stateJson write is FENCED OUT (false)", fencedWrite === false);
 
@@ -120,7 +120,7 @@ async function main() {
     const state: RunLoopState = {
       phase: "post-impact", turnsUsed: 5, taskCounter: 3, delegateCount: 3,
       claimed: { chaptersWritten: 2 }, issues: ["Task 1 failed: no verified write"],
-      qcRepairs: { "3": 1 }, impactReport: "impact text 中文",
+      qcRepairs: { "3": 1 }, impactReport: "impact text 中文", wrapUpGranted: false,
     };
     check("writeLoopState by CURRENT owner succeeds", await writeLoopState(runId, leaseC!, state));
     const readBack = await readLoopState(runId);

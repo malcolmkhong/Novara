@@ -58,8 +58,10 @@ export type MessageKind =
   | "reply" // model turn
   | "tool_results" // TOOL RESULTS feed appended after a model turn
   | "repair" // VERIFY FAILED pushes in member repair rounds
-  | "gate_stop" // appended when a gate stop drops out of the loop
-  | "resume_note"; // appended by the resume path (verified board state)
+  | "gate_stop" // appended when a gate stop drops out of the loop (audit marker,
+  //   NOT replayed into a model context)
+  | "wrap_up" // the one-shot budget wrap-up directive (a real wire message)
+  | "resume_note"; // appended by the resume path (audit marker, NOT replayed)
 
 export interface ExecutorLease {
   owner: string;
@@ -96,6 +98,14 @@ export interface RunLoopState {
   qcRepairs: Record<string, number>;
   /** Task 0 impact assessment text (captured before the envelope persisted). */
   impactReport: string | null;
+  /**
+   * True once the run's ONE budgeted wrap-up turn has been granted (lifetime
+   * property). Checkpointed BEFORE the wrap-up model call, so no number of
+   * crash→resume cycles can mint a second wrap-up turn — a resume that finds
+   * this flag set with the turn budget spent takes the deterministic,
+   * zero-GLM reconciliation path instead.
+   */
+  wrapUpGranted: boolean;
 }
 
 export class LeaseLostError extends Error {
@@ -154,6 +164,76 @@ export async function appendAgentMessage(params: AppendMessageParams): Promise<v
             kind: params.kind,
           },
         });
+      });
+      return;
+    } catch (error) {
+      if (error instanceof LeaseLostError) throw error;
+      if (attempt < maxAttempts && isRetryableWriteConflict(error)) {
+        await sleep(25 * attempt);
+        continue;
+      }
+      throw error;
+    }
+  }
+}
+
+export type AppendMessageEntry = Omit<AppendMessageParams, "lease">;
+
+/**
+ * Batch append — several messages committed in ONE lease-verified transaction
+ * (seq continues across the batch, per conversation). Used for the
+ * reply+tool_results pairs so a crash between the two appends is impossible:
+ * a dangling assistant reply in the canonical transcript would replay as two
+ * consecutive assistant messages.
+ */
+export async function appendAgentMessages(
+  lease: ExecutorLease,
+  entries: AppendMessageEntry[]
+): Promise<void> {
+  if (entries.length === 0) return;
+  const maxAttempts = 3;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      await db.$transaction(async (tx) => {
+        const runId = entries[0].runId;
+        const run = await tx.agentRun.findUnique({
+          where: { id: runId },
+          select: { leaseOwner: true, leaseEpoch: true },
+        });
+        if (!run) throw new LeaseLostError("Run vanished before message append");
+        if (run.leaseOwner !== lease.owner || run.leaseEpoch !== lease.epoch) {
+          throw new LeaseLostError();
+        }
+        const runIds = new Set(entries.map((e) => e.runId));
+        if (runIds.size !== 1) {
+          throw new Error("appendAgentMessages: entries span multiple runs");
+        }
+        // Per-conversation seq allocation inside the same interactive
+        // transaction — SQLite's single writer makes read-MAX + INSERT atomic.
+        const nextSeq = new Map<string, number>();
+        for (const conversationId of new Set(entries.map((e) => e.conversationId))) {
+          const prev = await tx.agentMessage.aggregate({
+            where: { runId, conversationId },
+            _max: { seq: true },
+          });
+          nextSeq.set(conversationId, prev._max.seq ?? 0);
+        }
+        for (const entry of entries) {
+          const seq = (nextSeq.get(entry.conversationId) ?? 0) + 1;
+          nextSeq.set(entry.conversationId, seq);
+          await tx.agentMessage.create({
+            data: {
+              runId,
+              taskId: entry.taskId ?? null,
+              conversationId: entry.conversationId,
+              agent: entry.agent,
+              role: entry.role,
+              seq,
+              content: entry.content,
+              kind: entry.kind,
+            },
+          });
+        }
       });
       return;
     } catch (error) {
@@ -313,6 +393,7 @@ export function parseRunLoopState(raw: string | null | undefined): RunLoopState 
       issues: Array.isArray(s.issues) ? s.issues.filter((x): x is string => typeof x === "string") : [],
       qcRepairs: recordOr(s.qcRepairs),
       impactReport: typeof s.impactReport === "string" ? s.impactReport : null,
+      wrapUpGranted: s.wrapUpGranted === true,
     };
   } catch {
     return null;

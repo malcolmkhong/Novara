@@ -543,9 +543,10 @@ model AgentRun {
   updatedAt DateTime @updatedAt
 
   // Phase 1 resume — leader-loop cursor + scalar state (turnsUsed,
-  // taskCounter, delegateCount, claimed, issues, qcRepairs, impactReport).
-  // Serialized by lib/agent/messages.ts; null = fresh run / nothing
-  // checkpointed yet. Written via lease-fenced CAS only.
+  // taskCounter, delegateCount, claimed, issues, qcRepairs, impactReport,
+  // wrapUpGranted). Serialized by lib/agent/messages.ts; null = fresh run /
+  // nothing checkpointed yet. Written via lease-fenced CAS only, AFTER the
+  // matching transcript appends (append-then-bump ordering).
   stateJson String?
   // Executor lease (lib/agent/messages.ts): CAS-claimed, heartbeat-renewed,
   // epoch-fenced so a stale executor can never advance run state or append
@@ -633,7 +634,8 @@ model AgentMessage {
   seq            Int
   // FULL verbatim content — never truncated (canonical transcript).
   content        String
-  // system_note | envelope | reply | tool_results | repair | gate_stop | resume_note
+  // system_note | envelope | reply | tool_results | repair | gate_stop | wrap_up | resume_note
+  // (gate_stop / resume_note are audit markers, never replayed into a model context)
   kind           String
   createdAt      DateTime @default(now())
 

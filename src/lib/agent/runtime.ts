@@ -19,10 +19,17 @@
 //     finalReport compares claimed (model) vs verified (measured) numbers;
 //     review-found blocking issues without a repair order are flagged.
 //
-// Resumability: the executor waits at gates by polling run.status (stateless
-// across hot reloads); approve/reject/cancel handlers flip DB state and the
-// executor follows. A run orphaned by a process restart is marked failed by
-// healStaleRuns (no event activity for sse.staleRunMs).
+// Resumability (Phase 1): the canonical transcript lives in AgentMessage and
+// the loop cursor in AgentRun.stateJson (lib/agent/messages.ts). The executor
+// holds a CAS-claimed, heartbeat-renewed, epoch-fENCED lease; every transcript
+// append and every checkpoint verifies the lease in the same transaction, so
+// an evicted executor can neither advance the loop nor append to a
+// conversation it lost. Order rule: persist transcript FIRST, bump the cursor
+// SECOND. Approval gates stay stateless (the executor polls run.status inside
+// its lease); approve/reject/cancel handlers flip DB state and the executor
+// follows. A run orphaned by a process restart is claimed by the resume
+// endpoint (epoch increment) or — only when its lease is stale AND its events
+// are stale — marked failed by healStaleRuns.
 // ---------------------------------------------------------------------------
 
 import { db } from "@/lib/db";
@@ -74,6 +81,23 @@ import {
   renderSnapshot,
   type StorySnapshotData,
 } from "./snapshot";
+import {
+  appendAgentMessages,
+  claimLease,
+  leaseIsAlive,
+  LEADER_CONVERSATION,
+  LEASE_RENEW_MS,
+  LeaseLostError,
+  loadConversation,
+  readLoopState,
+  releaseLease,
+  renewLease,
+  verifyLease,
+  writeLoopState,
+  type AppendMessageEntry,
+  type ExecutorLease,
+  type RunLoopState,
+} from "./messages";
 
 // ---------------------------------------------------------------------------
 // Module state — in-process executor registry (one loop per run).
@@ -88,6 +112,46 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function truncate(text: string, max: number) {
   return text.length > max ? `${text.slice(0, max)}…` : text;
+}
+
+// ---------------------------------------------------------------------------
+// Executor lease guard (Phase 1) — one guard per executeRun. Every transcript
+// append and every cursor checkpoint goes through it; a rejected fenced write
+// (count === 0), a rejected heartbeat renewal, or a failed ownership check
+// marks the lease lost and the executor aborts with ZERO further DB writes —
+// the current lease owner owns the run from that moment.
+// ---------------------------------------------------------------------------
+
+class LeaseGuard {
+  lost = false;
+
+  constructor(
+    readonly runId: string,
+    readonly lease: ExecutorLease
+  ) {}
+
+  /** Ownership self-check (used after long awaits / at turn boundaries). */
+  async assertHeld(): Promise<void> {
+    if (this.lost) throw new LeaseLostError();
+    if (!(await verifyLease(this.runId, this.lease))) throw new LeaseLostError();
+  }
+
+  /**
+   * Fenced cursor checkpoint — false ⇒ evicted ⇒ abort. This is the
+   * append-then-bump ordering's second half: the transcript rows are already
+   * committed when this runs, so losing HERE leaves the conversation ahead of
+   * the cursor, never behind (resume re-derives from the transcript).
+   */
+  async checkpoint(state: RunLoopState): Promise<void> {
+    if (this.lost) throw new LeaseLostError();
+    const ok = await writeLoopState(this.runId, this.lease, state);
+    if (!ok) throw new LeaseLostError();
+  }
+
+  /** Lease-verified transcript append(s) — one atomic transaction. */
+  append(...entries: AppendMessageEntry[]): Promise<void> {
+    return appendAgentMessages(this.lease, entries);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -570,7 +634,7 @@ export async function decideApproval(
         taskId,
         kind: "approval",
         summary: `Approved by author — settled as Chapter ${index} (${countWords(payload.content).toLocaleString()} words, verified).`,
-        payload: { committed: true, chapterId: chapter.id, index, words: chapter.wordCount },
+        payload: { committed: true, chapterId: chapter.id, index, words: chapter.wordCount, op: "create_chapter", title: payload.title },
       });
     } else if (payload.chapterId) {
       const existing = await db.chapter.findUnique({
@@ -608,7 +672,7 @@ export async function decideApproval(
         taskId,
         kind: "approval",
         summary: `Approved by author — Chapter ${chapter.index} replaced (${chapter.wordCount.toLocaleString()} words, verified).`,
-        payload: { committed: true, chapterId: chapter.id, index: chapter.index, words: chapter.wordCount },
+        payload: { committed: true, chapterId: chapter.id, index: chapter.index, words: chapter.wordCount, op: "update_chapter", existingWords: payload.existingWords },
       });
     }
     await db.agentTask.update({ where: { id: taskId }, data: { status: "done" } });
@@ -678,6 +742,11 @@ export async function healStaleRuns(): Promise<void> {
     select: { id: true },
   });
   for (const run of active) {
+    // Phase 1 — DUAL CONDITION. A run with a LIVE lease is alive by
+    // definition: the executor heartbeats through quiet gate waits and
+    // provider retries, so event-age alone must never heal it (the old
+    // event-age-only check failed runs that were simply waiting at a gate).
+    if (await leaseIsAlive(run.id)) continue;
     const last = await db.agentEvent.findFirst({
       where: { runId: run.id },
       orderBy: { createdAt: "desc" },
@@ -732,26 +801,339 @@ const ZERO_MEASURED: Measured = {
   settlesRun: 0,
 };
 
-/** Entry point — called from the route handler via after(). Idempotent. */
-export async function executeRun(runId: string): Promise<void> {
-  if (executors.has(runId)) return;
+// ---------------------------------------------------------------------------
+// Phase 1 — DB-derived state. In-memory counters die with the executor; the
+// persisted event stream (with its Phase 1 payload additions) is what makes
+// resume and the deterministic wrap-up reconciliation possible.
+// ---------------------------------------------------------------------------
+
+/**
+ * Rebuild the audited counters from the PERSISTED event stream. Used by the
+ * resume path (in-memory `measured` died with the crash) and by the
+ * deterministic wrap-up reconciliation. Requires the Phase 1 payload
+ * additions (op on write/approval events, issues/blocking on review events);
+ * legacy events without `op` contribute nothing — they predate resume.
+ * Every increment site in the runtime emits its event AFTER the DB commit,
+ * so each matching event is evidence of exactly one verified effect.
+ */
+export async function deriveMeasuredFromEvents(runId: string): Promise<Measured> {
+  const events = await db.agentEvent.findMany({
+    where: { runId },
+    orderBy: { createdAt: "asc" },
+    select: { kind: true, payload: true },
+  });
+  const measured: Measured = { ...ZERO_MEASURED };
+  const finalized = new Set<string>();
+  const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : 0);
+  for (const event of events) {
+    const payload = parseJsonSafe<Record<string, unknown> | null>(event.payload, null);
+    if (!payload) continue;
+    if (event.kind === "write" && payload.pending !== true) {
+      switch (payload.op) {
+        case "create_chapter":
+          measured.chaptersWritten += 1;
+          measured.words += num(payload.words);
+          break;
+        case "update_chapter":
+          measured.chaptersUpdated += 1;
+          measured.words += Math.max(0, num(payload.words) - num(payload.existingWords));
+          break;
+        case "finalize_chapter":
+          if (typeof payload.chapterId === "string" && !finalized.has(payload.chapterId)) {
+            finalized.add(payload.chapterId);
+            measured.chaptersFinalized += 1;
+          }
+          break;
+        case "settle_chapter":
+          measured.settlesRun += 1;
+          break;
+        case "update_outline_beat":
+          measured.outlineBeatsUpdated += 1;
+          break;
+      }
+    } else if (event.kind === "approval" && payload.committed === true) {
+      // Gate-approved commits (decideApproval) — the poll-side measured
+      // increments died with the executor; the approval event is the record.
+      if (payload.op === "create_chapter") {
+        measured.chaptersWritten += 1;
+        measured.words += num(payload.words);
+      } else if (payload.op === "update_chapter") {
+        measured.chaptersUpdated += 1;
+        measured.words += Math.max(0, num(payload.words) - num(payload.existingWords));
+      }
+    } else if (event.kind === "message" && payload.op === "review_chapter") {
+      measured.reviewsRun += 1;
+      measured.blockingFound += num(payload.blocking);
+    }
+  }
+  return measured;
+}
+
+/**
+ * Rebuild the QC ledger on resume: the review half from the latest persisted
+ * ChapterReview per chapter (the same data the E2 gates read), the repair
+ * half from the last fenced checkpoint.
+ */
+async function deriveQcLedger(novelId: string, repairs: Record<string, number>): Promise<QcLedger> {
+  const qc = newQcLedger();
+  const chapters = await db.chapter.findMany({
+    where: { novelId },
+    select: { id: true, index: true },
+  });
+  for (const chapter of chapters) {
+    const latest = await db.chapterReview.findFirst({
+      where: { chapterId: chapter.id },
+      orderBy: { createdAt: "desc" },
+      select: { blockingCount: true },
+    });
+    if (latest) qc.lastBlocking.set(chapter.index, latest.blockingCount);
+  }
+  for (const [key, value] of Object.entries(repairs)) {
+    qc.repairs.set(Number(key), value);
+  }
+  return qc;
+}
+
+/**
+ * Phase 1 create-probe — the two interruption shapes that would otherwise
+ * duplicate a chapter row on re-dispatch:
+ *   1. commit landed, feedback lost: a chapter with the SAME title AND
+ *      content already exists (the natural key the approval-commit path uses
+ *      at the gate);
+ *   2. the leader re-delegated an interrupted task and the member regenerated
+ *      different prose for the same intended chapter: this run's event stream
+ *      already recorded a create_chapter commit for the same title.
+ * Returns the chapter to adopt, or null when the write is genuinely new.
+ */
+async function findAdoptableChapter(
+  runId: string,
+  novelId: string,
+  title: string,
+  prose: string
+): Promise<{ id: string; index: number; wordCount: number } | null> {
+  const exact = await db.chapter.findFirst({
+    where: { novelId, title, content: prose },
+    select: { id: true, index: true, wordCount: true },
+  });
+  if (exact) return exact;
+  const events = await db.agentEvent.findMany({
+    where: { runId, kind: { in: ["write", "approval"] } },
+    orderBy: { createdAt: "desc" },
+    take: 200,
+    select: { payload: true },
+  });
+  for (const event of events) {
+    const payload = parseJsonSafe<Record<string, unknown> | null>(event.payload, null);
+    if (!payload || payload.pending === true) continue;
+    if (payload.op !== "create_chapter") continue;
+    if (payload.title === title && typeof payload.chapterId === "string") {
+      const chapter = await db.chapter.findUnique({
+        where: { id: payload.chapterId },
+        select: { id: true, index: true, wordCount: true },
+      });
+      if (chapter) return chapter;
+    }
+  }
+  return null;
+}
+
+/**
+ * Phase 1 — deterministic, ZERO-GLM end-of-run reconciliation for a run whose
+ * single budgeted wrap-up turn was already granted and then interrupted
+ * (turnsUsed >= leaderMaxTurns && wrapUpGranted). Builds the final report
+ * from persisted state ONLY — AgentTask statuses + event-derived measured
+ * counters + the latest ChapterReview per chapter — closes the run (completed,
+ * or failed when tasks were still in_progress), and emits the closing event.
+ * Caller must hold the executor lease (claimed by the resume route).
+ */
+export async function reconcileWrapUpFromDb(runId: string): Promise<{
+  status: AgentRunStatus;
+  report: RunFinalReport;
+}> {
+  const measured = await deriveMeasuredFromEvents(runId);
+  const tasks = await db.agentTask.findMany({ where: { runId }, orderBy: { order: "asc" } });
+  const run = await db.agentRun.findUniqueOrThrow({
+    where: { id: runId },
+    select: { novelId: true },
+  });
+
+  const stillRunning = tasks.filter((t) => t.status === "in_progress");
+  if (stillRunning.length > 0) {
+    await db.agentTask.updateMany({
+      where: { id: { in: stillRunning.map((t) => t.id) } },
+      data: { status: "failed" },
+    });
+    await emitEvent({
+      runId,
+      kind: "error",
+      summary: `Wrap-up reconciliation: ${stillRunning.map((t) => t.key).join(", ")} were still in_progress when the executor was lost — marked failed.`,
+    });
+  }
+
+  const doneCount = tasks.filter((t) => t.status === "done").length;
+  const issues: string[] = [];
+  if (stillRunning.length > 0) {
+    issues.push(
+      `${stillRunning.length} task(s) were still in_progress when the executor was lost and are marked failed: ${stillRunning.map((t) => t.key).join(", ")}`
+    );
+  }
+  const blockedCount = tasks.filter((t) => t.status === "blocked").length;
+  if (blockedCount > 0) issues.push(`${blockedCount} task(s) ended blocked.`);
+
+  // Latest ChapterReview per chapter — unresolved blocking findings surface in
+  // the report even though the in-memory QC ledger died with the crash.
+  const chapters = await db.chapter.findMany({
+    where: { novelId: run.novelId },
+    select: { id: true, index: true, title: true },
+  });
+  for (const chapter of chapters) {
+    const latest = await db.chapterReview.findFirst({
+      where: { chapterId: chapter.id },
+      orderBy: { createdAt: "desc" },
+      select: { blockingCount: true },
+    });
+    if (latest && latest.blockingCount > 0) {
+      issues.push(
+        `Chapter ${chapter.index} ("${truncate(chapter.title, 40)}") latest review has ${latest.blockingCount} blocking issue(s) unresolved.`
+      );
+    }
+  }
+
+  const summaryBits: string[] = [`${doneCount}/${tasks.length} tasks done across the team.`];
+  if (measured.chaptersWritten > 0 || measured.chaptersUpdated > 0) {
+    summaryBits.push(
+      `Chapters: ${measured.chaptersWritten} created, ${measured.chaptersUpdated} updated · ${measured.words.toLocaleString()} words written (measured).`
+    );
+  }
+  if (measured.reviewsRun > 0) {
+    summaryBits.push(`Reviews: ${measured.reviewsRun} run, ${measured.blockingFound} blocking found.`);
+  }
+  if (measured.chaptersFinalized > 0 || measured.settlesRun > 0) {
+    summaryBits.push(
+      `E2 gates: ${measured.chaptersFinalized} finalized, ${measured.settlesRun} settled (code-verified).`
+    );
+  }
+  summaryBits.push(
+    "Run closed by deterministic wrap-up reconciliation after the executor was lost post-wrap-up (no further model turns were available; nothing was re-run and nothing was auto-committed)."
+  );
+
+  const report: RunFinalReport = {
+    summary: summaryBits.join(" "),
+    reported: { ...snapshotOf(measured) },
+    verified: snapshotOf(measured),
+    blockingIssues: issues.slice(0, 12),
+  };
+  const status: AgentRunStatus = stillRunning.length > 0 ? "failed" : "completed";
+  await db.agentRun.update({
+    where: { id: runId },
+    data: { status, finalReport: JSON.stringify(report), error: null },
+  });
+  await emitEvent({
+    runId,
+    kind: "message",
+    actor: "atlas",
+    summary: `Run ${status} — closed by deterministic wrap-up reconciliation: ${report.summary}`,
+  });
+  return { status, report };
+}
+
+/**
+ * Entry point — called from the route handlers. Idempotent per process.
+ *
+ * Phase 1 lease lifecycle: claim (CAS on unowned/stale + epoch increment) →
+ * heartbeat interval → run loop under the guard → release. A resume can pass
+ * a pre-claimed lease (the resume route claims synchronously so a live lease
+ * 409s before anything else happens).
+ */
+export async function executeRun(
+  runId: string,
+  opts?: { resume?: boolean; lease?: ExecutorLease }
+): Promise<void> {
+  if (executors.has(runId)) {
+    // Duplicate kick — a caller-supplied lease must not leak un-released.
+    if (opts?.lease) await releaseLease(runId, opts.lease);
+    return;
+  }
   const controller = new AbortController();
   executors.set(runId, { controller });
+  let lease: ExecutorLease | null = opts?.lease ?? null;
   try {
-    await runLoop(runId, controller.signal);
+    if (!lease) {
+      lease = await claimLease(runId);
+      if (!lease) {
+        throw new ConflictError("This run's executor lease is held by a live executor.");
+      }
+    }
+    const held = lease;
+    const guard = new LeaseGuard(runId, held);
+    // Heartbeat — renewed every LEASE_RENEW_MS so gate waits and provider
+    // retries never look dead. A rejected renewal (count === 0) means the
+    // epoch moved: flip the guard, the next fenced touch aborts the loop.
+    const heartbeat = setInterval(() => {
+      void renewLease(runId, held).then(
+        (ok) => {
+          if (!ok) {
+            guard.lost = true;
+            console.error(
+              `[agent-runtime] run ${runId}: lease renewal rejected (count=0) — fencing detected`
+            );
+          }
+        },
+        () => {
+          guard.lost = true;
+        }
+      );
+    }, LEASE_RENEW_MS);
+    try {
+      await runLoop(runId, controller.signal, guard, opts?.resume === true);
+    } finally {
+      clearInterval(heartbeat);
+      await releaseLease(runId, held);
+    }
   } catch (error) {
-    const run = await db.agentRun.findUnique({ where: { id: runId }, select: { status: true } }).catch(() => null);
+    if (error instanceof LeaseLostError) {
+      // Fencing in action — a rejected fenced write (count === 0) or a failed
+      // ownership check means another executor owns this run now. Abort with
+      // ZERO further DB writes; never mark somebody else's run failed.
+      console.error(
+        `[agent-runtime] run ${runId}: lease lost — fenced write returned count=0, executor aborting without further DB writes`
+      );
+      return;
+    }
+    const run = await db.agentRun
+      .findUnique({ where: { id: runId }, select: { status: true } })
+      .catch(() => null);
     if (run && !TERMINAL_STATUSES.includes(run.status as AgentRunStatus)) {
       const message = error instanceof Error ? error.message : "Unknown runtime error";
-      await db.agentRun.update({ where: { id: runId }, data: { status: "failed", error: message } });
-      await emitEvent({ runId, kind: "error", summary: `Run failed: ${truncate(message, 300)}` });
+      // The failure flip is lease-fenced too — an evicted executor never
+      // writes run status behind a newer epoch.
+      const flipped = lease
+        ? await db.agentRun
+            .updateMany({
+              where: { id: runId, leaseOwner: lease.owner, leaseEpoch: lease.epoch },
+              data: { status: "failed", error: message },
+            })
+            .catch(() => ({ count: 0 }))
+        : { count: 0 };
+      if (flipped.count === 1) {
+        await emitEvent({ runId, kind: "error", summary: `Run failed: ${truncate(message, 300)}` });
+      } else {
+        console.error(
+          `[agent-runtime] run ${runId}: failure flip skipped — lease no longer owned (count=0)`
+        );
+      }
     }
   } finally {
     executors.delete(runId);
   }
 }
 
-async function runLoop(runId: string, signal: AbortSignal): Promise<void> {
+async function runLoop(
+  runId: string,
+  signal: AbortSignal,
+  guard: LeaseGuard,
+  isResume: boolean
+): Promise<void> {
   const run = await db.agentRun.findUnique({ where: { id: runId } });
   if (!run) return;
 
@@ -762,7 +1144,7 @@ async function runLoop(runId: string, signal: AbortSignal): Promise<void> {
   signal.addEventListener("abort", onAbort, { once: true });
 
   try {
-    await leaderLoop(runId, run.goal, freshController.signal);
+    await leaderLoop(runId, run.goal, freshController.signal, guard, isResume);
   } finally {
     signal.removeEventListener("abort", onAbort);
   }
@@ -819,7 +1201,13 @@ function newQcLedger(): QcLedger {
 // verified outcomes fed back → final report.
 // ---------------------------------------------------------------------------
 
-async function leaderLoop(runId: string, goal: string, signal: AbortSignal): Promise<void> {
+async function leaderLoop(
+  runId: string,
+  goal: string,
+  signal: AbortSignal,
+  guard: LeaseGuard,
+  isResume: boolean
+): Promise<void> {
   const budgets = getBudgets();
   const run = await db.agentRun.findUnique({ where: { id: runId } });
   if (!run) return;
@@ -829,7 +1217,9 @@ async function leaderLoop(runId: string, goal: string, signal: AbortSignal): Pro
   const modelCtx = resolveRunModel(run.modelId, run.thinkingLevel);
 
   const snapshot = await loadStorySnapshot(novelId);
-  await emitEvent({ runId, kind: "message", summary: "Atlas is reading the story state and assembling the team…" });
+  if (!isResume) {
+    await emitEvent({ runId, kind: "message", summary: "Atlas is reading the story state and assembling the team…" });
+  }
 
   // Phase 8 — resolve the author's pinned refs against the DB. When a
   // chapter is pinned, run a deterministic read-only impact assessment
@@ -837,8 +1227,94 @@ async function leaderLoop(runId: string, goal: string, signal: AbortSignal): Pro
   // (user flow step 5: check what the change would affect).
   const pinnedRefs = parseJsonSafe<PinnedRef[]>(run.pinnedJson, []);
   const pinnedContext = await buildPinnedContext(novelId, pinnedRefs);
-  let impactReport: string | null = null;
-  if (pinnedRefs.some((r) => r.type === "chapter")) {
+
+  // ---- Phase 1 restore: checkpoint + canonical transcript -----------------
+  // Scalar state comes from the last fenced checkpoint; every counter that
+  // the DB can derive is DB-derived instead (a cursor may legitimately lag
+  // the transcript — append-then-bump means ahead, never behind).
+  const savedState = isResume ? await readLoopState(runId) : null;
+  let impactReport: string | null = savedState?.impactReport ?? null;
+  let wrapUpGranted = savedState?.wrapUpGranted ?? false;
+  const claimed: Record<string, number> = savedState?.claimed ?? {};
+  const issues: string[] = savedState?.issues ?? [];
+
+  // Orphaned in_progress tasks: their executor is gone. Mark them failed —
+  // the leader's re-dispatch adopts any already-committed writes through the
+  // tool-level idempotency probes (never duplicates).
+  if (isResume) {
+    const orphans = await db.agentTask.findMany({
+      where: { runId, status: "in_progress" },
+      select: { id: true, key: true },
+    });
+    for (const orphan of orphans) {
+      await db.agentTask.update({ where: { id: orphan.id }, data: { status: "failed" } });
+      await emitEvent({
+        runId,
+        kind: "error",
+        summary: `${orphan.key} was in_progress when the executor was lost — marked failed. Re-dispatched work adopts committed writes instead of duplicating them.`,
+      });
+      issues.push(`${orphan.key} was interrupted mid-execution and marked failed (committed writes are adopted, never duplicated).`);
+    }
+  }
+
+  const atlasPrompt = buildSystemPrompt("atlas");
+  const atlasSystem = atlasPrompt.prompt;
+
+  type ChatMessage = { role: "assistant" | "user"; content: string };
+  let restoredMessages: ChatMessage[] | null = null;
+  let restoredMeter: ContextMeter | null = null;
+  let restoredTurnsUsed = 0;
+  let fromTranscript = false;
+  if (isResume) {
+    // Rebuild the conversation from the CANONICAL transcript only — never
+    // from AgentEvent (the truncated UI stream). gate_stop / resume_note rows
+    // are audit markers, not wire messages, and are excluded from the replay.
+    const rows = await loadConversation(runId, LEADER_CONVERSATION);
+    if (rows.length > 0) {
+      const wireRows = rows.filter((r) => r.kind !== "gate_stop" && r.kind !== "resume_note");
+      restoredMessages = wireRows.map((r) => ({ role: r.role, content: r.content }));
+      // The transcript IS the loop cursor: one reply row per completed model
+      // turn (appended atomically with its tool_results batch).
+      restoredTurnsUsed = wireRows.filter((r) => r.kind === "reply").length;
+      fromTranscript = true;
+      const envelopeRow = rows.find((r) => r.kind === "envelope");
+      restoredMeter = createContextMeter({
+        modelId: modelCtx.selection.modelId,
+        contextWindow: modelCtx.contextWindow,
+        system: [atlasPrompt.parts.system],
+        tools: atlasPrompt.parts.tools,
+        skills: atlasPrompt.parts.skills.map((s) => s.body),
+        novel: envelopeRow ? [envelopeRow.content] : [],
+        conversation: wireRows
+          .filter((r) => r.kind !== "system_note" && r.kind !== "envelope")
+          .map((r) => r.content),
+      });
+    }
+  }
+
+  // Task 0 — the auto impact assessment is created EXACTLY once per run
+  // (Phase 1 guard). Fresh: create when a chapter is pinned. Resume: reuse
+  // the existing row — done ⇒ recover the report text; interrupted ⇒ re-run
+  // it in place (read-only, idempotent).
+  const existingTask0 = isResume
+    ? await db.agentTask.findFirst({ where: { runId, key: "Task 0" } })
+    : null;
+  const checkpointAfterTask0 = async (): Promise<void> => {
+    // Phase 1 — checkpoint IMMEDIATELY after Task 0 so a crash between the
+    // assessment and the first leader turn can neither re-run nor duplicate it.
+    await guard.checkpoint({
+      phase: "post-impact",
+      turnsUsed: restoredTurnsUsed,
+      taskCounter: 0,
+      delegateCount: 0,
+      claimed,
+      issues,
+      qcRepairs: {},
+      impactReport,
+      wrapUpGranted,
+    });
+  };
+  if (!existingTask0 && pinnedRefs.some((r) => r.type === "chapter")) {
     const impactTask = await db.agentTask.create({
       data: {
         runId,
@@ -878,65 +1354,117 @@ async function leaderLoop(runId: string, goal: string, signal: AbortSignal): Pro
       extraSkills: [],
       pinnedContext,
       model: modelCtx,
+      guard,
       onNarration: (text) => {
         if (!impactReport) impactReport = text;
       },
     });
     if (signal.aborted) return;
+    await checkpointAfterTask0();
+  } else if (existingTask0 && existingTask0.status !== "done") {
+    // Interrupted mid-assessment — re-run in place (read-only, idempotent).
+    await guard.append({
+      runId,
+      conversationId: existingTask0.id,
+      taskId: existingTask0.id,
+      agent: "sage",
+      role: "user",
+      kind: "resume_note",
+      content: "[resume] the executor was interrupted during this read-only assessment — re-dispatching it.",
+    });
+    await executeTask({
+      runId,
+      novelId,
+      task: existingTask0,
+      snapshot,
+      signal,
+      measured: { ...ZERO_MEASURED },
+      claimed,
+      issues,
+      qc: newQcLedger(),
+      extraSkills: [],
+      pinnedContext,
+      model: modelCtx,
+      guard,
+      onNarration: (text) => {
+        if (!impactReport) impactReport = text;
+      },
+    });
+    if (signal.aborted) return;
+    await checkpointAfterTask0();
+  } else if (existingTask0 && !impactReport) {
+    // Done but the checkpoint lagged (crash inside the post-Task-0 window) —
+    // recover the assessment text from the Task-0 conversation transcript.
+    const task0Rows = await loadConversation(runId, existingTask0.id);
+    impactReport = task0Rows.find((m) => m.role === "assistant" && m.kind === "reply")?.content ?? null;
   }
 
-  const atlasPrompt = buildSystemPrompt("atlas");
-  const atlasSystem = atlasPrompt.prompt;
+  if (!restoredMessages || !restoredMeter) {
+    // P2 — the leader envelope is split by where its content COMES FROM, so
+    // the meter can attribute tokens honestly: the author's goal and the loop
+    // instructions are conversation; the impact report, pinned refs and story
+    // snapshot are novel context.
+    const leaderConvParts: string[] = [`AUTHOR GOAL: ${goal}`, ""];
+    const leaderNovelParts: string[] = [];
+    if (impactReport) {
+      leaderNovelParts.push(
+        "IMPACT ASSESSMENT (Task 0, verified read-only — plan around this):",
+        truncate(impactReport, 2400),
+        ""
+      );
+    }
+    if (pinnedContext) {
+      leaderNovelParts.push(pinnedContext, "");
+    }
+    leaderNovelParts.push("STORY SNAPSHOT (measured now):", renderSnapshot(snapshot), "");
+    leaderConvParts.push(
+      "LEAD THE TEAM: read what you need, then dispatch work with ```team-delegate",
+      "blocks (JSON array of orders). Each executed order's VERIFIED outcome comes",
+      "back to you as a tool result — decide the next step from those, never from",
+      "the member's narration alone. Finish with a tool-free reply."
+    );
+    const envelope = [...leaderConvParts, ...leaderNovelParts].join("\n");
 
-  // P2 — the leader envelope is split by where its content COMES FROM, so
-  // the meter can attribute tokens honestly: the author's goal and the loop
-  // instructions are conversation; the impact report, pinned refs and story
-  // snapshot are novel context.
-  const leaderConvParts: string[] = [`AUTHOR GOAL: ${goal}`, ""];
-  const leaderNovelParts: string[] = [];
-  if (impactReport) {
-    leaderNovelParts.push(
-      "IMPACT ASSESSMENT (Task 0, verified read-only — plan around this):",
-      truncate(impactReport, 2400),
-      ""
+    restoredMessages = [
+      { role: "assistant", content: atlasSystem },
+      { role: "user", content: envelope },
+    ];
+    restoredMeter = createContextMeter({
+      modelId: modelCtx.selection.modelId,
+      contextWindow: modelCtx.contextWindow,
+      system: [atlasPrompt.parts.system],
+      tools: atlasPrompt.parts.tools,
+      skills: atlasPrompt.parts.skills.map((s) => s.body),
+      novel: leaderNovelParts,
+      conversation: leaderConvParts,
+    });
+    // Phase 1 — the conversation opener is now canonical: append it (fenced),
+    // then let the per-turn checkpoints take over. A crash after the append
+    // leaves the transcript ahead of the cursor — resume replays it as-is.
+    await guard.append(
+      { runId, conversationId: LEADER_CONVERSATION, taskId: null, agent: "atlas", role: "assistant", kind: "system_note", content: atlasSystem },
+      { runId, conversationId: LEADER_CONVERSATION, taskId: null, agent: "atlas", role: "user", kind: "envelope", content: envelope }
     );
   }
-  if (pinnedContext) {
-    leaderNovelParts.push(pinnedContext, "");
-  }
-  leaderNovelParts.push("STORY SNAPSHOT (measured now):", renderSnapshot(snapshot), "");
-  leaderConvParts.push(
-    "LEAD THE TEAM: read what you need, then dispatch work with ```team-delegate",
-    "blocks (JSON array of orders). Each executed order's VERIFIED outcome comes",
-    "back to you as a tool result — decide the next step from those, never from",
-    "the member's narration alone. Finish with a tool-free reply."
-  );
-  const envelope = [...leaderConvParts, ...leaderNovelParts].join("\n");
+  if (!restoredMessages || !restoredMeter) throw new Error("leader loop: conversation init failed");
+  const messages: ChatMessage[] = restoredMessages;
+  const meter: ContextMeter = restoredMeter;
 
-  type ChatMessage = { role: "assistant" | "user"; content: string };
-  const messages: ChatMessage[] = [
-    { role: "assistant", content: atlasSystem },
-    { role: "user", content: envelope },
-  ];
-
-  // P2 — one meter per conversation; snapshot before each call reflects
-  // exactly what THAT call sends.
-  const meter = createContextMeter({
-    modelId: modelCtx.selection.modelId,
-    contextWindow: modelCtx.contextWindow,
-    system: [atlasPrompt.parts.system],
-    tools: atlasPrompt.parts.tools,
-    skills: atlasPrompt.parts.skills.map((s) => s.body),
-    novel: leaderNovelParts,
-    conversation: leaderConvParts,
-  });
-
-  const measured: Measured = { ...ZERO_MEASURED };
-  const qc = newQcLedger();
-  const claimed: Record<string, number> = {};
-  const issues: string[] = [];
+  // Phase 1 — loop state: in-memory on a fresh start, DB-derived on resume
+  // (task rows + the event stream are the source of truth; the checkpoint
+  // only carries what the DB cannot derive — claimed/issues/qcRepairs).
+  const measured: Measured = fromTranscript ? await deriveMeasuredFromEvents(runId) : { ...ZERO_MEASURED };
+  const qc: QcLedger = fromTranscript
+    ? await deriveQcLedger(novelId, savedState?.qcRepairs ?? {})
+    : newQcLedger();
   let taskCounter = 0;
   let delegateCount = 0;
+  if (fromTranscript) {
+    const taskRows = await db.agentTask.findMany({ where: { runId }, select: { key: true, order: true } });
+    taskCounter = taskRows.reduce((max, t) => Math.max(max, t.order), 0);
+    delegateCount = taskRows.filter((t) => t.key !== "Task 0").length;
+  }
+  let turnsUsed = restoredTurnsUsed;
   let leaderBlocked: string | null = null;
 
   const glmCall = async (tag: string, turn: number): Promise<string> => {
@@ -952,8 +1480,13 @@ async function leaderLoop(runId: string, goal: string, signal: AbortSignal): Pro
     return reply;
   };
 
-  for (let turn = 1; turn <= budgets.glm.leaderMaxTurns; turn++) {
+  // loopExhausted — the loop can exit early via break (blocked / finish: both
+  // closed properly) or run to exhaustion; only exhaustion earns the one-shot
+  // budget wrap-up turn below.
+  let loopExhausted = true;
+  for (let turn = turnsUsed + 1; turn <= budgets.glm.leaderMaxTurns; turn++) {
     if (signal.aborted) return;
+    await guard.assertHeld();
     const reply = await glmCall(`leader turn ${turn}`, turn);
     const parsed = parseAgentTurn(reply);
 
@@ -967,6 +1500,7 @@ async function leaderLoop(runId: string, goal: string, signal: AbortSignal): Pro
     }
     if (parsed.blockedReason) {
       leaderBlocked = parsed.blockedReason;
+      loopExhausted = false;
       break;
     }
     if (parsed.runReport) {
@@ -1007,6 +1541,7 @@ async function leaderLoop(runId: string, goal: string, signal: AbortSignal): Pro
     // 2) Work orders → CODE creates the task, member executes, verified
     //    outcome feeds back. Sequential by design (parallelGroup stays null
     //    in v1 — plan §4.1).
+    let gateStopTaskKey: string | null = null;
     for (const d of parsed.delegates) {
       if (d.error || !d.order) {
         feeds.push(`delegate: [error] ${d.error}`);
@@ -1054,25 +1589,128 @@ async function leaderLoop(runId: string, goal: string, signal: AbortSignal): Pro
         extraSkills: d.order.skills ?? [],
         pinnedContext,
         model: modelCtx,
+        guard,
       });
-      if (outcome === "skipped") return; // gate stop — handlers own status
+      if (outcome === "skipped") {
+        // Gate stop — handlers own status. Persist the interrupted turn first
+        // (below) so the canonical transcript stays complete.
+        gateStopTaskKey = row.key;
+        break;
+      }
       feeds.push(
         `${row.key} (${d.order.assignee}) → ${outcome}${outcome === "done" ? " (verified)" : ""}`
       );
     }
 
+    if (gateStopTaskKey) {
+      // Phase 1 gate-stop path — append the reply, the partial feeds, and a
+      // gate_stop audit marker before dropping out. The transcript then ends
+      // coherently (reply + tool results) even though the executor exits.
+      await guard.append(
+        { runId, conversationId: LEADER_CONVERSATION, taskId: null, agent: "atlas", role: "assistant", kind: "reply", content: reply },
+        { runId, conversationId: LEADER_CONVERSATION, taskId: null, agent: "atlas", role: "user", kind: "tool_results", content: `TOOL RESULTS:\n${feeds.join("\n") || "(none)"}\n(gate stop: ${gateStopTaskKey} left the loop at the approval gate — the approval handlers own run status.)` },
+        { runId, conversationId: LEADER_CONVERSATION, taskId: null, agent: "atlas", role: "user", kind: "gate_stop", content: `GATE STOP — ${gateStopTaskKey} paused at the approval gate.` }
+      );
+      return; // gate stop — handlers own status
+    }
+
     // finish (or a tool-free reply) ends the loop — but only after this
     // turn's delegates have run.
-    if (parsed.endsLoop && parsed.delegates.length === 0) break;
+    if (parsed.endsLoop && parsed.delegates.length === 0) {
+      loopExhausted = false;
+      break;
+    }
 
     const toolResults = `TOOL RESULTS:\n${feeds.join("\n") || "(no actions parsed — use read tools or ```team-delegate blocks)"}`;
     meter.addConversation(reply);
     meter.addConversation(toolResults);
     messages.push({ role: "assistant", content: reply });
     messages.push({ role: "user", content: toolResults });
+    // Phase 1 — mirror the turn into the canonical transcript FIRST (one
+    // atomic batch: reply + tool_results), THEN bump the cursor checkpoint
+    // (append-then-bump ordering).
+    await guard.append(
+      { runId, conversationId: LEADER_CONVERSATION, taskId: null, agent: "atlas", role: "assistant", kind: "reply", content: reply },
+      { runId, conversationId: LEADER_CONVERSATION, taskId: null, agent: "atlas", role: "user", kind: "tool_results", content: toolResults }
+    );
+    turnsUsed = turn;
+    await guard.checkpoint({
+      phase: "leading",
+      turnsUsed,
+      taskCounter,
+      delegateCount,
+      claimed,
+      issues,
+      qcRepairs: Object.fromEntries(qc.repairs),
+      impactReport,
+      wrapUpGranted,
+    });
   }
 
   if (signal.aborted) return;
+
+  // ---- One-shot budget wrap-up turn (Phase 1, lifetime cap) ----------------
+  // The loop reached exhaustion without a proper close. The leader gets ONE
+  // wrap-up turn per run LIFETIME: wrapUpGranted is checkpointed BEFORE the
+  // model call, so crash→resume cycles can never mint a second one — a resume
+  // that finds the flag already set (turnsUsed >= max) takes the deterministic
+  // zero-GLM reconciliation path (resume route → reconcileWrapUpFromDb).
+  if (loopExhausted && !wrapUpGranted) {
+    wrapUpGranted = true;
+    await guard.checkpoint({
+      phase: "wrap-up",
+      turnsUsed,
+      taskCounter,
+      delegateCount,
+      claimed,
+      issues,
+      qcRepairs: Object.fromEntries(qc.repairs),
+      impactReport,
+      wrapUpGranted,
+    });
+    const wrapUpDirective =
+      "BUDGET REACHED: the turn budget is exhausted. Reply NOW with your final run report " +
+      "(a run-report block) and a short closing summary — no tool calls and no new work orders. " +
+      "Name anything left unfinished in the report.";
+    meter.addConversation(wrapUpDirective);
+    messages.push({ role: "user", content: wrapUpDirective });
+    await guard.append({ runId, conversationId: LEADER_CONVERSATION, taskId: null, agent: "atlas", role: "user", kind: "wrap_up", content: wrapUpDirective });
+    const wrapReply = await glmCall(`leader wrap-up (turn ${turnsUsed + 1})`, turnsUsed + 1);
+    const wrapParsed = parseAgentTurn(wrapReply);
+    if (wrapParsed.narration) {
+      await emitEvent({
+        runId,
+        kind: "message",
+        actor: "atlas",
+        summary: truncate(wrapParsed.narration.replace(/BLOCKED[:：][\s\S]*/g, "").trim() || wrapParsed.narration, 280),
+      });
+    }
+    if (wrapParsed.runReport) {
+      for (const [key, value] of Object.entries(wrapParsed.runReport)) {
+        claimed[key] = (claimed[key] ?? 0) + value;
+      }
+    }
+    if (wrapParsed.delegates.length > 0 || wrapParsed.toolCalls.length > 0) {
+      issues.push(
+        `wrap-up turn requested ${wrapParsed.delegates.length} work order(s) / ${wrapParsed.toolCalls.length} tool call(s) after the budget — not executed`
+      );
+    }
+    meter.addConversation(wrapReply);
+    messages.push({ role: "assistant", content: wrapReply });
+    await guard.append({ runId, conversationId: LEADER_CONVERSATION, taskId: null, agent: "atlas", role: "assistant", kind: "reply", content: wrapReply });
+    turnsUsed += 1;
+    await guard.checkpoint({
+      phase: "wrap-up",
+      turnsUsed,
+      taskCounter,
+      delegateCount,
+      claimed,
+      issues,
+      qcRepairs: Object.fromEntries(qc.repairs),
+      impactReport,
+      wrapUpGranted,
+    });
+  }
 
   // ---- Final report (leader verification closure, plan §4 capability 5) ----
   if (leaderBlocked) {
@@ -1125,10 +1763,13 @@ async function leaderLoop(runId: string, goal: string, signal: AbortSignal): Pro
     blockingIssues: issues.slice(0, 12),
   };
 
-  await db.agentRun.update({
-    where: { id: runId },
+  // Phase 1 — the completion flip is lease-fenced: an evicted executor never
+  // closes somebody else's run. count === 0 ⇒ the new owner will finish it.
+  const closed = await db.agentRun.updateMany({
+    where: { id: runId, leaseOwner: guard.lease.owner, leaseEpoch: guard.lease.epoch },
     data: { status, finalReport: JSON.stringify(report) },
   });
+  if (closed.count === 0) throw new LeaseLostError();
   await emitEvent({
     runId,
     kind: "message",
@@ -1164,6 +1805,8 @@ type TaskOutcome = "done" | "blocked" | "failed" | "skipped";
 interface ToolResult {
   ok: boolean;
   feed: string;
+  /** Phase 1 — set when an idempotency probe adopted an already-committed effect. */
+  adopted?: "write" | "finalize";
 }
 
 async function executeTask(params: {
@@ -1183,7 +1826,8 @@ async function executeTask(params: {
   pinnedContext?: string | null;
   /** P2 — the run's resolved registry selection, applied to every call. */
   model: RunModel;
-  /** Narration tap — lets the leader capture a member's report text. */
+  /** Phase 1 — the executor's lease guard; every transcript append is fenced. */
+  guard: LeaseGuard;
   onNarration?: (text: string) => void;
 }): Promise<TaskOutcome> {
   const budgets = getBudgets();
@@ -1268,6 +1912,12 @@ async function executeTask(params: {
     { role: "assistant", content: system },
     { role: "user", content: [...convParts, ...novelParts].join("\n") },
   ];
+  // Phase 1 — the member conversation opens canonically (fenced appends:
+  // role card + task envelope, mirroring the wire exactly).
+  await params.guard.append(
+    { runId, conversationId: task.id, taskId: task.id, agent: assignee, role: "assistant", kind: "system_note", content: system },
+    { runId, conversationId: task.id, taskId: task.id, agent: assignee, role: "user", kind: "envelope", content: [...convParts, ...novelParts].join("\n") }
+  );
 
   // P2 — conversation-scoped meter; snapshot per call = what that call sent.
   const meter = createContextMeter({
@@ -1284,6 +1934,11 @@ async function executeTask(params: {
   let blockedReason: string | null = null;
   let repairRound = 0;
   let stoppedByGate = false;
+  // Phase 1 — adopted (already-committed) effects found by the idempotency
+  // probes. They satisfy write/finalize verification WITHOUT counting twice
+  // (the original event already carries them into the run-level totals).
+  let adoptedWrites = 0;
+  let adoptedFinalizes = 0;
 
   let callCounter = 0; // repair rounds reuse runTurns — keep labels monotonic
   const glmCall = async (tag: string): Promise<string> => {
@@ -1303,6 +1958,7 @@ async function executeTask(params: {
   const runTurns = async (turnBudget: number): Promise<void> => {
     for (let turn = 1; turn <= turnBudget; turn++) {
       if (signal.aborted) throw new Error("Run aborted");
+      await params.guard.assertHeld();
       const reply = await glmCall(`${task.key} turn ${turn}`);
       const parsed = parseAgentTurn(reply);
 
@@ -1362,8 +2018,17 @@ async function executeTask(params: {
           actor: assignee,
         });
         feeds.push(`${i + 1}. ${result.feed}`);
+        if (result.adopted === "write") adoptedWrites += 1;
+        if (result.adopted === "finalize") adoptedFinalizes += 1;
         if (result.stopped) {
           stoppedByGate = true;
+          // Phase 1 — persist the interrupted turn before dropping out: the
+          // reply, the partial feeds, and a gate_stop audit marker.
+          await params.guard.append(
+            { runId, conversationId: task.id, taskId: task.id, agent: assignee, role: "assistant", kind: "reply", content: reply },
+            { runId, conversationId: task.id, taskId: task.id, agent: assignee, role: "user", kind: "tool_results", content: `TOOL RESULTS:\n${feeds.join("\n") || "(none)"}\n(gate stop: the approval gate ended this turn — the approval handlers own run status.)` },
+            { runId, conversationId: task.id, taskId: task.id, agent: assignee, role: "user", kind: "gate_stop", content: `GATE STOP — ${task.key}: ${truncate(result.feed, 200)}` }
+          );
           return;
         }
       }
@@ -1390,6 +2055,12 @@ async function executeTask(params: {
       meter.addConversation(toolResults);
       messages.push({ role: "assistant", content: reply });
       messages.push({ role: "user", content: toolResults });
+      // Phase 1 — mirror the turn into the canonical transcript (one atomic
+      // batch so a crash can never leave a dangling reply).
+      await params.guard.append(
+        { runId, conversationId: task.id, taskId: task.id, agent: assignee, role: "assistant", kind: "reply", content: reply },
+        { runId, conversationId: task.id, taskId: task.id, agent: assignee, role: "user", kind: "tool_results", content: toolResults }
+      );
     }
   };
 
@@ -1404,7 +2075,7 @@ async function executeTask(params: {
     const requiresWrite = task.artifactType === "chapter" && assignee === "sage";
     while (
       requiresWrite &&
-      measuredForTask.chaptersWritten + measuredForTask.chaptersUpdated === 0 &&
+      measuredForTask.chaptersWritten + measuredForTask.chaptersUpdated + adoptedWrites === 0 &&
       !blockedReason &&
       repairRound < budgets.glm.repairRounds &&
       !signal.aborted
@@ -1422,6 +2093,7 @@ async function executeTask(params: {
         "or make your final line BLOCKED: with the reason. Narration alone will fail again.";
       meter.addConversation(verifyFailed);
       messages.push({ role: "user", content: verifyFailed });
+      await params.guard.append({ runId, conversationId: task.id, taskId: task.id, agent: assignee, role: "user", kind: "repair", content: verifyFailed });
       await runTurns(2);
     }
 
@@ -1437,7 +2109,7 @@ async function executeTask(params: {
       /certif|finaliz/i.test(`${task.title ?? ""}`);
     while (
       requiresFinalize &&
-      measuredForTask.chaptersFinalized === 0 &&
+      measuredForTask.chaptersFinalized + adoptedFinalizes === 0 &&
       !blockedReason &&
       repairRound < budgets.glm.repairRounds &&
       !signal.aborted
@@ -1455,6 +2127,7 @@ async function executeTask(params: {
         "Skip optional scans; or reply BLOCKED: with the reason. Narration alone will fail again.";
       meter.addConversation(finalizeFailed);
       messages.push({ role: "user", content: finalizeFailed });
+      await params.guard.append({ runId, conversationId: task.id, taskId: task.id, agent: assignee, role: "user", kind: "repair", content: finalizeFailed });
       await runTurns(2);
     }
 
@@ -1475,12 +2148,12 @@ async function executeTask(params: {
       await emitEvent({ ...taskRef, actor: assignee, kind: "task_update", summary: `${task.key} blocked: ${truncate(blockedReason, 200)}` });
       params.issues.push(`${task.key} (${assignee}) blocked: ${blockedReason}`);
       outcome = "blocked";
-    } else if (requiresWrite && measuredForTask.chaptersWritten + measuredForTask.chaptersUpdated === 0) {
+    } else if (requiresWrite && measuredForTask.chaptersWritten + measuredForTask.chaptersUpdated + adoptedWrites === 0) {
       await db.agentTask.update({ where: { id: task.id }, data: { status: "failed" } });
       await emitEvent({ ...taskRef, actor: assignee, kind: "task_update", summary: `${task.key} failed — write verification never passed.` });
       params.issues.push(`${task.key} failed: no verified write after ${budgets.glm.repairRounds} repair round(s)`);
       outcome = "failed";
-    } else if (requiresFinalize && measuredForTask.chaptersFinalized === 0) {
+    } else if (requiresFinalize && measuredForTask.chaptersFinalized + adoptedFinalizes === 0) {
       await db.agentTask.update({ where: { id: task.id }, data: { status: "failed" } });
       await emitEvent({ ...taskRef, actor: assignee, kind: "task_update", summary: `${task.key} failed — finalize verification never passed (chapter still draft).` });
       params.issues.push(`${task.key} failed: no verified finalize_chapter after ${budgets.glm.repairRounds} repair round(s) — chapter left in draft`);
@@ -1492,12 +2165,22 @@ async function executeTask(params: {
           ? ` (finalize verified in DB${measuredForTask.settlesRun > 0 ? ` + ${measuredForTask.settlesRun} memory settle(s)` : ""})`
           : measuredForTask.chaptersWritten + measuredForTask.chaptersUpdated > 0
             ? " (write verified in DB)"
-            : ` (${assignee} work verified)`;
+            : adoptedWrites + adoptedFinalizes > 0
+              ? ` (work adopted from an earlier verified commit — idempotent re-dispatch)`
+              : ` (${assignee} work verified)`;
       await emitEvent({ ...taskRef, actor: assignee, kind: "task_update", summary: `${task.key} done${verified}.` });
       outcome = "done";
     }
     return outcome;
   } catch (error) {
+    if (error instanceof LeaseLostError) {
+      // Phase 1 — an evicted executor must NOT flip task status (that write
+      // belongs to the current lease owner; a marked-failed task would be a
+      // post-eviction write). Propagate so executeRun aborts without further
+      // DB writes; the resume path re-dispatches the task and any committed
+      // work is adopted by the probes.
+      throw error;
+    }
     if (signal.aborted) {
       // Cancel handler owns the status flip; just stop quietly.
       return "skipped";
@@ -1531,7 +2214,7 @@ interface ExecuteToolParams {
   actor: AgentRoleId;
 }
 
-async function executeTool(params: ExecuteToolParams): Promise<ToolResult & { stopped?: boolean }> {
+export async function executeTool(params: ExecuteToolParams): Promise<ToolResult & { stopped?: boolean }> {
   const { action, prose, actor } = params;
   const budgets = getBudgets();
 
@@ -1636,6 +2319,10 @@ async function executeTool(params: ExecuteToolParams): Promise<ToolResult & { st
           actor,
           kind: "message",
           summary: `Reviewed Chapter ${chapter.index} "${truncate(chapter.title, 60)}" — ${result.issues.length} issue(s), ${blocking} blocking.`,
+          // Phase 1 — structured review payload so the blocking findings are
+          // re-derivable from the event stream after a crash (review payload
+          // addition: op / issues / blocking).
+          payload: { op: "review_chapter", chapterIndex: chapter.index, issues: result.issues.length, blocking },
         });
         return {
           ok: true,
@@ -1653,6 +2340,16 @@ async function executeTool(params: ExecuteToolParams): Promise<ToolResult & { st
         where: { novelId: params.novelId, index: action.index },
       });
       if (!chapter) return { ok: false, feed: `finalize_chapter(${action.index}) → error: no such chapter` };
+      // Phase 1 idempotency probe (finalize): already final ⇒ the commit
+      // landed before the interruption. Adopt, don't re-commit (no duplicate
+      // counted, no duplicate event — the original event still stands).
+      if (chapter.status === "final") {
+        return {
+          ok: true,
+          adopted: "finalize",
+          feed: `finalize_chapter(${action.index}) → ok: chapter is already FINAL — adopted (idempotent re-dispatch, no re-commit).`,
+        };
+      }
       const latest = await db.chapterReview.findFirst({
         where: { chapterId: chapter.id },
         orderBy: { createdAt: "desc" },
@@ -1675,7 +2372,7 @@ async function executeTool(params: ExecuteToolParams): Promise<ToolResult & { st
         actor,
         kind: "write",
         summary: `Chapter ${chapter.index} "${truncate(chapter.title, 60)}" marked FINAL — E2 gate passed (latest review: ${latest?.blockingCount ?? 0} blocking, verified in DB).`,
-        payload: { artifact: "chapter", chapterId: chapter.id, index: chapter.index, status: "final" },
+        payload: { artifact: "chapter", chapterId: chapter.id, index: chapter.index, status: "final", op: "finalize_chapter" },
       });
       return {
         ok: true,
@@ -1689,6 +2386,22 @@ async function executeTool(params: ExecuteToolParams): Promise<ToolResult & { st
         where: { novelId: params.novelId, index: action.index },
       });
       if (!chapter) return { ok: false, feed: `settle_chapter(${action.index}) → error: no such chapter` };
+      // Phase 1 idempotency probe (settle, STATE-based): a ChapterDigest that
+      // is newer than the chapter's last edit means memory already settled
+      // for exactly this content — adopt and skip the sediment GLM pass.
+      // sedimentChapterCore is itself row-idempotent (digest upsert, fact
+      // dedupe, plant dedupe, one-way ledger); the probe only avoids the
+      // redundant provider call on re-dispatch.
+      const digest = await db.chapterDigest.findUnique({
+        where: { chapterId: chapter.id },
+        select: { updatedAt: true },
+      });
+      if (digest && digest.updatedAt.getTime() >= chapter.updatedAt.getTime()) {
+        return {
+          ok: true,
+          feed: `settle_chapter(${action.index}) → ok: memory already settled for the current chapter content (digest current — adopted, no re-sedimentation).`,
+        };
+      }
       const latest = await db.chapterReview.findFirst({
         where: { chapterId: chapter.id },
         orderBy: { createdAt: "desc" },
@@ -1709,7 +2422,7 @@ async function executeTool(params: ExecuteToolParams): Promise<ToolResult & { st
           actor,
           kind: "write",
           summary: `Chapter ${chapter.index} memory settled — ${outcome.factsCreated} facts, ${outcome.characterStates} states, ${outcome.plantsCreated} plants (verified in DB).`,
-          payload: { artifact: "chapter", chapterId: chapter.id, index: chapter.index, settles: outcome },
+          payload: { artifact: "chapter", chapterId: chapter.id, index: chapter.index, settles: outcome, op: "settle_chapter" },
         });
         return {
           ok: true,
@@ -1742,6 +2455,18 @@ async function executeTool(params: ExecuteToolParams): Promise<ToolResult & { st
     case "create_chapter": {
       if (!prose) {
         return { ok: false, feed: "create_chapter → error: provide the chapter prose in a ```novel-write block in the SAME turn." };
+      }
+      // Phase 1 idempotency probe (create): both interruption shapes that
+      // would duplicate a chapter row on re-dispatch (exact title+content
+      // match, or this run already committed a create for the same title).
+      // See findAdoptableChapter.
+      const adoptable = await findAdoptableChapter(params.runId, params.novelId, action.title, prose);
+      if (adoptable) {
+        return {
+          ok: true,
+          adopted: "write",
+          feed: `create_chapter → ok: adopted existing Chapter ${adoptable.index} "${action.title}" (${adoptable.wordCount} words) — this work was already committed earlier in the run (idempotent re-dispatch, no duplicate row created). Task complete; end your reply without tool calls.`,
+        };
       }
       const last = await db.chapter.findFirst({
         where: { novelId: params.novelId },
@@ -1803,7 +2528,7 @@ async function executeTool(params: ExecuteToolParams): Promise<ToolResult & { st
         taskId: params.taskId,
         kind: "write",
         summary: `Created Chapter ${index} "${truncate(action.title, 80)}" — ${words.toLocaleString()} words (verified in DB).`,
-        payload: { artifact: "chapter", chapterId: chapter.id, index, words },
+        payload: { artifact: "chapter", chapterId: chapter.id, index, words, op: "create_chapter", title: action.title },
       });
       return { ok: true, feed: `create_chapter → ok: Chapter ${index} "${action.title}" created with ${words} words (verified).` };
     }
@@ -1816,6 +2541,18 @@ async function executeTool(params: ExecuteToolParams): Promise<ToolResult & { st
         where: { novelId: params.novelId, index: action.index },
       });
       if (!chapter) return { ok: false, feed: `update_chapter(${action.index}) → error: no such chapter` };
+
+      // Phase 1 idempotency probe (update): the exact replacement content is
+      // ALREADY live ⇒ the commit landed but the outcome was lost to an
+      // interruption. Adopt without re-writing (no duplicate version row, no
+      // double-counted repair round, no duplicate event).
+      if (chapter.content === prose) {
+        return {
+          ok: true,
+          adopted: "write",
+          feed: `update_chapter(${chapter.index}) → ok: adopted — the chapter already carries exactly this content (idempotent re-dispatch, nothing re-written). Task complete; end your reply without tool calls.`,
+        };
+      }
 
       // Phase 7 final lock — 定稿 is immutable to agents. Repairs on a final
       // chapter require the author to reopen it in the workbench first.
@@ -1902,7 +2639,7 @@ async function executeTool(params: ExecuteToolParams): Promise<ToolResult & { st
         taskId: params.taskId,
         kind: "write",
         summary: `Updated Chapter ${chapter.index} "${truncate(chapter.title, 80)}" — now ${words.toLocaleString()} words${isRepair ? ` (repair round ${params.qc.repairs.get(chapter.index)}/${budgets.qc.revisionRounds})` : ""} (verified in DB).`,
-        payload: { artifact: "chapter", chapterId: chapter.id, index: chapter.index, words },
+        payload: { artifact: "chapter", chapterId: chapter.id, index: chapter.index, words, op: "update_chapter", title: chapter.title, existingWords: verdict.existingWords, isRepair },
       });
       return { ok: true, feed: `update_chapter(${chapter.index}) → ok: content replaced, ${words} words (verified).${isRepair ? " Re-review this chapter to re-check the blocking findings." : ""}` };
     }
@@ -1912,6 +2649,14 @@ async function executeTool(params: ExecuteToolParams): Promise<ToolResult & { st
         where: { novelId: params.novelId, index: action.index },
       });
       if (!beat) return { ok: false, feed: `update_outline_beat(${action.index}) → error: no such beat` };
+      // Phase 1 idempotency probe (beat): identical summary ⇒ already applied
+      // before the interruption — adopt, no change, no duplicate event.
+      if (beat.summary === action.summary) {
+        return {
+          ok: true,
+          feed: `update_outline_beat(${beat.index}) → ok: beat already carries this summary (adopted — no change needed).`,
+        };
+      }
       await db.outlineBeat.update({ where: { id: beat.id }, data: { summary: action.summary } });
       params.measured.outlineBeatsUpdated += 1;
       await emitEvent({
@@ -1919,7 +2664,7 @@ async function executeTool(params: ExecuteToolParams): Promise<ToolResult & { st
         taskId: params.taskId,
         kind: "write",
         summary: `Updated outline beat ${beat.index} "${truncate(beat.title, 80)}" (verified in DB).`,
-        payload: { artifact: "outline_beat", beatId: beat.id, index: beat.index },
+        payload: { artifact: "outline_beat", beatId: beat.id, index: beat.index, op: "update_outline_beat" },
       });
       return { ok: true, feed: `update_outline_beat(${beat.index}) → ok: summary updated (verified).` };
     }
