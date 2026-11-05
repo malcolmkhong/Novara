@@ -165,7 +165,7 @@ export const DEFAULT_BUDGETS: Budgets = {
   },
   contextCompaction: {
     enabled: false,        // Phase 2 ships inert — flipped only in a P2-c probe run
-    triggerTokens: 24_000, // compact when the metered active context reaches this
+    triggerTokens: 6_000,  // reachable default (§8-predicted leader ceiling ~9–10K; 24K could never fire)
     tailTurns: 8,          // verbatim turns kept after the cut
     minCompactableRows: 12, // never compact below this many coverable rows
   },

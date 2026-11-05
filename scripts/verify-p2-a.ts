@@ -161,8 +161,8 @@ async function main() {
     // --- 6. contextCompaction config: parses, ships disabled ---------------
     const cc = getBudgets().contextCompaction;
     check(
-      "contextCompaction parses from budgets.yaml with enabled=false",
-      cc.enabled === false && cc.triggerTokens === 24000 && cc.tailTurns === 8 && cc.minCompactableRows === 12,
+      "contextCompaction parses from budgets.yaml with enabled=false (reachable trigger)",
+      cc.enabled === false && cc.triggerTokens === 6000 && cc.tailTurns === 8 && cc.minCompactableRows === 12,
       JSON.stringify(cc)
     );
     check("compaction config is independent of contextSpec (still 'v1')", fresh?.contextSpec === "v1");

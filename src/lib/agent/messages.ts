@@ -256,18 +256,21 @@ export async function appendAgentMessages(
 /**
  * Replay a conversation in canonical order — the ONLY restore source for
  * model contexts. Reads AgentMessage exclusively; AgentEvent (truncated UI
- * stream, usage events) is never mixed in.
+ * stream, usage events) is never mixed in. seq rides along (Phase 2: the
+ * compaction assembler needs cover ranges / tail arithmetic over seq) —
+ * additive field, existing consumers unaffected.
  */
 export async function loadConversation(
   runId: string,
   conversationId: string
-): Promise<{ role: ChatRole; content: string; kind: MessageKind; agent: string }[]> {
+): Promise<{ seq: number; role: ChatRole; content: string; kind: MessageKind; agent: string }[]> {
   const rows = await db.agentMessage.findMany({
     where: { runId, conversationId },
     orderBy: { seq: "asc" },
-    select: { role: true, content: true, kind: true, agent: true },
+    select: { seq: true, role: true, content: true, kind: true, agent: true },
   });
   return rows.map((r) => ({
+    seq: r.seq,
     role: r.role as ChatRole,
     content: r.content,
     kind: r.kind as MessageKind,

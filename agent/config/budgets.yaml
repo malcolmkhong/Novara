@@ -61,6 +61,11 @@ memory:
 # delivery exclusively).
 contextCompaction:
   enabled: false        # master switch — shipped inert; flipped only in a P2-c probe run
-  triggerTokens: 24000  # compact when the metered active context reaches this
+  # REACHABLE default: the §8-predicted conversation-section ceiling of a
+  # full-budget 22-turn leader run is ~9–10K tok, so 24K could never fire.
+  # 6000 fires on busy leader runs (measured per-call conversation totals in
+  # the P2-b report); P2-c may tune further. Validated by measurement, never
+  # hand math.
+  triggerTokens: 6000   # compact when the metered active context reaches this
   tailTurns: 8          # verbatim reply+tool_results turns kept after the cut
   minCompactableRows: 12 # never compact below this many coverable rows (absorption must pay for itself)
