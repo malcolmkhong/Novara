@@ -1633,6 +1633,26 @@ async function leaderLoop(
     if (parsed.blockedReason) {
       leaderBlocked = parsed.blockedReason;
       loopExhausted = false;
+      // Phase 1 compliance (risk #7 CLOSED) — the closing reply IS canonical
+      // history: append it before leaving. Append-ownership rule: THIS exit
+      // owns the turn's append; the per-turn batch at the loop body's end is
+      // unreachable once an exit fires. No tool_results row: the blocked
+      // check fires before any action runs, so nothing was executed this
+      // turn. No checkpoint bump and kind "final" (not "reply"): closing
+      // turns are terminal — completed/failed runs never resume — and stay
+      // excluded from the turn cursor, keeping cursor == checkpoint timing.
+      // Meter/usage untouched: the closing call's usage event was already
+      // emitted by glmCall above, and the reply is generated-never-sent
+      // (no further model call exists on a terminal path).
+      await guard.append({
+        runId,
+        conversationId: LEADER_CONVERSATION,
+        taskId: null,
+        agent: "atlas",
+        role: "assistant",
+        kind: "final",
+        content: reply,
+      });
       break;
     }
     if (parsed.runReport) {
@@ -1750,6 +1770,22 @@ async function leaderLoop(
     // turn's delegates have run.
     if (parsed.endsLoop && parsed.delegates.length === 0) {
       loopExhausted = false;
+      // Phase 1 compliance (risk #7 CLOSED) — persist the closing turn with
+      // the SAME batch the per-turn path would write (tool results included
+      // when this turn executed reads), with the reply marked kind "final"
+      // so the turn cursor ("reply"-row count) and the checkpoints remain
+      // consistent. Append-ownership rule: THIS exit owns the turn's append;
+      // the per-turn batch below is unreachable once it fires. No checkpoint
+      // bump (terminal turn); meter/usage untouched (usage was emitted by
+      // glmCall above; the reply is generated-never-sent).
+      const closingResults =
+        feeds.length > 0 ? `TOOL RESULTS:\n${feeds.join("\n")}` : null;
+      await guard.append(
+        { runId, conversationId: LEADER_CONVERSATION, taskId: null, agent: "atlas", role: "assistant", kind: "final", content: reply },
+        ...(closingResults
+          ? [{ runId, conversationId: LEADER_CONVERSATION, taskId: null, agent: "atlas", role: "user", kind: "tool_results", content: closingResults }]
+          : [])
+      );
       break;
     }
 
@@ -1761,6 +1797,14 @@ async function leaderLoop(
     // Phase 1 — mirror the turn into the canonical transcript FIRST (one
     // atomic batch: reply + tool_results), THEN bump the cursor checkpoint
     // (append-then-bump ordering).
+    // Append-ownership rule (risk #7): every leader model turn is appended
+    // EXACTLY ONCE by exactly one of — (a) this per-turn batch (normal
+    // turns), (b) the gate-stop batch (reply + tool_results + gate_stop
+    // marker), (c) the blocked exit ("final"), (d) the finish/tool-free
+    // exit ("final" [+ tool_results]). Each exit returns/breaks immediately
+    // after its append and this batch is the loop body's last statement, so
+    // reaching it proves no terminal exit fired for this turn — a double
+    // append is structurally impossible.
     await guard.append(
       { runId, conversationId: LEADER_CONVERSATION, taskId: null, agent: "atlas", role: "assistant", kind: "reply", content: reply },
       { runId, conversationId: LEADER_CONVERSATION, taskId: null, agent: "atlas", role: "user", kind: "tool_results", content: toolResults }

@@ -56,6 +56,10 @@ export type MessageKind =
   | "system_note" // role card persisted as the fake assistant message (wire parity)
   | "envelope" // first user message of a conversation (goal/brief + context)
   | "reply" // model turn
+  | "final" // the leader's CLOSING model turn (blocked / finish / tool-free exit)
+  //   — a real wire message: replayed like "reply", metered like any row, but
+  //   NOT counted in the turn cursor (closing turns are terminal — completed/
+  //   failed runs never resume — and never bump a checkpoint)
   | "tool_results" // TOOL RESULTS feed appended after a model turn
   | "repair" // VERIFY FAILED pushes in member repair rounds
   | "gate_stop" // appended when a gate stop drops out of the loop (audit marker,

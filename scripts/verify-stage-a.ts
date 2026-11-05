@@ -120,7 +120,7 @@ async function main() {
     const state: RunLoopState = {
       phase: "post-impact", turnsUsed: 5, taskCounter: 3, delegateCount: 3,
       claimed: { chaptersWritten: 2 }, issues: ["Task 1 failed: no verified write"],
-      qcRepairs: { "3": 1 }, impactReport: "impact text 中文", wrapUpGranted: false,
+      qcRepairs: { "3": 1 }, impactReport: "impact text 中文", wrapUpGranted: true,
     };
     check("writeLoopState by CURRENT owner succeeds", await writeLoopState(runId, leaseC!, state));
     const readBack = await readLoopState(runId);
@@ -129,7 +129,7 @@ async function main() {
       readBack.turnsUsed === 5 && readBack.taskCounter === 3 && readBack.delegateCount === 3 &&
       readBack.claimed.chaptersWritten === 2 && readBack.issues.length === 1 &&
       readBack.qcRepairs["3"] === 1 && readBack.impactReport === "impact text 中文" &&
-      readBack.phase === "post-impact");
+      readBack.phase === "post-impact" && readBack.wrapUpGranted === true);
     check("parseRunLoopState(null) → null (fresh-run semantics)", parseRunLoopState(null) === null);
 
     // --- 5. graceful release -------------------------------------------------
