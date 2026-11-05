@@ -54,3 +54,13 @@ memory:
   digestSummaryChars: 500     # per-digest clip
   recencyHalfLifeChapters: 12 # chapters until an item's recency ≈ 0.75
   staleLoopChapters: 10       # doctor: open loop untouched for N chapters → warn
+
+# Phase 2 — context compaction (agent-ctx/p2-design.md). Inert in every live
+# run: enabled stays false until P2-c's confirmed probe. Eligibility keys off
+# THIS section only — never off contextSpec (which decides system-note wire
+# delivery exclusively).
+contextCompaction:
+  enabled: false        # master switch — shipped inert; flipped only in a P2-c probe run
+  triggerTokens: 24000  # compact when the metered active context reaches this
+  tailTurns: 8          # verbatim reply+tool_results turns kept after the cut
+  minCompactableRows: 12 # never compact below this many coverable rows (absorption must pay for itself)

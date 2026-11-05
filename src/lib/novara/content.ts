@@ -100,6 +100,15 @@ export const budgetsSchema = z.object({
     recencyHalfLifeChapters: z.number().int().min(1),
     staleLoopChapters: z.number().int().min(3),
   }),
+  // Phase 2 — context compaction. Eligibility keys off THIS section only,
+  // never off contextSpec (agent-ctx/p2-design.md §1). enabled=false ships
+  // inert: nothing consumes the section until P2-b's assembler.
+  contextCompaction: z.object({
+    enabled: z.boolean(),
+    triggerTokens: z.number().int().min(4000),
+    tailTurns: z.number().int().min(1).max(64),
+    minCompactableRows: z.number().int().min(2),
+  }),
 });
 
 export type Budgets = z.infer<typeof budgetsSchema>;
@@ -153,6 +162,12 @@ export const DEFAULT_BUDGETS: Budgets = {
     digestSummaryChars: 500,   // per-digest clip
     recencyHalfLifeChapters: 12,  // chapters until recency factor ≈ 0.75
     staleLoopChapters: 10,     // doctor: open loop untouched for N chapters → warn
+  },
+  contextCompaction: {
+    enabled: false,        // Phase 2 ships inert — flipped only in a P2-c probe run
+    triggerTokens: 24_000, // compact when the metered active context reaches this
+    tailTurns: 8,          // verbatim turns kept after the cut
+    minCompactableRows: 12, // never compact below this many coverable rows
   },
 };
 

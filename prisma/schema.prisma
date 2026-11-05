@@ -555,9 +555,18 @@ model AgentRun {
   leaseHeartbeatAt DateTime?
   leaseEpoch      Int      @default(0)
 
+  // Phase 2 — governs ONLY system-prompt delivery on the wire:
+  // "v1" = system card replayed as the fake assistant message (system_note
+  // row — today's wire, byte-identical guarantee); "v2" = native system
+  // message (Phase 3's first step flips it; Phase 2 never writes anything
+  // but this default). Compaction eligibility does NOT key off this —
+  // budgets.contextCompaction owns that (agent-ctx/p2-design.md §1).
+  contextSpec String @default("v1")
+
   tasks  AgentTask[]
   events AgentEvent[]
   messages AgentMessage[]
+  summaries ContextSummary[]
 
   @@index([novelId, status])
   @@index([updatedAt])
@@ -642,6 +651,59 @@ model AgentMessage {
   @@unique([runId, conversationId, seq])
   @@index([runId, conversationId, seq])
   @@index([taskId])
+}
+
+// ---------------------------------------------------------------------------
+// ContextSummary (Phase 2) — compaction projection over the canonical
+// transcript. DERIVED state: AgentMessage stays the ONLY source of truth —
+// transcript rows are never deleted or mutated; summaries merely COVER
+// [fromSeq..toSeq] so any projection is re-derivable and auditable
+// (agent-ctx/p2-design.md §2).
+//
+// Absorb-chain: each row compresses (prior active summary text + verbatim
+// rows since the prior cut) into ONE row whose fromSeq reaches back to the
+// FIRST compacted seq (envelope.seq + 1); replay = newest active row only +
+// verbatim tail, keeping the active-context cap flat no matter how many
+// compactions fire. Exactly one active row per (runId, conversationId)
+// (supersededAt IS NULL) — the prior row is fenced-superseded when the new
+// one lands.
+//
+// Fencing: written ONLY by the leaseholder inside a lease-verified
+// transaction; leaseEpoch is the fencing token — a deposed compacter's write
+// lands count=0 and the winner recomputes from canonical AgentMessage.
+// Idempotent per cut point via @@unique([runId, conversationId, toSeq])
+// (crash→retry at the same cut hits P2002 and treats the existing row as
+// done). Eligibility is governed ONLY by budgets.contextCompaction (enabled
+// + triggerTokens) — NEVER by contextSpec, which decides system-note wire
+// delivery exclusively.
+// ---------------------------------------------------------------------------
+
+model ContextSummary {
+  id             String    @id @default(cuid())
+  runId          String
+  run            AgentRun  @relation(fields: [runId], references: [id], onDelete: Cascade)
+  // Conversation key within the run: "leader" | taskId (same keys as AgentMessage).
+  conversationId String
+  // Member conversations carry the task id; null on leader rows (symmetric
+  // with AgentMessage).
+  taskId         String?
+  // Conversation owner: atlas | sage | nova | prism | forge
+  agent          String
+  // Contiguous cover [fromSeq..toSeq] over AgentMessage.seq, marker kinds
+  // included (the seq domain has no holes). fromSeq === envelope.seq + 1 for
+  // the chain head; toSeq is the cut point.
+  fromSeq        Int
+  toSeq          Int
+  // Absorbed summary text (prior summary + rows since the prior cut).
+  summary        String
+  // Lease fencing token at write time (AgentRun.leaseEpoch when written).
+  leaseEpoch     Int       @default(0)
+  // null = active chain head; non-null = superseded by a newer absorb row.
+  supersededAt   DateTime?
+  createdAt      DateTime  @default(now())
+
+  @@unique([runId, conversationId, toSeq])
+  @@index([runId, conversationId, supersededAt])
 }
 
 // Phase 5 telemetry — which skills were injected into which member task.
