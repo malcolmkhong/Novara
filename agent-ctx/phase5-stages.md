@@ -1077,3 +1077,152 @@ this report. Highlights (full detail in the plan):
 - Verification plan (post-approval): eleventh harness verify-p5-g, zero GLM.
 - GLM budget for this plan: $0.00 (read-only git/file analysis only).
 - **Status: AWAITING USER APPROVAL — no code has been touched.**
+
+## §P5-G.1 — TEAM-1 revival EXECUTED (plan APPROVED with amendments A1/A2/A3; evidence embedded)
+
+Commit `b23810a` (10 files, +1118/−211). Plan doc
+**agent-ctx/p5g-team1-repair-plan.md** now carries the folded amendments in
+§9 (A2 forensic addendum) / §10 (A1 live-fire acceptance) / §11 (A3 data-loss
+honesty); §1's chronology corrected (see Forensic addendum below). Risk
+register TEAM-1 → CLOSED (revived).
+
+### A2 forensic addendum (completed BEFORE any code)
+
+- **f32b9df commit message, verbatim:** `f875634b-46cb-4f37-8d38-7794bf482521`
+  — auto-generated UUID, no intent statement.
+- **Diff scope:** 69 files, +2,968/−12,977 — the **Novara pivot**: wholesale
+  old-app replacement (detector ×10, old novel ×14, ai-team ×19 deleted;
+  NOVARA_AI_DEVELOPMENT_PLAN.md added). **Verdict: deliberate removal by
+  product replacement**, not schema-cleanup collateral. Same commit added
+  the pre-pivot backup db.
+- **Chronology correction (plan §1 updated):** b8aa210 (Nov 1 01:35) added
+  FIVE team models; 7725023 (Nov 1 13:15) added TeamTurnLog; f32b9df deleted
+  all six models AND the entire ai-team code surface; c23c745 (Nov 3)
+  re-added the code verbatim WITHOUT the schema — the precise 500 mechanism.
+- **Grep inventory (plan §9-i):** all `db.team*` references live in
+  `src/lib/ai-team/server.ts` + the five `/api/team/*` routes — one shared
+  client, six revival paths, revived by one schema restore. No other file
+  touches team delegates.
+- **UI entry points (plan §9-ii, A2-required finding):** today's writer
+  `ai-team-panel.tsx` is a STATIC roster card — zero `/api/team` calls; the
+  plan's §2/§6 "post-revival it works as-is" was FALSE for today's build.
+  The full functional UI (`src/components/ai-team/*`, 10 files incl.
+  side-panel ×767 lines) exists ORPHANED with zero importers. Per the A2
+  ruling: noted, NOT fixed (out of scope). The wizard ("New with the AI
+  team", `/api/ai/wizard`) touches NO Team* table — its only team relation
+  is the persona prompt.
+
+### Schema restore + drift adaptation (disclosed)
+
+- Six models restored VERBATIM from `f32b9df^` + exactly the two ruled
+  adaptations (plain-string no-FK `novelId` on TeamConversation + TeamTask;
+  header comments with TEAM-1 reference). Additive `db:push` in 24 ms;
+  pre-flight `sqlite_master` query: zero orphaned Team% tables.
+- **Drift adaptation (new, disclosed):** `tsc` surfaced that the restored
+  `novel-tools.ts` was typed against the PRE-pivot novel schema (logline /
+  targetChapters / chapter.number / plantedAt / nullable content /
+  startChapter-endChapter volumes). Today's models: synopsis / targetWords /
+  Chapter.index / brief (细纲) / non-null content / flat volumes /
+  Foreshadow.content+plantChapter+payByChapter. The action set and protocol
+  are UNCHANGED; params/columns remapped (logline→synopsis accepted as
+  alias, number→index alias kept, goal→brief, bible/characters/villain/
+  masterOutline/coreConflict/timeAnchor/endHook/mustCover dropped — no such
+  columns today; those concerns live in dedicated surfaces). This was
+  A1-blocking (create_novel wrote a non-existent column at runtime) and is
+  the concrete "code drifted underneath it" the amendment warned about.
+- Revival code per plan §5: `GlmScope {novelId, correlationId, model}`
+  threaded through glmText/glmAgentTurn/verifyCompletionClaims/
+  runLeaderFollowUp/runTask; conversation novelId pinned at creation;
+  delegated/continuation tasks inherit it; `NovelToolResult.novelId`
+  side-channel → `recordProvenanceLink("ai-team", "ai-team:<sessionKey>",
+  novelId)` on the chat + task paths (wizard precedent, idempotent).
+  Request-side optional `model` param exists for ops/live-fire only;
+  production callers omit it → gateway-default (UNPRICED, never guessed).
+
+### Eleventh harness — scripts/verify-p5-g.ts (ZERO GLM) — 37/37 GREEN
+
+DDL (six tables, verbatim column sets + exactly the two novelId adaptations,
+unique keys + indexes) · SEED (5 agents, Atlas leader, upsert-idempotent) ·
+RT (real HTTP: agents 200 — the historical 500 path healed, chat/tasks/turns
+GET 200, invalid-body 400s, run-404) · HW (20-message fixture replays
+exactly 12 oldest→newest; system rows filtered post-take — 12 raw − 4 system
+= 8) · LG (novelId/correlationId rows, glm-4-flash as sent, gateway-default
+fallback, provenance idempotent) · CN (create_novel returns novelId
+side-channel matching the db row; **create_chapter writes a real Chapter row
+with prose + wordCount — the write-path proof**) · PIN (provenance hook
+wired; HISTORY_WINDOW=12 intact; wizard source Team*-free) · Z (cleanup
+restores counts; zero billable rows; zero GLM reached the gateway).
+
+### A1 live-fire — scripts/p5g-live-fire.ts (ONE free-flash session) — 17/17 GREEN
+
+Session `p5g-live-20261106`, Sage (writer, full write tools), 6 turns,
+**every call model=glm-4-flash**:
+
+1. **Multi-turn with HISTORY_WINDOW=12 actually exercised** — 13 messages;
+   turns 5–6 built context on the trimmed window (T6 answered coherently
+   from the sliced history).
+2. **create_novel fired through the REAL tool loop** (TeamTurnLog r2 = tool
+   round executed) → artifact novel `cmw4uxboz0003q31poaxas8y1`
+   《P5-g Live-fire Artifact》.
+3. **Ledger under Policy F semantics** — 7 rows, ALL surface=ai-team, ALL
+   modelId=glm-4-flash (as sent), 7/7 measured (0 failed), 9,141 tokens
+   (8,705 prompt / 436 completion), correlationId `ai-team:p5g-live-20261106`.
+4. **Provenance link (wizard precedent)** — exactly 1 UsageProvenance row
+   (correlationId → novelId, surface ai-team).
+5. **Novel ledger view retro-adoption renders** — GET
+   /api/novels/[id]/usage: direct=0, linked=7 calls/9,141 tokens (== db
+   truth), surfaces list shows ai-team, lifetime total == linked tokens.
+6. **Wizard entry e2e (A1 item 5)** — structural per plan §10: source pin
+   proves the wizard route references no Team* model (it never depended on
+   the tables); a live wizard call would be billable glm-4.6 spend (the
+   route takes no model override), so the live wizard-PRECEDENT behavior is
+   the create_novel→provenance chain above. Disclosed as structural.
+7. **Budget proof — $0.00 billable**: glm-4.6 rows 0→0 across the whole
+   stage (harness + live-fire); flash-only throughout; OPS-1-tightened goals
+   (exact block echo required).
+
+**OPS-1 disclosure (flash protocol compliance):** T1's exact-echo phrasing
+produced a real tool block (create_novel executed, r2); the prose-write
+turns (T2–T4) — despite the same tightening — were answered conversationally
+with FABRICATED confirmations ("Chapter created… ID: …_1") and zero tool
+rounds (r1, chapters=0 in db). The novel-write path is proven structurally
+by harness §CN (production create_chapter → real row, 69 chars prose,
+wordCount 56). This is the known flash weakness, recorded — glm-4.6
+production sessions carry the same protocol at full strength (P4-era
+behavior).
+
+### A3 data-loss honesty (also plan §11)
+
+All pre-Nov-2 team conversation data is permanently gone from the LIVE db;
+the revived feature starts EMPTY (fresh ensureSeed roster: Atlas/Nova/Sage/
+Forge/Prism). The pre-pivot backup `db/custom.backup-20261102-061118.db`
+(committed by f32b9df itself) still contains ALL SIX Team% tables with real
+data (TeamAgent 5, TeamConversation 21, TeamMessage 149, TeamTask 19,
+TeamTaskLog 81, TeamTurnLog 7). Restore is technically possible but NOT
+advisable (schema drift since Nov 2; roster/id clash with fresh seed;
+"tracking began" honesty) — **no data restored, none will be without an
+explicit user ruling**; the backup file is untouched.
+
+### Side effects kept, disclosed
+
+- Artifact novel 《P5-g Live-fire Artifact》 (`cmw4uxboz0003q31poaxas8y1`,
+  genre "verification", zero chapters) + its 7 ledger rows + 1 provenance
+  link — the live evidence; deleting them would orphan the provenance
+  semantics. One harness fixture novel is created and deleted per run.
+- Dev server restart required mid-stage: the running server held the
+  pre-restore Prisma client (500s were the STALE process; the regenerated
+  client on disk was healthy — verified via direct client probe before
+  restart). Also recorded: the sandbox reaps detached dev processes between
+  tool invocations (OPS-2 pattern recurs); mitigated with single-chain
+  boot+run invocations.
+
+### Closeout
+
+- Family green: stage-a, p2-a, p2-b, p2-c (46), p4 (38), p5 (24), p5-b (24),
+  p5-c (30), p5-e1 (18), p5-f (24), **p5-g (37)** — 11 harnesses, all green.
+- Lint clean; dev health: `/` 200, `/api/team/agents` 200 (revived),
+  `/api/usage/ledger` 200, artifact novel-usage view renders.
+- GLM budget consumed this stage: **$0.00 billable** (flash-only live-fire;
+  harnesses zero-GLM). Validation spend: free flash only, per ruling.
+- UI untouched (A2 scope): static panel + orphaned functional UI noted for
+  a separate ruling; no marketing widget revival.
