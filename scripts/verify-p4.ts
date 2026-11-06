@@ -30,8 +30,9 @@
 //       member envelope); the pinned push is unconditional and downstream of
 //       it; the leader envelope + read_novel still use the full renderSnapshot;
 //       the slice module never references pinned context.
-//   S8. Config at rest (A4): budgets.yaml + schema carry
-//       contextSlicing.enabled=false (and compaction still false).
+//   S8. Config at rest (A4 knob, state per P5-e ruling R-1 of 2026-11-06):
+//       budgets.yaml + schema carry contextSlicing.enabled=true (slicing ON;
+//       rollback = one flip to false) and compaction still false.
 //
 //   MEAS. Zero-GLM savings table (representative fixture, estimator basis —
 //   countTokens, the meter's own estimator; CJK billed truth runs ~1.4×).
@@ -373,15 +374,15 @@ async function main() {
   const codeOnly = sliceModuleSrc.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
   check("S7 slice module never touches pinned context in CODE (A3 doc comment may declare it)", !codeOnly.includes("pinned"));
 
-  // S8 — config at rest (A4) --------------------------------------------------
+  // S8 — config at rest (A4 knob; state updated by P5-e ruling R-1) ------------
   const yaml = readFileSync("agent/config/budgets.yaml", "utf8");
   const budgets = getBudgets();
   const slicingYaml = yaml.slice(yaml.indexOf("contextSlicing:"));
   check(
-    "S8 budgets.yaml at rest: contextSlicing section present with enabled=false (shipped inert, A4)",
-    slicingYaml.startsWith("contextSlicing:") && /^  enabled: false/m.test(slicingYaml.slice(0, slicingYaml.indexOf("\n\n")))
+    "S8 budgets.yaml at rest: contextSlicing section present with enabled=true (P5-e ruling R-1; rollback = one flip to false)",
+    slicingYaml.startsWith("contextSlicing:") && /^  enabled: true/m.test(slicingYaml.slice(0, slicingYaml.indexOf("\n\n")))
   );
-  check("S8 parsed budgets: contextSlicing.enabled === false", budgets.contextSlicing.enabled === false);
+  check("S8 parsed budgets: contextSlicing.enabled === true (P5-e ruling R-1)", budgets.contextSlicing.enabled === true);
   check("S8 parsed budgets: contextCompaction.enabled === false (untouched by P4)", budgets.contextCompaction.enabled === false);
 
   // MEAS — zero-GLM savings table (estimator basis) ---------------------------

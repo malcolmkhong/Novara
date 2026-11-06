@@ -149,12 +149,23 @@ async function main() {
     JSON.stringify(budgets.contextCompaction)
   );
   const yamlRaw = readFileSync("agent/config/budgets.yaml", "utf8");
+  // P5-e (ruling R-1, 2026-11-06): contextSlicing.enabled=true is now the
+  // LEGITIMATE shipped state — the "no live enabled:true" assertion is scoped
+  // to everything OUTSIDE the slicing section (exactly one true, after the
+  // contextSlicing key), and the compaction probe pack stays banned everywhere.
+  const slicingKeyAt = yamlRaw.indexOf("contextSlicing:");
+  const enabledTrueMatches = yamlRaw.match(/^  enabled: true/gm) ?? [];
+  const firstTrueAt = yamlRaw.search(/^  enabled: true/m);
   check(
-    "CF: probe pack appears in budgets.yaml ONLY as documentation (no live keys)",
-    !/^  enabled: true/m.test(yamlRaw) &&
+    "CF: probe pack appears in budgets.yaml ONLY as documentation (no live keys outside the P5-e slicing state)",
+    slicingKeyAt >= 0 &&
+      !/^  enabled: true/m.test(yamlRaw.slice(0, slicingKeyAt)) &&
+      enabledTrueMatches.length === 1 &&
+      firstTrueAt > slicingKeyAt &&
       !/^  triggerTokens: 4000/m.test(yamlRaw) &&
       !/^  tailTurns: 2\b/m.test(yamlRaw) &&
-      !/^  minCompactableRows: 6\b/m.test(yamlRaw)
+      !/^  minCompactableRows: 6\b/m.test(yamlRaw),
+    `enabledTrueCount=${enabledTrueMatches.length} (expected exactly 1, inside contextSlicing)`
   );
 
   let novel = await db.novel.findUnique({ where: { id: TEST_NOVEL_ID }, select: { id: true } });

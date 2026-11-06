@@ -110,10 +110,11 @@ export const budgetsSchema = z.object({
     minCompactableRows: z.number().int().min(2),
   }),
   // Phase 4 — member snapshot slicing (agent-ctx/phase4-proposal.md, O1).
-  // enabled=false ships inert exactly like compaction: the runtime passes the
-  // flag to buildMemberSnapshotSlice and every member gets the FULL snapshot
-  // byte-identical to pre-P4. Production enablement is an explicit product
-  // decision — the first optimization that changes model-visible bytes.
+  // Shipped inert (enabled=false) exactly like compaction; ENABLED by user
+  // ruling R-1 at P5-e (2026-11-06) — the first optimization that changes
+  // model-visible bytes. The runtime passes the flag to
+  // buildMemberSnapshotSlice; false reproduces the full pre-P4 snapshot
+  // byte-identically (the rollback contract).
   contextSlicing: z.object({
     enabled: z.boolean(),
   }),
@@ -178,7 +179,11 @@ export const DEFAULT_BUDGETS: Budgets = {
     minCompactableRows: 12, // never compact below this many coverable rows
   },
   contextSlicing: {
-    enabled: false, // Phase 4 ships inert (A4 rollback knob) — flipped only in a P4 probe run
+    // P5-e (user ruling R-1, 2026-11-06): slicing is ON — both here (the
+    // degrade-gracefully fallback) and in agent/config/budgets.yaml (the
+    // operative source). Rollback = one flip to false in both places; no
+    // data migration, no schema coupling (phase5-gate-p5d.md §4).
+    enabled: true,
   },
 };
 

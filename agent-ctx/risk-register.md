@@ -171,3 +171,47 @@ harness probes. A probe that needs gateway-shaped behavior proves the mocked
 path first and never constructs the real SDK (P5-b's FA–FF mock.module
 pattern is the template; the instrumented re-run proved the mock handled
 every call).
+
+---
+
+## OPS-4 — Run-level failure flip is lease-scoped and fires after lease release: stuck-at-running + swallowed error (OPEN defect — fix awaiting ruling)
+
+**Found during P5-e** (attempts #1 and #2 of the slicing live-fire,
+2026-11-06 — READ-ONLY observation, no repair performed, no code touched).
+
+**Mechanism.** The run-level catch
+(`src/lib/agent/runtime.ts` ~1215–1232) flips a failed run via
+`updateMany({ where: { id, leaseOwner: lease.owner, leaseEpoch: lease.epoch } … })`.
+When the error surfaces AFTER the lease was released (owner nulled), the
+update matches 0 rows, the flip is skipped, and the catch logs ONLY:
+
+```
+[agent-runtime] run cmw4ntgs20059n9gdbk0qec4s: failure flip skipped — lease no longer owned (count=0)
+```
+
+The actual error `message` is **never logged and never emitted as an event**
+(the error event rides the flipped===1 branch). The run row stays
+`status=running, error=null` until the 15-minute healer marks it failed.
+
+**Observed consequences (2/2 P5-e attempts).** The closing leader call died
+to transient gateway/infra (two 60s timeouts + backoff; the SAME call
+succeeded on attempt #3 minutes later), and the post-release error path
+then left both runs stuck at `running` with the cause invisible — costing a
+manual controller kill + standalone evidence pass each time.
+
+**Bounded blast radius.** UI shows a phantom "running" run for ≤15 min;
+underlying artifacts (tasks/events/ledger rows) are intact and were fully
+reconcilable in both occurrences. No billing impact (failed calls produce
+zero-token rows or nothing, never money).
+
+**Disposition.** OUT of P5-e scope by stage discipline (runtime
+error-handling is not the ruled P5-e surface). Fix options for a ruling:
+(a) capture the lease identity BEFORE release and flip unconditionally on
+0-row match; (b) reorder flip-before-release; (c) log+emit the message
+unconditionally in the skipped branch. Smallest honest step is (c) —
+observability only.
+
+**Evidence:** agent-ctx/phase5-stages.md §P5-E attempt history (verbatim,
+embedded 2026-11-06); agent-ctx/p5e-live-attempt1-evidence.log.txt and
+p5e-live-attempt2-full.log.txt (the flip-skip lines + the surrounding
+persist-failure context).

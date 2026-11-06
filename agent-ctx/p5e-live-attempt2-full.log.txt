@@ -1,0 +1,47 @@
+P5E-LIVE: [PASS] preflight: shipped config at rest is the RULED state (contextSlicing=true, contextCompaction=false)
+P5E-LIVE: [PASS] preflight: no active runs anywhere — active=0
+P5E-LIVE: seeded scratch novel cmw4ntgp80000n9gdcbxwybtu (P4 representative dims: 12 chapters, 40 beats, 12 cast, 12 world, 12 storylines, 20 timeline, 24 arcs, 30 foreshadows, contract, 3 digests)
+[memory] snapshot novel=cmw4ntgp80000n9gdcbxwybtu next=ch13 considered=40 selected=14 chars=1881 digests=3
+P5E-LIVE: [PASS] seed: pre-run snapshot loaded at representative dims — 25887 chars ≈ 19449 tok (est) · 40 beats · 30 ledger entries
+P5E-LIVE: enablement run created — cmw4ntgs20059n9gdbk0qec4s (model=glm-4-flash FREE, mode=full_access, slicing=ON at rest)
+P5E-LIVE: state persisted → /tmp/p5e-live-state.json
+P5E-LIVE: executor spawned DETACHED (own session) — polling until terminal (cap 9 min)…
+P5E-LIVE: [FAIL] run reached a terminal state within the cap — cap hit — executor pkilled
+P5E-LIVE: tasks — Task 1:sage:done, Task 2:nova:done
+P5E-LIVE: [PASS] E-setup: ≥1 write task (sage) executed to done — Task 1
+P5E-LIVE: [PASS] E-setup: ≥1 read-only task (nova) executed to done — Task 2
+P5E-LIVE: [FAIL] run reached a terminal state — status=running
+P5E-LIVE: [PASS] E(iv) leader envelope BYTE-IDENTICAL to pre-P4 construction (full snapshot — slicing never touches the leader wire) — stored=27204 chars, expected=27204, equal=true
+P5E-LIVE: [PASS] E(iv) leader wire carries the FULL section set (40 beats · 30 ledger entries · ≥20 timeline) — beats=40 ledger=30 timeline=20
+P5E-LIVE: usage events (metered truth):
+P5E-LIVE:   novel=19560 used=21641 real=21641/132/21773 | Context usage (atlas · turn 1): 21.6K / 128.0K tokens
+P5E-LIVE:   novel=10942 used=12959 real=12959/403/13362 | Context usage (Task 1 · sage · turn 1): 13.0K / 128.0K tokens
+P5E-LIVE:   novel=10913 used=13403 real=13403/32/13435 | Context usage (Task 1 · sage · turn 2): 13.4K / 128.0K tokens
+P5E-LIVE:   novel=19568 used=21796 real=21796/72/21868 | Context usage (atlas · turn 2): 21.8K / 128.0K tokens
+P5E-LIVE:   novel=15554 used=16371 real=16371/31/16402 | Context usage (Task 2 · nova · turn 1): 16.4K / 128.0K tokens
+P5E-LIVE:   novel=15523 used=16896 real=16896/406/17302 | Context usage (Task 2 · nova · turn 2): 16.9K / 128.0K tokens
+P5E-LIVE: [PASS] E(i) Task 1 (sage:chapter) member wire snapshot block BYTE-EXACT vs recomputed shipped slice — wire=15051 chars (incl. 1 separator newline) ≈ 10866 tok · expected=15050 chars · equal=true
+P5E-LIVE: [PASS] E(i) Task 1 structural floor intact (novel/synopsis/progress/next_chapter/cast/contract present) — all six markers on wire
+P5E-LIVE: [PASS] E(ii) Task 1(sage) sliced bulk PHYSICALLY ABSENT (below full on every bounded axis) — ledger=5/30 beats=4/40 timeline=8/20
+P5E-LIVE: [PASS] E(i) Task 2 (nova:chapter) member wire snapshot block BYTE-EXACT vs recomputed shipped slice — wire=21218 chars (incl. 1 separator newline) ≈ 15649 tok · expected=21217 chars · equal=true
+P5E-LIVE: [PASS] E(i) Task 2 structural floor intact (novel/synopsis/progress/next_chapter/cast/contract present) — all six markers on wire
+P5E-LIVE: [PASS] E(ii) Task 2(nova) sliced bulk PHYSICALLY ABSENT (below full on every bounded axis) — ledger=30/30 beats=4/40 timeline=20/20
+P5E-LIVE:   WIRE Task 1 sage:chapter — 15051 chars ≈ 10866 tok (full 25887 ≈ 19449) · ledger=5/30 beats=4/40 timeline=8/20 roster=12/12 · F-kept=[1,2,3,4,5,7,8,9,10,11,12,20,21,22,23,24] · floor=present
+P5E-LIVE:   WIRE Task 2 nova:chapter — 21218 chars ≈ 15649 tok (full 25887 ≈ 19449) · ledger=30/30 beats=4/40 timeline=20/20 roster=12/12 · F-kept=[1,2,3,4,5,6,7,7,8,8,9,9,10,10,11,11,12,12,13,14,15,16,17,18,19,20,20,21,21,22,22,23,23,24,24,25,26,27,28,29,30] · floor=present
+P5E-LIVE: [PASS] E(i) member snapshot blocks BYTE-EXACT against the shipped slicing function (ALL compared wires) — 2/2 wires byte-exact
+P5E-LIVE: [PASS] E(i) metered novel-section DROP on member wires (usage sections.novel < full snapshot estimate) — full≈19449 tok; member sections.novel values in the table above
+P5E-LIVE: [PASS] E(ii) GUARD INTACT: sage wire carries the FULL chapter roster (12/12 > the map's recent-10 bound — restored by the brief's chapter-13 reference) — recentChapters bound would keep 10; the A2 chapter-index guard restores the roster WHOLE
+P5E-LIVE: [FAIL] E(iii) member artifacts DB-correct — counters == DB truth — verified.chaptersWritten=undefined · DB chapters=13 (12 seeded + 1 written at index 13) · ch13.wordCount=481 · verified.words=undefined
+P5E-LIVE: [PASS] E(iii) read-only task produced no DB mutations — reviews=undefined finalizes=undefined exports=undefined
+P5E-LIVE: [PASS] E-L1 every ledger row for the run carries the run's attribution (surface=agent, modelId=glm-4-flash, novelId set) — rows=6 · surfaces=agent · models=glm-4-flash
+P5E-LIVE: [PASS] E-L2 measured UsageCall rows == usage-event real triples ROW-FOR-ROW (sorted; the two books agree) — events=6 rows=6 · equal=true
+P5E-LIVE: [PASS] E-L3 failed rows (Policy F), if any, contribute ZERO tokens and are counted separately — failed=0/6 rows (clean run — no failed attempts)
+P5E-LIVE: [PASS] E-L4 P5-c honesty: glm-4-flash renders UNPRICED (unlisted-model) — never $0-by-assumption, excluded from the account estimate — priced=false reason=unlisted-model · run rows (6) all UNPRICED in the central view
+P5E-LIVE: LEDGER — 6 rows (measured 6, failed 0) · Σprompt=103066 Σcompletion=1076 tok · modelId=glm-4-flash (FREE tier; UNPRICED in our table)
+P5E-LIVE: [PASS] leader transcript gapless — 6 rows, dense 1..N
+P5E-LIVE: [PASS] Task 1 (sage) conversation gapless — 4 rows, dense 1..N
+P5E-LIVE: [PASS] Task 2 (nova) conversation gapless — 4 rows, dense 1..N
+P5E-LIVE: [PASS] cleanup: budgets.yaml UNCHANGED — the P5-e flip is the shipped state (no probe-pack restore in this stage) — byte-equal=true
+P5E-LIVE: [PASS] probe run + scratch novel cascade-deleted
+P5E-LIVE: DISCLOSURE — 6 UsageCall rows for the run SURVIVE cleanup (no FK by P5-a design): orphaned to the deleted probe novel, they render under "(deleted novel)" in the central view as modelId=glm-4-flash UNPRICED rows worth $0 real spend (free tier). Retired on the P5-f retention schedule like any detail row.
+P5E-LIVE: 2 CHECK(S) FAILED (25 checks)

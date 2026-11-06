@@ -81,18 +81,18 @@ contextCompaction:
   # harness asserts the shipped file never carries them at rest.
 
 # Phase 4 — member snapshot slicing (agent-ctx/phase4-proposal.md, O1 + A4).
-# Gated HERE, shipped inert exactly like compaction: when false, every member
-# envelope carries the FULL story snapshot byte-identical to pre-P4. The
-# declared per-shape slice map lives in src/lib/agent/snapshot-slice.ts with
-# its A2 conservative-by-default rule + deterministic brief-reference guard.
-# Production enablement is an explicit product decision (first optimization
-# that changes model-visible bytes).
+# Gated HERE. When false, every member envelope carries the FULL story
+# snapshot byte-identical to pre-P4. The declared per-shape slice map lives
+# in src/lib/agent/snapshot-slice.ts with its A2 conservative-by-default
+# rule + deterministic brief-reference guard. ENABLED since P5-e (user
+# ruling R-1, 2026-11-06) — the first optimization that changes
+# model-visible bytes; see the section below for the rollback contract.
 contextSlicing:
-  # SHIPPED STATE (P4): enabled=false — the P4 harness proves the machinery
-  # (structure, floor byte-identity, guard, fail-open); flipping it on for
-  # real runs is a product decision, not a phase side-effect.
-  enabled: false
-  # P4 PROBE PACK (temporary, already restored after the A1 live-fire run):
-  #   enabled: true
-  # — the only value the one free flash acceptance run ever saw; the harness
-  # asserts the shipped file never carries it at rest.
+  # SHIPPED STATE (P5-e, user ruling R-1 of 2026-11-06): enabled=true —
+  # slicing is ON for all agent member wires. Rollback is ONE flip of this
+  # key to false (no data migration, no schema coupling — the ledger stores
+  # request-side modelId + tokens and is indifferent to wire shape); a
+  # rollback stage re-runs the regression eighth-set and re-probes the
+  # panel/central view (phase5-gate-p5d.md §4). Validated by the P5-e
+  # free-flash live-fire (agent-ctx/phase5-stages.md §P5-E).
+  enabled: true

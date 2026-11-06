@@ -24,9 +24,9 @@
 //       kind="usage" payloads and UsageCall rows for the same calls agree
 //       ROW-FOR-ROW (sorted token triples); source pin: every glmChat result
 //       feeds BOTH books (emitUsageEvent + recordUsageCall).
-//   S7. Config at rest (Addition 1): contextCompaction.enabled === false AND
-//       contextSlicing.enabled === false — both features validated inert
-//       through P5.
+//   S7. Config at rest (Addition 1; state per P5-e ruling R-1 of 2026-11-06):
+//       contextCompaction.enabled === false (still inert) AND
+//       contextSlicing.enabled === true (slicing ON; one-flip rollback).
 //   S8. Retention live proof (Ruling 1): deleting the fixture NOVEL cascades
 //       its AgentRun/events but leaves EVERY UsageCall row standing; the
 //       account snapshot renders the orphan as deleted:true "(deleted
@@ -143,11 +143,11 @@ async function main() {
     `${beforeNull} → ${afterOne} (on its own ${SURFACE_S2} tag)`
   );
 
-  // ---------- S7: config at rest (Addition 1) ----------
+  // ---------- S7: config at rest (Addition 1; state per P5-e ruling R-1) ----------
   const budgets = getBudgets();
   check(
-    "S7 both features inert through P5 (contextCompaction + contextSlicing enabled:false)",
-    budgets.contextCompaction.enabled === false && budgets.contextSlicing.enabled === false,
+    "S7 feature states at rest: contextCompaction.enabled === false (still inert) AND contextSlicing.enabled === true (P5-e ruling R-1)",
+    budgets.contextCompaction.enabled === false && budgets.contextSlicing.enabled === true,
     `compaction=${budgets.contextCompaction.enabled} slicing=${budgets.contextSlicing.enabled}`
   );
 

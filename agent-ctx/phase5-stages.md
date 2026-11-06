@@ -575,3 +575,227 @@ dashboard columns, rollback — recommended order slicing-first — and NO confi
 change, NO code. Nothing flips without the user's ruling at that gate. The
 Phase 1–5 final close-out (`agent-ctx/phase1-5-closeout.md` supersedes the
 phase1-2 record's scope) ships alongside it.
+
+---
+
+## §P5-E — Slicing enablement (Ruling R-1): production flip + free-flash validation (evidence embedded)
+
+**Date: 2026-11-06 (UTC). Approval state: P5-c ACCEPTED (user, 2026-11-06);
+R-1 ruled slicing ON with this exact protocol (flip → free-flash validation on
+the hardened rig → real-wire dashboard evidence → one-flip rollback
+documented); R-2 (retention/rollup/purge/export → P5-f) and R-3 (TEAM-1
+read-only plan → P5-g) sequenced after. Eighth-set green. Lint clean.
+$0.00 GLM billable; 20 free-tier glm-4-flash calls total (6+6+8 across three
+attempts — every one disclosed below).**
+
+### The production flip (the ruling, executed)
+
+`contextSlicing.enabled` is now **TRUE at rest in BOTH places** — this is the
+first optimization that changes model-visible bytes:
+
+- `agent/config/budgets.yaml` — `contextSlicing.enabled: true`, comment
+  rewritten to carry the ruling citation (R-1 of 2026-11-06), the validation
+  pointer (this section), and the rollback contract. `contextCompaction`
+  section UNTOUCHED (still `enabled: false`).
+- `src/lib/novara/content.ts` — `DEFAULT_BUDGETS.contextSlicing.enabled: true`
+  (the degrade-gracefully fallback must not disagree with the operative yaml;
+  a corrupt-yaml fallback to `false` would silently roll the feature back).
+  Schema doc comment updated.
+
+Consequence handled: budgets are memoized per process (`content.ts` load
+cache), so the running dev server held the pre-flip state until **one
+restart** (documented here as part of enablement; post-restart
+`GET / → 200`).
+
+### Harness pins moved to the ruled state (three files)
+
+| harness | old pin | new pin |
+|---|---|---|
+| verify-p4 S8 | `contextSlicing.enabled === false` at rest | `=== true` (yaml window + parsed), compaction still false |
+| verify-p5 S7 | "both features inert" | compaction false AND slicing true |
+| verify-p2-c CF | NO `enabled: true` anywhere in yaml | exactly ONE live `enabled: true`, inside the `contextSlicing` section (anchored match; the compaction probe pack stays banned) |
+
+The verify-p2-c tightening caught a real bug in its own first draft: the
+unanchored `indexOf("  enabled: true")` matched inside the P2-c probe-pack
+COMMENT (`#   enabled: true, …` — three leading spaces contain the two-space
+substring). Fixed to an anchored `search(/^  enabled: true/m)`. All three
+harnesses re-run green immediately (38 + 24 + 46).
+
+### The rig (P5-e hardened, OPS-2 pattern)
+
+- `scripts/p5e-live-probe.ts` — controller: preflights the RULED at-rest
+  state (slicing true / compaction false — **no probe-pack surgery and no
+  restore; the flip IS the product**), seeds the P4 representative fixture
+  dims (same as P4-A1 for comparability), persists the pre-run state file
+  `/tmp/p5e-live-state.json` BEFORE any model call (including the structured
+  snapshot data and the yaml at-rest text), creates the glm-4-flash
+  full_access run with the **verbatim P4-B attempt-#4 tightened goal**
+  (OPS-1), spawns the DETACHED executor (reuses the run-agnostic
+  `scripts/p4-live-exec.ts` — claim-lease-then-execute), polls ≤9 min.
+- `scripts/p5e-live-evidence.ts` — standalone evidence + cleanup pass
+  (reconstructable after a controller reap): leader envelope BYTE-IDENTITY;
+  **member wire snapshot blocks BYTE-EXACT vs `buildMemberSnapshotSlice`
+  recomputed from the persisted pre-run snapshot data + the ACTUAL task rows**
+  (the strongest possible assertion — the live wire must equal the shipped
+  deterministic function, map + A2 guard + starvation floor together);
+  per-wire section table; metered novel-section drop; artifact counters ==
+  DB truth; **§4.5/gate-§3.3 ledger cross-check** (UsageCall rows ==
+  usage-event real triples row-for-row, attribution pinned, Policy-F failed
+  rows zero-token and counted separately, glm-4-flash UNPRICED pin);
+  transcript gapless; cleanup deletes run+scratch novel, asserts the yaml is
+  STILL byte-equal to the at-rest text (**the flip stays — no restore in
+  this stage**), and discloses surviving ledger rows.
+- One extraction detail fixed after attempt #1 (below): the envelope block
+  cut carries ONE trailing separator newline before the next envelope
+  section, so the byte comparison trims it (P4's pass only counted within
+  the block, so the artifact never surfaced there).
+
+### Attempt history (all three disclosed; verbatim logs in agent-ctx/)
+
+**Attempt #1 — 20/25 checks.** Both tasks executed and verified (sage write
+landed, ch13 wordCount=482 in DB); ALL slicing evidence green (leader
+byte-identical; bulk absent; guard intact; floor present; novel-section drop
+at metered truth). TWO failures, both non-slicing:
+1. The **closing leader call (call #7) never returned** — signature: two
+   60s gateway timeouts + retry backoff (~2.5 min), then the run-level error
+   path. Executor self-resolved at 8.5 min.
+2. **One UsageCall persist was lost** to a sqlite `Socket timeout`
+   (fire-and-forget; verbatim: `[usage-ledger] persist failed (call not lost
+   from the panel, missing from account ledger) … Socket timeout`). The
+   §3.3 cross-check reconciled the MEASURED books 6/6 — the lost row was the
+   dead closing call's F1 failed-row persist. The dual-book design detected
+   and bounded the loss exactly as built for.
+3. Run stuck at `status=running` (lease released → the failure flip's
+   lease-scoped updateMany matched 0 rows; error message swallowed) →
+   registered as **OPS-4** (below); controller killed, standalone evidence
+   pass ran clean from the state file — **the OPS-2 hardened architecture
+   absorbed a controller kill in production form**.
+
+**Attempt #2 — 23/25 checks.** Member wires now **BYTE-EXACT 2/2** after the
+trimEnd extraction fix. Same closing-call signature (6 measured calls, tasks
+done+verified, closing call dead, one F1-persist lost, stuck at running).
+
+**Attempt #3 — 25/25 ALL CHECKS PASSED.** Run `cmw4oah560059n9lkb9ym5q7q`
+COMPLETED (status=completed; the closing call landed at ~3.5 min — gateway
+healthy; attempts #1/#2's wall was transient gateway/infra, NOT slicing:
+the closing leader wire is transcript-assembled and byte-identical under
+slicing on/off, and the leader envelope byte-identity check passed in all
+three attempts). Verbatim result tail:
+
+```
+P5E-LIVE: [PASS] E(iii) member artifacts DB-correct — counters == DB truth — verified.chaptersWritten=1 · DB chapters=13 (12 seeded + 1 written at index 13) · ch13.wordCount=572 · verified.words=572
+P5E-LIVE: [PASS] E(iii) read-only task produced no DB mutations — reviews=0 finalizes=0 exports=0
+P5E-LIVE: [PASS] E-L1 every ledger row for the run carries the run's attribution (surface=agent, modelId=glm-4-flash, novelId set) — rows=8 · surfaces=agent · models=glm-4-flash
+P5E-LIVE: [PASS] E-L2 measured UsageCall rows == usage-event real triples ROW-FOR-ROW (sorted; the two books agree) — events=8 rows=8 · equal=true
+P5E-LIVE: [PASS] E-L3 failed rows (Policy F), if any, contribute ZERO tokens and are counted separately — failed=0/8 rows (clean run — no failed attempts)
+P5E-LIVE: [PASS] E-L4 P5-c honesty: glm-4-flash renders UNPRICED (unlisted-model) — never $0-by-assumption, excluded from the account estimate — priced=false reason=unlisted-model · run rows (8) all UNPRICED in the central view
+P5E-LIVE: LEDGER — 8 rows (measured 8, failed 0) · Σprompt=143268 Σcompletion=1058 tok · modelId=glm-4-flash (FREE tier; UNPRICED in our table)
+P5E-LIVE: ALL CHECKS PASSED (25 checks)
+```
+
+Full logs: `agent-ctx/p5e-live-attempt1-evidence.log.txt`,
+`agent-ctx/p5e-live-attempt2-full.log.txt`, `agent-ctx/p5e-live-attempt3-full.log.txt`.
+
+### Slicing evidence from REAL enabled wires (attempt #3, metered truth)
+
+Full snapshot at run start: **25,887 chars ≈ 19,453 tok (est) · 40 beats ·
+30 ledger entries**. Leader wire: BYTE-IDENTICAL to the pre-P4 construction
+(27,204 chars, full section set 40/30/≥20). Member wires:
+
+| wire | chars | tok (est) | vs full | ledger | beats | timeline | roster |
+|---|---|---|---|---|---|---|---|
+| Task 1 sage:chapter | 15,051 | ≈10,869 | **−44.0% chars** | 5/30 | 4/40 | 8/20 | **12/12 (guard)** |
+| Task 2 nova:chapter | 21,218 | ≈15,653 | −18.1% chars | 30/30 | 4/40 | 20/20 | 12/12 |
+
+- **Novel-section drop at metered truth** (usage events, sections.novel):
+  atlas turns 19,567/19,574/19,581 — sage member calls 10,944/10,913 —
+  nova member calls 15,561/15,528/15,655. Every member call's metered novel
+  section sits FAR below the full-snapshot estimate; the leader's stays at
+  full. This is the dashboard-visible column-level signature of slicing.
+- **Guard INTACT**: the sage brief references "chapter 13"; the map's
+  recentChapters bound (keep=10) would have trimmed the roster to 10 — the
+  wire carries **12/12**, restored WHOLE by the A2 chapter-index guard. The
+  same guard leaves nova's 30/30 ledger and 20/20 timeline whole (no
+  foreshadow/timeline bound on that shape) — shape-scoped slicing proven on
+  one fixture in one run.
+- **Bulk PHYSICALLY ABSENT**: sage wire carries UNIQ-F{1..5} only (bounded
+  recentForeshadows window); beats window = 12..15 (near-target) on both
+  wires; UNIQ-B40 (beat 40) absent from both member wires while present on
+  the leader's.
+- **Structural floor intact**: NOVEL/SYNOPSIS/PROGRESS/NEXT CHAPTER/CAST/
+  STORY CONTRACT markers present on every wire; byte-exact recompute covers
+  the rest (memory, arcs, storylines, world).
+
+### Dashboard evidence (central view, real persisted rows — screenshot)
+
+`agent-ctx/p5e-evidence-central-sliced-runs.png` (+ scrolled variant). The
+Usage & balance popover renders the 20 surviving free-flash rows verbatim:
+
+- **Account usage: 20 calls · Σ 352.5K tok (in 349.3K · out 3.2K)**
+- **$0 ESTIMATE (upper bound)** with "1 model group unpriced (excluded)" —
+  the P5-c rule rendering honestly: the estimate sums PRICED groups only.
+- **BY MODEL · ESTIMATE (UPPER BOUND): glm-4-flash ×20 352.5K — "unpriced
+  model"** (per-model split delivered by P5-c, now carrying REAL enabled-run
+  rows).
+- **BY NOVEL: three "(deleted novel)" groups ×8 / ×6 / ×6** — the three
+  attempts' rows, orphaned by the probe cleanup exactly as the P5-b
+  retention proof specified ("rows survive novel deletion").
+- Honesty footnote renders verbatim: "Measured tokens × sourced price table
+  (2026-11-06.1); the cached-input discount is invisible to us, so every
+  figure is an upper bound. Unpriced rows have NO sourced price — shown,
+  never guessed."
+
+### §3.3 ledger cross-check (gate protocol item 3) — status
+
+Attempt #3: 8/8 measured rows == 8 usage-event triples, sorted comparison
+equal; attribution surface=agent / modelId=glm-4-flash / novelId set on
+every row; zero failed rows. Attempts #1/#2: measured books reconciled 6/6
+each; ONE F1 failed-row persist per attempt was lost to the transient sqlite
+socket timeout (bounded: zero-token rows, and the calls they describe
+themselves produced no completion payload). Net ledger truth for the whole
+stage: 20 measured rows, 2 lost zero-token failed-row persists (disclosed,
+detected by the cross-check design).
+
+### Rollback contract (documented per the ruling — NOT executed)
+
+One flip of `contextSlicing.enabled` back to `false` in
+`agent/config/budgets.yaml` (+ the matching `DEFAULT_BUDGETS` fallback in
+`content.ts`), then one dev-server restart (memoized budgets). No data
+migration, no schema coupling — the ledger stores request-side modelId +
+tokens and is indifferent to wire shape. A rollback stage re-runs the
+eighth-set and re-probes the panel/central view (gate doc §4 verbatim).
+
+### OPS-4 (NEW — registered, fix awaiting ruling; no code touched)
+
+**Run-level failure flip is lease-scoped and fires AFTER lease release, so
+any run-level error that surfaces post-release leaves the run stuck at
+`status=running` forever (until the 15-min healer) and the error message is
+never logged or emitted** (verbatim, both attempts:
+`[agent-runtime] run <id>: failure flip skipped — lease no longer owned
+(count=0)`). Pre-existing defect (not introduced by P5-e); it degraded
+validation UX twice and swallowed the closing-call error text. Full entry in
+risk-register.md. No repair in this stage — runtime error-handling is
+outside the ruled P5-e surface.
+
+### $0.00 GLM ledger — §P5-E
+
+**Billable calls: 0. Billable tokens: 0. $0.00.** Free-tier glm-4-flash
+calls: **20** (attempt #1: 6 · attempt #2: 6 · attempt #3: 8 — all
+sanctioned by the gate's own validation protocol; the repeated attempts are
+disclosed deviations from "one live-fire", each forced by transient
+gateway/infra, none by slicing). All rows render UNPRICED in our table
+(unlisted-model); real spend $0 by the free tier.
+
+### Pending user input (not a blocker)
+
+Invoice reconciliation paste-slot is LIVE and awaiting the account holder's
+one console row (z.ai console, one closed-period USD total after Nov 5,
+plus cached-discount applied yes/no). It is recorded verbatim against our
+ESTIMATE when pasted; the gate's evidence protocol does not depend on it.
+
+### Next: P5-f (R-2 — retention/rollup/purge/export), then P5-g (R-3 — TEAM-1 read-only plan)
+
+P5-f builds the UsageDaily aggregate table + 90-day purge + 31-day display
+boundary + CSV export, with the backdated-fixture harness. P5-g produces the
+READ-ONLY TEAM-1 repair plan and waits for approval before any code. The
+Phase 1–5 final close-out will be refreshed after P5-f/P5-g land.

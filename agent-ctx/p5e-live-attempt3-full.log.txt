@@ -1,0 +1,67 @@
+P5E-LIVE: [PASS] preflight: shipped config at rest is the RULED state (contextSlicing=true, contextCompaction=false)
+P5E-LIVE: [PASS] preflight: no active runs anywhere — active=0
+P5E-LIVE: seeded scratch novel cmw4oah1v0000n9lkvpui6dc8 (P4 representative dims: 12 chapters, 40 beats, 12 cast, 12 world, 12 storylines, 20 timeline, 24 arcs, 30 foreshadows, contract, 3 digests)
+prisma:query SELECT `main`.`Novel`.`id`, `main`.`Novel`.`title`, `main`.`Novel`.`genre`, `main`.`Novel`.`synopsis`, `main`.`Novel`.`targetWords`, `main`.`Novel`.`status`, `main`.`Novel`.`createdAt`, `main`.`Novel`.`updatedAt`, `main`.`Novel`.`conceptSnapshot` FROM `main`.`Novel` WHERE (`main`.`Novel`.`id` = ? AND 1=1) LIMIT ? OFFSET ?
+prisma:query SELECT `main`.`Chapter`.`id`, `main`.`Chapter`.`index`, `main`.`Chapter`.`title`, `main`.`Chapter`.`wordCount`, `main`.`Chapter`.`status`, `main`.`Chapter`.`content`, `main`.`Chapter`.`novelId` FROM `main`.`Chapter` WHERE `main`.`Chapter`.`novelId` IN (?) ORDER BY `main`.`Chapter`.`index` ASC LIMIT ? OFFSET ?
+prisma:query SELECT `main`.`OutlineBeat`.`id`, `main`.`OutlineBeat`.`novelId`, `main`.`OutlineBeat`.`index`, `main`.`OutlineBeat`.`title`, `main`.`OutlineBeat`.`summary`, `main`.`OutlineBeat`.`volumeId`, `main`.`OutlineBeat`.`status`, `main`.`OutlineBeat`.`finalizedAt`, `main`.`OutlineBeat`.`createdAt`, `main`.`OutlineBeat`.`updatedAt` FROM `main`.`OutlineBeat` WHERE `main`.`OutlineBeat`.`novelId` IN (?) ORDER BY `main`.`OutlineBeat`.`index` ASC LIMIT ? OFFSET ?
+prisma:query SELECT `main`.`Character`.`id`, `main`.`Character`.`novelId`, `main`.`Character`.`name`, `main`.`Character`.`role`, `main`.`Character`.`description`, `main`.`Character`.`aliases`, `main`.`Character`.`status`, `main`.`Character`.`finalizedAt`, `main`.`Character`.`createdAt`, `main`.`Character`.`updatedAt` FROM `main`.`Character` WHERE `main`.`Character`.`novelId` IN (?) ORDER BY `main`.`Character`.`createdAt` ASC LIMIT ? OFFSET ?
+prisma:query SELECT `main`.`NovelContract`.`novelId`, `main`.`NovelContract`.`content`, `main`.`NovelContract`.`status`, `main`.`NovelContract`.`finalizedAt`, `main`.`NovelContract`.`createdAt`, `main`.`NovelContract`.`updatedAt` FROM `main`.`NovelContract` WHERE `main`.`NovelContract`.`novelId` IN (?) LIMIT ? OFFSET ?
+prisma:query SELECT `main`.`Storyline`.`id`, `main`.`Storyline`.`novelId`, `main`.`Storyline`.`name`, `main`.`Storyline`.`summary`, `main`.`Storyline`.`status`, `main`.`Storyline`.`lock`, `main`.`Storyline`.`finalizedAt`, `main`.`Storyline`.`createdAt`, `main`.`Storyline`.`updatedAt` FROM `main`.`Storyline` WHERE (`main`.`Storyline`.`status` IN (?,?) AND `main`.`Storyline`.`novelId` IN (?)) ORDER BY `main`.`Storyline`.`createdAt` ASC LIMIT ? OFFSET ?
+prisma:query SELECT `main`.`TimelineEntry`.`id`, `main`.`TimelineEntry`.`novelId`, `main`.`TimelineEntry`.`order`, `main`.`TimelineEntry`.`label`, `main`.`TimelineEntry`.`detail`, `main`.`TimelineEntry`.`chapterIndex`, `main`.`TimelineEntry`.`status`, `main`.`TimelineEntry`.`finalizedAt`, `main`.`TimelineEntry`.`createdAt`, `main`.`TimelineEntry`.`updatedAt` FROM `main`.`TimelineEntry` WHERE `main`.`TimelineEntry`.`novelId` IN (?) ORDER BY `main`.`TimelineEntry`.`order` ASC LIMIT ? OFFSET ?
+prisma:query SELECT `main`.`CharacterArc`.`id`, `main`.`CharacterArc`.`novelId`, `main`.`CharacterArc`.`characterName`, `main`.`CharacterArc`.`order`, `main`.`CharacterArc`.`note`, `main`.`CharacterArc`.`chapterIndex`, `main`.`CharacterArc`.`status`, `main`.`CharacterArc`.`finalizedAt`, `main`.`CharacterArc`.`createdAt`, `main`.`CharacterArc`.`updatedAt` FROM `main`.`CharacterArc` WHERE `main`.`CharacterArc`.`novelId` IN (?) ORDER BY `main`.`CharacterArc`.`characterName` ASC, `main`.`CharacterArc`.`order` ASC LIMIT ? OFFSET ?
+prisma:query SELECT `main`.`WorldEntry`.`id`, `main`.`WorldEntry`.`novelId`, `main`.`WorldEntry`.`title`, `main`.`WorldEntry`.`category`, `main`.`WorldEntry`.`content`, `main`.`WorldEntry`.`status`, `main`.`WorldEntry`.`finalizedAt`, `main`.`WorldEntry`.`groupId`, `main`.`WorldEntry`.`createdAt`, `main`.`WorldEntry`.`updatedAt` FROM `main`.`WorldEntry` WHERE `main`.`WorldEntry`.`novelId` IN (?) ORDER BY `main`.`WorldEntry`.`createdAt` ASC LIMIT ? OFFSET ?
+prisma:query SELECT `main`.`Foreshadow`.`id`, `main`.`Foreshadow`.`status`, `main`.`Foreshadow`.`content`, `main`.`Foreshadow`.`plantChapter`, `main`.`Foreshadow`.`novelId` FROM `main`.`Foreshadow` WHERE (`main`.`Foreshadow`.`status` IN (?,?) AND `main`.`Foreshadow`.`novelId` IN (?)) ORDER BY `main`.`Foreshadow`.`createdAt` ASC LIMIT ? OFFSET ?
+prisma:query SELECT `main`.`ChapterDigest`.`id`, `main`.`ChapterDigest`.`chapterId`, `main`.`ChapterDigest`.`novelId`, `main`.`ChapterDigest`.`summary`, `main`.`ChapterDigest`.`createdAt`, `main`.`ChapterDigest`.`updatedAt` FROM `main`.`ChapterDigest` WHERE `main`.`ChapterDigest`.`novelId` IN (?) ORDER BY `main`.`ChapterDigest`.`updatedAt` DESC LIMIT ? OFFSET ?
+prisma:query SELECT `main`.`Chapter`.`id`, `main`.`Chapter`.`index` FROM `main`.`Chapter` WHERE `main`.`Chapter`.`id` IN (?) LIMIT ? OFFSET ?
+prisma:query SELECT `main`.`StoryFact`.`id`, `main`.`StoryFact`.`category`, `main`.`StoryFact`.`content`, `main`.`StoryFact`.`sourceChapter`, `main`.`StoryFact`.`lastSeenChapter`, `main`.`StoryFact`.`firstSeenAt`, `main`.`StoryFact`.`lastSeenAt` FROM `main`.`StoryFact` WHERE `main`.`StoryFact`.`novelId` = ? LIMIT ? OFFSET ?
+prisma:query SELECT `main`.`CharacterState`.`id`, `main`.`CharacterState`.`name`, `main`.`CharacterState`.`state`, `main`.`CharacterState`.`chapterIndex`, `main`.`CharacterState`.`createdAt`, `main`.`CharacterState`.`updatedAt` FROM `main`.`CharacterState` WHERE `main`.`CharacterState`.`novelId` = ? ORDER BY `main`.`CharacterState`.`chapterIndex` DESC LIMIT ? OFFSET ?
+prisma:query SELECT `main`.`Foreshadow`.`id`, `main`.`Foreshadow`.`content`, `main`.`Foreshadow`.`plantChapter`, `main`.`Foreshadow`.`status`, `main`.`Foreshadow`.`lastChapter`, `main`.`Foreshadow`.`createdAt`, `main`.`Foreshadow`.`updatedAt` FROM `main`.`Foreshadow` WHERE `main`.`Foreshadow`.`novelId` = ? LIMIT ? OFFSET ?
+prisma:query SELECT `main`.`ChapterDigest`.`id`, `main`.`ChapterDigest`.`summary`, `main`.`ChapterDigest`.`chapterId` FROM `main`.`ChapterDigest` LEFT JOIN `main`.`Chapter` AS `orderby_1` ON (`orderby_1`.`id`) = (`main`.`ChapterDigest`.`chapterId`) LEFT JOIN `main`.`Chapter` AS `j0` ON (`j0`.`id`) = (`main`.`ChapterDigest`.`chapterId`) WHERE (`main`.`ChapterDigest`.`novelId` = ? AND (`j0`.`index` < ? AND (`j0`.`id` IS NOT NULL))) ORDER BY `orderby_1`.`index` DESC LIMIT ? OFFSET ?
+prisma:query SELECT `main`.`Chapter`.`id`, `main`.`Chapter`.`index`, `main`.`Chapter`.`title` FROM `main`.`Chapter` WHERE `main`.`Chapter`.`id` IN (?,?,?) LIMIT ? OFFSET ?
+prisma:query SELECT `main`.`Novel`.`id`, `main`.`Novel`.`title`, `main`.`Novel`.`synopsis` FROM `main`.`Novel` WHERE (`main`.`Novel`.`id` = ? AND 1=1) LIMIT ? OFFSET ?
+[memory] snapshot novel=cmw4oah1v0000n9lkvpui6dc8 next=ch13 considered=40 selected=14 chars=1881 digests=3
+P5E-LIVE: [PASS] seed: pre-run snapshot loaded at representative dims — 25887 chars ≈ 19453 tok (est) · 40 beats · 30 ledger entries
+P5E-LIVE: enablement run created — cmw4oah560059n9lkb9ym5q7q (model=glm-4-flash FREE, mode=full_access, slicing=ON at rest)
+P5E-LIVE: state persisted → /tmp/p5e-live-state.json
+P5E-LIVE: executor spawned DETACHED (own session) — polling until terminal (cap 9 min)…
+P5E-LIVE: [PASS] run reached a terminal state — status=completed
+P5E-LIVE: tasks — Task 1:sage:done, Task 2:nova:done
+P5E-LIVE: [PASS] E-setup: ≥1 write task (sage) executed to done — Task 1
+P5E-LIVE: [PASS] E-setup: ≥1 read-only task (nova) executed to done — Task 2
+P5E-LIVE: [PASS] run reached a terminal state — status=completed
+P5E-LIVE: [PASS] E(iv) leader envelope BYTE-IDENTICAL to pre-P4 construction (full snapshot — slicing never touches the leader wire) — stored=27204 chars, expected=27204, equal=true
+P5E-LIVE: [PASS] E(iv) leader wire carries the FULL section set (40 beats · 30 ledger entries · ≥20 timeline) — beats=40 ledger=30 timeline=20
+P5E-LIVE: usage events (metered truth):
+P5E-LIVE:   novel=19567 used=21648 real=21648/154/21802 | Context usage (atlas · turn 1): 21.6K / 128.0K tokens
+P5E-LIVE:   novel=10944 used=12961 real=12961/533/13494 | Context usage (Task 1 · sage · turn 1): 13.0K / 128.0K tokens
+P5E-LIVE:   novel=10913 used=13535 real=13535/98/13633 | Context usage (Task 1 · sage · turn 2): 13.5K / 128.0K tokens
+P5E-LIVE:   novel=19574 used=21825 real=21825/89/21914 | Context usage (atlas · turn 2): 21.8K / 128.0K tokens
+P5E-LIVE:   novel=15561 used=16378 real=16378/26/16404 | Context usage (Task 2 · nova · turn 1): 16.4K / 128.0K tokens
+P5E-LIVE:   novel=15528 used=16997 real=16997/34/17031 | Context usage (Task 2 · nova · turn 2): 17.0K / 128.0K tokens
+P5E-LIVE:   novel=15655 used=17989 real=17989/28/18017 | Context usage (Task 2 · nova · turn 3): 18.0K / 128.0K tokens
+P5E-LIVE:   novel=19581 used=21935 real=21935/96/22031 | Context usage (atlas · turn 3): 21.9K / 128.0K tokens
+P5E-LIVE: [PASS] E(i) Task 1 (sage:chapter) member wire snapshot block BYTE-EXACT vs recomputed shipped slice — wire=15051 chars (incl. 1 separator newline) ≈ 10869 tok · expected=15050 chars · equal=true
+P5E-LIVE: [PASS] E(i) Task 1 structural floor intact (novel/synopsis/progress/next_chapter/cast/contract present) — all six markers on wire
+P5E-LIVE: [PASS] E(ii) Task 1(sage) sliced bulk PHYSICALLY ABSENT (below full on every bounded axis) — ledger=5/30 beats=4/40 timeline=8/20
+P5E-LIVE: [PASS] E(i) Task 2 (nova:chapter) member wire snapshot block BYTE-EXACT vs recomputed shipped slice — wire=21218 chars (incl. 1 separator newline) ≈ 15653 tok · expected=21217 chars · equal=true
+P5E-LIVE: [PASS] E(i) Task 2 structural floor intact (novel/synopsis/progress/next_chapter/cast/contract present) — all six markers on wire
+P5E-LIVE: [PASS] E(ii) Task 2(nova) sliced bulk PHYSICALLY ABSENT (below full on every bounded axis) — ledger=30/30 beats=4/40 timeline=20/20
+P5E-LIVE:   WIRE Task 1 sage:chapter — 15051 chars ≈ 10869 tok (full 25887 ≈ 19453) · ledger=5/30 beats=4/40 timeline=8/20 roster=12/12 · F-kept=[1,2,3,4,5,7,8,9,10,11,12,20,21,22,23,24] · floor=present
+P5E-LIVE:   WIRE Task 2 nova:chapter — 21218 chars ≈ 15653 tok (full 25887 ≈ 19453) · ledger=30/30 beats=4/40 timeline=20/20 roster=12/12 · F-kept=[1,2,3,4,5,6,7,7,8,8,9,9,10,10,11,11,12,12,13,14,15,16,17,18,19,20,20,21,21,22,22,23,23,24,24,25,26,27,28,29,30] · floor=present
+P5E-LIVE: [PASS] E(i) member snapshot blocks BYTE-EXACT against the shipped slicing function (ALL compared wires) — 2/2 wires byte-exact
+P5E-LIVE: [PASS] E(i) metered novel-section DROP on member wires (usage sections.novel < full snapshot estimate) — full≈19453 tok; member sections.novel values in the table above
+P5E-LIVE: [PASS] E(ii) GUARD INTACT: sage wire carries the FULL chapter roster (12/12 > the map's recent-10 bound — restored by the brief's chapter-13 reference) — recentChapters bound would keep 10; the A2 chapter-index guard restores the roster WHOLE
+P5E-LIVE: [PASS] E(iii) member artifacts DB-correct — counters == DB truth — verified.chaptersWritten=1 · DB chapters=13 (12 seeded + 1 written at index 13) · ch13.wordCount=572 · verified.words=572
+P5E-LIVE: [PASS] E(iii) read-only task produced no DB mutations — reviews=0 finalizes=0 exports=0
+P5E-LIVE: [PASS] E-L1 every ledger row for the run carries the run's attribution (surface=agent, modelId=glm-4-flash, novelId set) — rows=8 · surfaces=agent · models=glm-4-flash
+P5E-LIVE: [PASS] E-L2 measured UsageCall rows == usage-event real triples ROW-FOR-ROW (sorted; the two books agree) — events=8 rows=8 · equal=true
+P5E-LIVE: [PASS] E-L3 failed rows (Policy F), if any, contribute ZERO tokens and are counted separately — failed=0/8 rows (clean run — no failed attempts)
+P5E-LIVE: [PASS] E-L4 P5-c honesty: glm-4-flash renders UNPRICED (unlisted-model) — never $0-by-assumption, excluded from the account estimate — priced=false reason=unlisted-model · run rows (8) all UNPRICED in the central view
+P5E-LIVE: LEDGER — 8 rows (measured 8, failed 0) · Σprompt=143268 Σcompletion=1058 tok · modelId=glm-4-flash (FREE tier; UNPRICED in our table)
+P5E-LIVE: [PASS] leader transcript gapless — 7 rows, dense 1..N
+P5E-LIVE: [PASS] Task 1 (sage) conversation gapless — 4 rows, dense 1..N
+P5E-LIVE: [PASS] Task 2 (nova) conversation gapless — 8 rows, dense 1..N
+P5E-LIVE: [PASS] cleanup: budgets.yaml UNCHANGED — the P5-e flip is the shipped state (no probe-pack restore in this stage) — byte-equal=true
+P5E-LIVE: [PASS] probe run + scratch novel cascade-deleted
+P5E-LIVE: DISCLOSURE — 8 UsageCall rows for the run SURVIVE cleanup (no FK by P5-a design): orphaned to the deleted probe novel, they render under "(deleted novel)" in the central view as modelId=glm-4-flash UNPRICED rows worth $0 real spend (free tier). Retired on the P5-f retention schedule like any detail row.
+P5E-LIVE: ALL CHECKS PASSED (25 checks)
