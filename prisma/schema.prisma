@@ -928,3 +928,136 @@ model UsageInvoice {
 
   @@index([createdAt])
 }
+
+// ---------------------------------------------------------------------------
+// AI Team — restored per P5-g plan (agent-ctx/p5g-team1-repair-plan.md §3/§9).
+// Deleted in f32b9df (Novara pivot); originals: b8aa210 (five models) +
+// 7725023 (TeamTurnLog), verbatim from f32b9df^. The ONLY deltas from the
+// originals are the two ruled convention adaptations:
+//   1. plain-string novelId scope columns (NO FK, NO cascade — same style as
+//      UsageCall.novelId) on TeamConversation + TeamTask;
+//   2. these header comments.
+// Internal relations keep the original onDelete: Cascade (same style as
+// AgentEvent → AgentRun). Additive only — zero existing tables touched.
+// ---------------------------------------------------------------------------
+
+model TeamAgent {
+  id           String   @id @default(cuid())
+  key          String   @unique
+  name         String
+  role         String
+  description  String
+  // JSON: string[]
+  capabilities String
+  isLeader     Boolean  @default(false)
+  emoji        String   @default("🤖")
+  color        String   @default("#059669")
+  sortOrder    Int      @default(0)
+  createdAt    DateTime @default(now())
+
+  conversations TeamConversation[]
+  assignedTasks TeamTask[] @relation("assignee")
+  createdTasks  TeamTask[] @relation("creator")
+}
+
+model TeamConversation {
+  id         String   @id @default(cuid())
+  agentId    String
+  sessionKey String   @default("default")
+  // P5-g adaptation: workspace-pinned novel scope (plain string, no FK) —
+  // conversations opened inside a novel workspace attribute there.
+  novelId    String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  agent    TeamAgent     @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  messages TeamMessage[]
+
+  @@unique([agentId, sessionKey])
+}
+
+model TeamMessage {
+  id             String   @id @default(cuid())
+  conversationId String
+  // user | assistant | system
+  role           String
+  content        String
+  // JSON: string[] — ids of tasks created via this (assistant) message
+  taskIds        String?
+  createdAt      DateTime @default(now())
+
+  conversation TeamConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId, createdAt])
+}
+
+model TeamTask {
+  id            String   @id @default(cuid())
+  title         String
+  description   String
+  // pending | in_progress | completed | failed
+  status        String   @default("pending")
+  progress      Int      @default(0)
+  result        String?
+  error         String?
+  // Browser session that owns this task — routes execution chat/report
+  // appends to the right conversations.
+  sessionKey    String   @default("default")
+  // P5-g adaptation: delegation provenance (plain string, no FK) — tasks
+  // created from a novel-scoped conversation inherit its novelId.
+  novelId       String?
+  assigneeId    String
+  creatorId     String
+  creatorIsUser Boolean  @default(false)
+  // How many automatic leader follow-up rounds produced this task.
+  // User-initiated tasks are 0; each auto-continued delegation +1.
+  // The leader stops auto-continuing beyond MAX_AUTO_DEPTH.
+  autoDepth     Int      @default(0)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  assignee TeamAgent     @relation("assignee", fields: [assigneeId], references: [id], onDelete: Cascade)
+  creator  TeamAgent     @relation("creator", fields: [creatorId], references: [id], onDelete: Cascade)
+  logs     TeamTaskLog[]
+
+  @@index([status])
+}
+
+model TeamTaskLog {
+  id        String   @id @default(cuid())
+  taskId    String
+  message   String
+  progress  Int      @default(0)
+  createdAt DateTime @default(now())
+
+  task TeamTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  @@index([taskId, createdAt])
+}
+
+// Turn telemetry — the observability layer of the self-healing loop.
+// One row per glmAgentTurn (chat turns, task executions, follow-ups),
+// classifying how the turn ended so problems (budget exhaustion, tool
+// param errors, model failures) can be counted, alerted on, and learned
+// from instead of only being visible as canned fallback texts.
+model TeamTurnLog {
+  id         String   @id @default(cuid())
+  // Agent key when known ("leader", "writer"…); otherwise the glm label
+  // ("task", "leader-followup", "task-closeout"…).
+  agentKey   String
+  // glm label passed to glmAgentTurn.
+  label      String
+  // answered | tool_exhausted | model_error
+  outcome    String
+  rounds     Int      @default(1)
+  // JSON: [{round, action, ok, error}] — per-action outcomes.
+  toolCalls  String?
+  // JSON: string[] — corrections fired after this turn
+  // (delegation-repair / claim-verify / continuation / ground-truth-note).
+  correctionsFired String?
+  durationMs Int      @default(0)
+  createdAt  DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([agentKey, outcome])
+}

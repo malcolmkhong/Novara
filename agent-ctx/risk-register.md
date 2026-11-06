@@ -89,7 +89,7 @@ was never the trigger.
 
 ---
 
-## TEAM-1 — ai-team backend re-added without its schema models; surface 500s (OPEN defect — user decides: fix, rebuild, or remove)
+## TEAM-1 — ai-team backend re-added without its schema models; surface 500s (CLOSED 2026-11-06 — REVIVED under P5-g, plan agent-ctx/p5g-team1-repair-plan.md, user-approved with amendments A1/A2/A3)
 
 **Found during P5-a** (Ruling 3 forensic pass, 2026-11-05, READ-ONLY — no
 repair performed, no code touched).
@@ -145,6 +145,22 @@ options on the table for a separate decision: (a) restore the six models
 (git-recoverable from b8aa210), (b) rebuild the backend on the current agent
 tables, or (c) remove the re-added backend + panel for good. No repair, no
 code, no scope creep until the user rules.
+
+**→ CLOSED 2026-11-06 (P5-g): option (a) executed under the approved plan.**
+The six models were restored verbatim from `f32b9df^` (the last pre-pivot
+schema — the plan's §1 chronology was corrected by amendment A2: b8aa210
+carried five models, `7725023` added `TeamTurnLog`, f32b9df deleted all six
+AND the code, `c23c745` re-added the code without the schema) plus the two
+ruled adaptations (plain-string no-FK `novelId` scope columns on
+TeamConversation + TeamTask). Additive `db:push` (24 ms), client regenerated,
+all five routes revived; ledger scope threading + wizard-precedent
+provenance wired per plan §5. Eleventh harness `scripts/verify-p5-g.ts`
+GREEN (37/37, zero-GLM) and the A1 live-fire GREEN (17/17, flash-only,
+$0.00 billable — one artifact novel + 7 ledger rows + 1 provenance link
+kept as disclosed evidence; OPS-1 flash protocol-compliance pattern on
+prose-write turns disclosed in the live-fire output). Historical team data
+survives ONLY in `db/custom.backup-20261102-061118.db` (all six Team% tables
+populated; restore ruled out absent explicit user approval — plan §11).
 
 ---
 

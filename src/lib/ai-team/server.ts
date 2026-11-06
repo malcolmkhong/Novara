@@ -18,7 +18,7 @@ import type { Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
 import { capForGlm, extractJson, withTimeout } from "@/lib/ai-heuristics";
 import { classifyGlmFailure, extractRealUsage } from "@/lib/usage/usage-shapes";
-import { recordUsageCall } from "@/lib/usage/usage-store";
+import { recordProvenanceLink, recordUsageCall } from "@/lib/usage/usage-store";
 import {
   buildDelegationRepairMessages,
   buildLeaderSystemPrompt,
@@ -65,6 +65,20 @@ interface GlmMessage {
   content: string;
 }
 
+/**
+ * P5-g scope threading: attribution + model selection carried on every GLM
+ * call. novelId = workspace-pinned direct attribution (the conversation's
+ * pinned scope); correlationId = pre-novel session namespace
+ * ("ai-team:<sessionKey>", wizard precedent — provenance links retro-adopt
+ * these rows into the created novel's ledger); model = explicit request-side
+ * model id (undefined = gateway default, recorded as "gateway-default").
+ */
+export interface GlmScope {
+  novelId?: string;
+  correlationId?: string;
+  model?: string;
+}
+
 /** Pull the plain-text reply out of an untyped SDK completion payload. */
 function extractCompletionContent(completion: unknown): string | null {
   if (typeof completion !== "object" || completion === null) return null;
@@ -100,6 +114,7 @@ export async function glmText(
   messages: GlmMessage[],
   label: string,
   timeoutMs: number = GLM_TIMEOUT_MS,
+  scope?: GlmScope,
 ): Promise<string | null> {
   for (let attempt = 0; ; attempt++) {
     // Policy F (P5-b): one row per HTTP attempt. ZAI.create() failing below
@@ -112,6 +127,9 @@ export async function glmText(
       sent = true;
       const completion: unknown = await withTimeout(
         zai.chat.completions.create({
+          // P5-g: explicit model only when the caller supplies one; the
+          // request-side id is recorded on the ledger row exactly as sent.
+          ...(scope?.model ? { model: scope.model } : {}),
           messages: messages.map((message) => ({
             ...message,
             // System prompts now carry persona + team/novel-tool protocol +
@@ -123,11 +141,16 @@ export async function glmText(
         timeoutMs,
         `[team/${label}]`,
       );
-      // Persist the per-call row (surface DORMANT — TEAM-1 in
-      // agent-ctx/risk-register.md: its backend tables are absent from the
-      // current schema, so this path cannot fire today; instrumentation kept
-      // at parity so a revival is ledger-visible from the first call).
-      recordUsageCall({ surface: "ai-team", usage: extractRealUsage(completion) });
+      // Persist the per-call row. Surface revived per P5-g (schema restored;
+      // scope threading per plan §5): novelId = direct attribution,
+      // correlationId = pre-novel session namespace, modelId = as sent.
+      recordUsageCall({
+        surface: "ai-team",
+        usage: extractRealUsage(completion),
+        novelId: scope?.novelId,
+        correlationId: scope?.correlationId,
+        modelId: scope?.model,
+      });
       return extractCompletionContent(completion);
     } catch (error) {
       if (sent) {
@@ -136,6 +159,9 @@ export async function glmText(
           usage: null,
           status: "failed",
           errorKind: classifyGlmFailure(error),
+          novelId: scope?.novelId,
+          correlationId: scope?.correlationId,
+          modelId: scope?.model,
         });
       }
       console.error(`[team/${label}] GLM request failed:`, error);
@@ -337,13 +363,20 @@ export function toTaskDto(row: TaskRow): TaskDto {
 // Conversation helpers
 // ---------------------------------------------------------------------------
 
-export async function getOrCreateConversation(agentId: string, sessionKey: string) {
+export async function getOrCreateConversation(
+  agentId: string,
+  sessionKey: string,
+  novelId?: string,
+) {
   const existing = await db.teamConversation.findUnique({
     where: { agentId_sessionKey: { agentId, sessionKey } },
   });
   if (existing) return existing;
+  // P5-g: a conversation opened inside a novel workspace pins that novelId
+  // AT CREATION (plan §5.1) — later calls with a different novelId do not
+  // re-pin; the first scope wins so attribution stays coherent.
   return db.teamConversation.create({
-    data: { agentId, sessionKey },
+    data: { agentId, sessionKey, ...(novelId ? { novelId } : {}) },
   });
 }
 
@@ -374,6 +407,9 @@ export interface AgentTurnResult {
   durationMs: number;
   /** TeamTurnLog row id (callers attach corrections to it). */
   turnLogId: string | null;
+  /** P5-g: ids of novels CREATED this turn via create_novel (successful
+   *  writes only) — the chat/task routes fire the provenance link on these. */
+  createdNovelIds: string[];
 }
 
 const MAX_TOOL_ROUNDS = 3; // 1 initial call + up to 2 tool-execution rounds
@@ -438,6 +474,7 @@ export async function glmAgentTurn(
   messages: GlmMessage[],
   label: string,
   timeoutMs: number = GLM_TIMEOUT_MS,
+  scope?: GlmScope,
 ): Promise<AgentTurnResult> {
   const startedAt = Date.now();
   let toolLog: string | null = null;
@@ -449,6 +486,7 @@ export async function glmAgentTurn(
   let roundsUsed = 0;
   const writes: string[] = [];
   const toolCalls: AgentTurnResult["toolCalls"] = [];
+  const createdNovelIds: string[] = [];
 
   const cleanAll = (raw: string): string => {
     // Strip JSON tool blocks first, then plain-text write blocks.
@@ -478,6 +516,7 @@ export async function glmAgentTurn(
       finalMessages: current,
       durationMs: Date.now() - startedAt,
       turnLogId,
+      createdNovelIds,
     };
   };
 
@@ -486,6 +525,7 @@ export async function glmAgentTurn(
       current,
       label,
       round === 0 ? timeoutMs : TOOL_FOLLOWUP_TIMEOUT_MS,
+      scope,
     );
     roundsUsed = round + 1;
     if (raw === null) {
@@ -520,6 +560,11 @@ export async function glmAgentTurn(
       });
     }
     writes.push(...collectWriteEvidence(results));
+    for (const result of results) {
+      if (result.ok && result.action === "create_novel" && result.novelId) {
+        createdNovelIds.push(result.novelId);
+      }
+    }
     const roundLog = formatToolResults(results);
     lastResults = roundLog;
     toolLog = toolLog === null
@@ -642,6 +687,8 @@ export async function createTasksFromDelegations(
   creatorIsUser: boolean,
   sessionKey: string,
   autoDepth = 0,
+  /** P5-g: delegation provenance — inherited from the creating conversation. */
+  novelId?: string | null,
 ): Promise<TaskRow[]> {
   const members = await db.teamAgent.findMany();
   const byKey = new Map(members.map((member) => [member.key.toLowerCase(), member]));
@@ -659,6 +706,7 @@ export async function createTasksFromDelegations(
         title: delegation.title,
         description: delegation.description,
         sessionKey,
+        ...(novelId ? { novelId } : {}),
         assigneeId: assignee.id,
         creatorId: creator.id,
         creatorIsUser,
@@ -697,6 +745,8 @@ export async function createContinuationTask(
   sessionKey: string,
   turn: AgentTurnResult,
   userMessage: string,
+  /** P5-g: inherited novel scope, same rule as delegated tasks. */
+  novelId?: string | null,
 ): Promise<TaskRow | null> {
   try {
     const receipts =
@@ -723,6 +773,7 @@ export async function createContinuationTask(
         title: `${CONTINUATION_TITLE_PREFIX}完成被截断的回复`,
         description,
         sessionKey,
+        ...(novelId ? { novelId } : {}),
         assigneeId: agent.id,
         creatorId: agent.id,
         creatorIsUser: false,
@@ -785,6 +836,8 @@ export async function verifyCompletionClaims(options: {
   baseMessages: GlmMessage[];
   draftReply: string;
   label: string;
+  /** P5-g: attribution scope for the corrective round's ledger rows. */
+  scope?: GlmScope;
 }): Promise<{ text: string; delegations: Delegation[] }> {
   const { baseMessages, draftReply, label } = options;
   if (draftReply.trim().length === 0) {
@@ -818,6 +871,7 @@ export async function verifyCompletionClaims(options: {
     ],
     label,
     25_000,
+    options.scope,
   );
   if (raw === null) return { text: draftReply, delegations: [] };
   // Strip any stray novel-tool/write blocks so nothing unexecuted leaks
@@ -899,6 +953,13 @@ export async function runTask(taskId: string): Promise<void> {
     include: { assignee: true, creator: true, logs: true },
   });
   if (!task) return;
+  // P5-g attribution scope (plan §5): a task inherited a pinned novelId at
+  // creation → direct attribution; otherwise the pre-novel session
+  // namespace "ai-team:<sessionKey>" (wizard precedent — a create_novel
+  // inside the task retro-adopts these rows via the provenance link).
+  const scope: GlmScope = task.novelId
+    ? { novelId: task.novelId }
+    : { correlationId: `ai-team:${task.sessionKey}` };
   const setTask = (data: Prisma.TeamTaskUpdateInput) =>
     db.teamTask.update({ where: { id: taskId }, data }).catch((error: unknown) => {
       console.error("[team] task update failed:", error);
@@ -951,7 +1012,7 @@ export async function runTask(taskId: string): Promise<void> {
         ? { ...message, content: `${message.content}\n\n${novelToolPrompt}` }
         : message,
     );
-    const turn = await glmAgentTurn(execMessages, "task");
+    const turn = await glmAgentTurn(execMessages, "task", GLM_TIMEOUT_MS, scope);
     // Self-healing: the execution turn burned its tool-round budget while
     // still working. ONE bounded closeout round (resuming from the exact
     // tool-state conversation) finishes the deliverable instead of failing
@@ -973,6 +1034,8 @@ export async function runTask(taskId: string): Promise<void> {
           },
         ],
         "task-closeout",
+        TOOL_FOLLOWUP_TIMEOUT_MS,
+        scope,
       );
       effectiveTurn = {
         ...closeout,
@@ -1008,6 +1071,8 @@ export async function runTask(taskId: string): Promise<void> {
           { role: "user", content: WRITE_REPAIR_INSTRUCTION },
         ],
         "task-write-repair",
+        GLM_TIMEOUT_MS,
+        scope,
       );
       const repairedClean =
         repair.text === null ? "" : parseDelegations(repair.text).clean;
@@ -1042,6 +1107,15 @@ export async function runTask(taskId: string): Promise<void> {
 
     await setTask({ status: "completed", progress: 100, result });
     await addTaskLog(taskId, "Task completed ✓", 100);
+
+    // P5-g provenance (plan §5.2): a pre-novel task whose execution created
+    // a novel retro-adopts its ledger rows into that novel's ledger — the
+    // wizard precedent. Idempotent per (correlationId, novelId).
+    if (scope.correlationId && turn.createdNovelIds.length > 0) {
+      for (const createdId of turn.createdNovelIds) {
+        recordProvenanceLink("ai-team", scope.correlationId, createdId);
+      }
+    }
 
     // Keep the assignee's own conversation history complete (task in →
     // tool activity → result out).
@@ -1112,7 +1186,7 @@ export async function runTask(taskId: string): Promise<void> {
       // Auto-continue: the report wakes the leader for one bounded turn so
       // multi-step jobs keep moving without the user nudging every time.
       if (leader && reportAgentId === leader.id && task.autoDepth < MAX_AUTO_DEPTH) {
-        await runLeaderFollowUp(task.sessionKey, result, task.autoDepth + 1);
+        await runLeaderFollowUp(task.sessionKey, result, task.autoDepth + 1, scope);
       }
     }
   } catch (error) {
@@ -1168,6 +1242,7 @@ export async function runTask(taskId: string): Promise<void> {
               `❌ Task "${task.title}" FAILED. Reason: ${message}\n` +
                 "Decide NOW: retry the same task once, delegate a smaller version of it, or close with a clear status for the user plus a recommended next step.",
               task.autoDepth + 1,
+              scope,
             );
           }
         }
@@ -1222,6 +1297,9 @@ export async function runLeaderFollowUp(
   sessionKey: string,
   reportContent: string,
   depth: number,
+  /** P5-g: the reporting task's attribution scope, threaded to every GLM
+   *  call and inherited by any tasks the follow-up delegates. */
+  scope?: GlmScope,
 ): Promise<void> {
   try {
     const leader = await getLeader();
@@ -1276,7 +1354,7 @@ export async function runLeaderFollowUp(
       ...history,
       { role: "user", content: instruction },
     ];
-    const turn = await glmAgentTurn(followUpMessages, "leader-followup");
+    const turn = await glmAgentTurn(followUpMessages, "leader-followup", GLM_TIMEOUT_MS, scope);
     if (turn.text === null) {
       // Never die silently: the user just saw a task report land with no
       // reaction. Leave a visible recovery hint instead.
@@ -1317,6 +1395,7 @@ export async function runLeaderFollowUp(
           ],
           "leader-followup-repair",
           25_000,
+          scope,
         );
         if (repairRaw !== null && !/^NO_BLOCK$/i.test(repairRaw.trim())) {
           const repaired = parseDelegations(repairRaw);
@@ -1337,6 +1416,7 @@ export async function runLeaderFollowUp(
         baseMessages: followUpMessages,
         draftReply: clean,
         label: "leader-followup-verify",
+        scope,
       });
       if (verified.delegations.length > 0) {
         delegations = verified.delegations;
@@ -1346,7 +1426,14 @@ export async function runLeaderFollowUp(
 
     const tasks =
       delegations.length > 0
-        ? await createTasksFromDelegations(delegations, leader, false, sessionKey, depth)
+        ? await createTasksFromDelegations(
+            delegations,
+            leader,
+            false,
+            sessionKey,
+            depth,
+            scope?.novelId ?? null,
+          )
         : [];
 
     const replyTime = new Date();

@@ -18,6 +18,9 @@ const postSchema = z.object({
   title: z.string().trim().min(1).max(120),
   description: z.string().trim().min(1).max(2000),
   sessionKey: z.string().min(1).max(64),
+  // P5-g: optional delegation provenance — runTask reads it off the task
+  // row and attributes its GLM calls directly to the novel (plan §5.1).
+  novelId: z.string().min(1).max(64).optional(),
 });
 
 /** GET /api/team/tasks — latest tasks with logs; re-kicks orphaned pending work. */
@@ -86,6 +89,7 @@ export async function POST(req: Request) {
         title: parsed.data.title,
         description: parsed.data.description,
         sessionKey: parsed.data.sessionKey,
+        ...(parsed.data.novelId ? { novelId: parsed.data.novelId } : {}),
         assigneeId: assignee.id,
         creatorId: leader.id,
         creatorIsUser: true,

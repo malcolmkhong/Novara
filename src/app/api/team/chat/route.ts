@@ -21,22 +21,30 @@ import {
   toTaskDto,
   verifyCompletionClaims,
 } from "@/lib/ai-team/server";
-import type { TaskRow } from "@/lib/ai-team/server";
+import type { GlmScope, TaskRow } from "@/lib/ai-team/server";
 import { buildDelegationRepairMessages, buildLeaderSystemPrompt, buildMemberChatPrompt } from "@/lib/ai-team/prompts";
 import { buildNovelToolPrompt } from "@/lib/ai-team/novel-tools";
 import type { ChatSendResponse } from "@/lib/ai-team/types";
+import { recordProvenanceLink } from "@/lib/usage/usage-store";
 
 export const dynamic = "force-dynamic";
 
 const getSchema = z.object({
   agentId: z.string().min(1),
   sessionKey: z.string().min(1).max(64),
+  // P5-g: optional workspace pin — a conversation opened inside a novel
+  // workspace attributes there (pinned at creation, plan §5.1).
+  novelId: z.string().min(1).max(64).optional(),
 });
 
 const postSchema = z.object({
   agentId: z.string().min(1),
   sessionKey: z.string().min(1).max(64),
   content: z.string().trim().min(1).max(2000),
+  novelId: z.string().min(1).max(64).optional(),
+  // P5-g: optional request-side model override (live-fire/ops tooling;
+  // production callers omit it → gateway default, recorded honestly).
+  model: z.string().trim().min(1).max(64).optional(),
 });
 
 /** GET /api/team/chat?agentId=…&sessionKey=… — one agent's conversation. */
@@ -45,6 +53,7 @@ export async function GET(req: Request) {
   const parsed = getSchema.safeParse({
     agentId: url.searchParams.get("agentId") ?? "",
     sessionKey: url.searchParams.get("sessionKey") ?? "",
+    novelId: url.searchParams.get("novelId") ?? undefined,
   });
   if (!parsed.success) {
     return NextResponse.json(
@@ -58,7 +67,11 @@ export async function GET(req: Request) {
     if (!agent) {
       return NextResponse.json({ success: false, error: "Unknown agent." }, { status: 404 });
     }
-    const conversation = await getOrCreateConversation(agent.id, parsed.data.sessionKey);
+    const conversation = await getOrCreateConversation(
+      agent.id,
+      parsed.data.sessionKey,
+      parsed.data.novelId,
+    );
     const messages = await db.teamMessage.findMany({
       where: { conversationId: conversation.id },
       orderBy: { createdAt: "asc" },
@@ -107,7 +120,23 @@ export async function POST(req: Request) {
       return NextResponse.json({ success: false, error: "Unknown agent." }, { status: 404 });
     }
 
-    const conversation = await getOrCreateConversation(agent.id, sessionKey);
+    const conversation = await getOrCreateConversation(
+      agent.id,
+      sessionKey,
+      parsed.data.novelId,
+    );
+    // Effective attribution scope (plan §5): the conversation's pinned
+    // novelId wins (created inside a workspace → direct attribution);
+    // otherwise this request's novelId, if any; otherwise the pre-novel
+    // session namespace "ai-team:<sessionKey>" (wizard precedent — a
+    // create_novel later retro-adopts these rows via the provenance link).
+    const effectiveNovelId = conversation.novelId ?? parsed.data.novelId ?? null;
+    const scope: GlmScope = effectiveNovelId
+      ? { novelId: effectiveNovelId, ...(parsed.data.model ? { model: parsed.data.model } : {}) }
+      : {
+          correlationId: `ai-team:${sessionKey}`,
+          ...(parsed.data.model ? { model: parsed.data.model } : {}),
+        };
     const history = await buildHistoryMessages(conversation.id);
 
     let systemPrompt: string;
@@ -131,7 +160,7 @@ export async function POST(req: Request) {
       { role: "user", content },
     ];
 
-    const turn = await glmAgentTurn(glmMessages, agent.key);
+    const turn = await glmAgentTurn(glmMessages, agent.key, undefined, scope);
     if (turn.text === null) {
       return NextResponse.json(
         {
@@ -174,6 +203,7 @@ export async function POST(req: Request) {
           ],
           `${agent.key}-repair`,
           25_000,
+          scope,
         );
         if (repairRaw !== null && !/^NO_BLOCK$/i.test(repairRaw.trim())) {
           const repaired = parseDelegations(repairRaw);
@@ -195,6 +225,7 @@ export async function POST(req: Request) {
         baseMessages: glmMessages,
         draftReply: clean,
         label: `${agent.key}-claim-verify`,
+        scope,
       });
       if (verified.delegations.length > 0) {
         delegations = verified.delegations;
@@ -208,8 +239,17 @@ export async function POST(req: Request) {
     // finishes on its own instead of asking the user to say “继续”.
     let continuation: TaskRow | null = null;
     if (delegations.length === 0 && turn.outcome === "tool_exhausted") {
-      continuation = await createContinuationTask(agent, sessionKey, turn, content);
+      continuation = await createContinuationTask(agent, sessionKey, turn, content, effectiveNovelId);
       if (continuation) corrections.push("continuation");
+    }
+
+    // P5-g provenance (plan §5.2): a pre-novel turn whose tool loop created
+    // a novel retro-adopts its ledger rows into that novel's ledger — the
+    // wizard precedent. Idempotent per (correlationId, novelId).
+    if (scope.correlationId && turn.createdNovelIds.length > 0) {
+      for (const createdId of turn.createdNovelIds) {
+        recordProvenanceLink("ai-team", scope.correlationId, createdId);
+      }
     }
 
     const userMessage = await db.teamMessage.create({
@@ -217,7 +257,7 @@ export async function POST(req: Request) {
     });
 
     const tasks = delegations.length > 0
-      ? await createTasksFromDelegations(delegations, agent, false, sessionKey)
+      ? await createTasksFromDelegations(delegations, agent, false, sessionKey, 0, effectiveNovelId)
       : [];
     const allTaskIds = [
       ...tasks.map((task) => task.id),
