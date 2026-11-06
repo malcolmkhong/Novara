@@ -33,17 +33,21 @@
 
 import { db } from "@/lib/db";
 import type { RealUsage } from "./usage-shapes";
+import { estimateUpperBoundUsd, priceForModelId, PRICING_VERSION } from "./pricing";
 
 export type {
   RealUsage,
   GlmFailureKind,
   LedgerSurfaceUsage,
   LedgerNovelUsage,
+  LedgerModelUsage,
+  AccountEstimate,
   AccountUsageSnapshot,
   NovelUsageSummary,
   CountSum,
 } from "./usage-shapes";
 export { extractRealUsage, classifyGlmFailure } from "./usage-shapes";
+export { PRICING_VERSION, priceForModelId } from "./pricing";
 
 /**
  * Request-side model label for calls that carried NO model field (the
@@ -193,7 +197,7 @@ export async function accountUsageSnapshot(period?: string): Promise<AccountUsag
   const window = period ? monthWindow(period) : null;
   const where = window ? { createdAt: window } : {};
 
-  const [bySurface, byNovel, earliest, failedCount] = await Promise.all([
+  const [bySurface, byNovel, byModel, failedByModel, earliest, failedCount] = await Promise.all([
     db.usageCall.groupBy({
       by: ["surface"],
       where,
@@ -207,12 +211,59 @@ export async function accountUsageSnapshot(period?: string): Promise<AccountUsag
       _sum: { promptTokens: true, completionTokens: true, totalTokens: true },
       _count: { _all: true },
     }),
+    // P5-c per-model split: modelId verbatim (request-side), failed rows
+    // contribute zero tokens by definition but ARE counted per model.
+    db.usageCall.groupBy({
+      by: ["modelId"],
+      where,
+      _sum: { promptTokens: true, completionTokens: true, totalTokens: true },
+      _count: { _all: true },
+    }),
+    db.usageCall.groupBy({
+      by: ["modelId"],
+      where: { ...where, status: "failed" },
+      _count: { _all: true },
+    }),
     db.usageCall.findFirst({ where, orderBy: { createdAt: "asc" }, select: { createdAt: true } }),
     db.usageCall.count({ where: { ...where, status: "failed" } }),
   ]);
 
   const surfaces = bySurface
     .map((row) => toSurfaceUsage(row as SumRow, row.surface))
+    .sort((a, b) => b.totalTokens - a.totalTokens);
+
+  // P5-c: join the failed-count per model, then price what the fetched docs
+  // actually list. Unpriced groups keep estimatedUsd null — never $0-by-guess.
+  const failedCountByModel = new Map(failedByModel.map((r) => [r.modelId, r._count._all]));
+  let unpricedGroups = 0;
+  let estimatedTotalUsd = 0;
+  const models = byModel
+    .map((row) => {
+      const sum = row as SumRow;
+      const pricing = priceForModelId(row.modelId);
+      const promptTokens = sum._sum.promptTokens ?? 0;
+      const completionTokens = sum._sum.completionTokens ?? 0;
+      const totalTokens = sum._sum.totalTokens ?? 0;
+      const estimatedUsd = pricing.priced
+        ? estimateUpperBoundUsd(pricing.row, promptTokens, completionTokens)
+        : null;
+      if (estimatedUsd === null) unpricedGroups += 1;
+      else estimatedTotalUsd += estimatedUsd;
+      return {
+        modelId: row.modelId,
+        calls: sum._count._all,
+        failedCalls: failedCountByModel.get(row.modelId) ?? 0,
+        promptTokens,
+        completionTokens,
+        totalTokens,
+        priced: pricing.priced,
+        unpricedReason: pricing.priced ? null : pricing.reason,
+        estimatedUsd,
+        pricingVersion: pricing.pricingVersion,
+        sourceUrl: pricing.priced ? pricing.row.sourceUrl : null,
+        fetchedAt: pricing.priced ? pricing.row.fetchedAt : null,
+      };
+    })
     .sort((a, b) => b.totalTokens - a.totalTokens);
 
   const novelIds = byNovel.map((row) => row.novelId as string);
@@ -247,6 +298,13 @@ export async function accountUsageSnapshot(period?: string): Promise<AccountUsag
     period: period && window ? period : null,
     surfaces,
     novels,
+    models,
+    estimate: {
+      pricingVersion: PRICING_VERSION,
+      upperBound: true,
+      usd: estimatedTotalUsd,
+      unpricedGroups,
+    },
     ...sumsToTotals(surfaces),
     failedCalls: failedCount,
     retention: RETENTION_NOTE,

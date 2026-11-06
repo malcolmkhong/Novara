@@ -100,6 +100,45 @@ export interface LedgerSurfaceUsage {
   totalTokens: number;
 }
 
+/**
+ * P5-c per-model split (§6): UsageCall.modelId stores the REQUEST-side value
+ * verbatim; this aggregates it. Failed rows contribute ZERO tokens by
+ * definition (Policy F) — their count is disclosed SEPARATELY, next to the
+ * model's estimated cost, and is never folded into the token sums.
+ */
+export interface LedgerModelUsage {
+  modelId: string;
+  /** All attempts (measured + failed). */
+  calls: number;
+  /** Policy F rows with no completion payload — shown separately. */
+  failedCalls: number;
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+  /** false = no sourced price row exists → estimatedUsd is null, never $0. */
+  priced: boolean;
+  /** "gateway-default" | "unlisted-model" — why a group is unpriced. */
+  unpricedReason: string | null;
+  /** Σ(measured tokens × listed price), UPPER BOUND (cached discount
+   *  invisible); null when unpriced (§6.2 rule 3: never $0-by-guess). */
+  estimatedUsd: number | null;
+  pricingVersion: string;
+  sourceUrl: string | null;
+  fetchedAt: string | null;
+}
+
+/** P5-c account-level estimate — Σ over PRICED groups only. */
+export interface AccountEstimate {
+  pricingVersion: string;
+  /** Always an upper bound: cached-input discount is invisible to us. */
+  upperBound: true;
+  /** Σ over priced model groups (0 when nothing is priced — never null at
+   *  account level; per-group unpriced-ness is disclosed via unpricedGroups). */
+  usd: number;
+  /** Model groups with no honest price — EXCLUDED from usd, never $0. */
+  unpricedGroups: number;
+}
+
 export interface LedgerNovelUsage {
   novelId: string;
   /** null = the novel row no longer exists — render "(deleted novel)". */
@@ -118,6 +157,10 @@ export interface AccountUsageSnapshot {
   period: string | null;
   surfaces: LedgerSurfaceUsage[];
   novels: LedgerNovelUsage[];
+  /** P5-c: per-request-side-model split with separately-disclosed failures. */
+  models: LedgerModelUsage[];
+  /** P5-c: account-level ESTIMATE over priced groups (upper bound). */
+  estimate: AccountEstimate;
   totalCalls: number;
   /** P5-b Policy F: attempts with NO completion payload (0-token rows). */
   failedCalls: number;
@@ -148,4 +191,37 @@ export interface CountSum {
   promptTokens: number;
   completionTokens: number;
   totalTokens: number;
+}
+
+// ---------------------------------------------------------------------------
+// P5-c invoice reconciliation shapes (§6.3) — what /api/usage/invoice returns
+// and the central view's paste-slot consumes. actualUsd is USER-SUPPLIED text
+// stored verbatim; estimatedUsd is OUR upper-bound figure captured at save
+// time (String of the number, reproducible via pricingVersion).
+// ---------------------------------------------------------------------------
+
+export interface InvoiceEntry {
+  id: string;
+  /** The pasted figure, exactly as supplied (currency mark stripped). */
+  actualUsd: string;
+  currency: string;
+  /** User-typed period the figure covers. */
+  periodLabel: string;
+  note: string | null;
+  /** OUR ESTIMATE at save time (upper bound; String of the USD number). */
+  estimatedUsd: string;
+  /** UsageCall rows the estimate summed. */
+  trackedRows: number;
+  sinceAtSave: string | null;
+  pricingVersion: string;
+  createdAt: string;
+}
+
+export interface InvoiceSnapshot {
+  entries: InvoiceEntry[];
+  totalEntries: number;
+  pricingVersion: string;
+  sourceUrl: string;
+  fetchedAt: string;
+  retention: string;
 }

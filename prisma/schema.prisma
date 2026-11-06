@@ -835,3 +835,41 @@ model UsageProvenance {
   @@unique([correlationId, novelId])
   @@index([novelId])
 }
+
+// ---------------------------------------------------------------------------
+// UsageInvoice (Phase 5 / P5-c, proposal §6.3) — the invoice reconciliation
+// entry. One row per paste of the account holder's provider-console figure.
+//
+// HONESTY: `actualUsd` is USER-SUPPLIED text, stored verbatim (never computed,
+// never rounded here). `estimatedUsd` is OUR figure captured at save time —
+// an UPPER BOUND (cached-input discount invisible) reproducible via
+// `pricingVersion`. The two are different epistemic categories and the UI
+// must keep them labeled apart. Delta is DISPLAY math only; it is not a
+// defect claim — our ESTIMATE covers only persisted app rows since the
+// ledger's `since`, while the provider figure covers whatever period the
+// account holder pasted (which may include calls this build never saw).
+//
+// Same retention family as UsageCall: plain strings, NO foreign key, NO
+// cascade — reconciliation history is permanent account history. Additive
+// (P5-c); nothing existing is touched.
+// ---------------------------------------------------------------------------
+
+model UsageInvoice {
+  id             String   @id @default(cuid())
+  // The pasted figure, EXACTLY as supplied (e.g. "12.34"). Parsed at display.
+  actualUsd      String
+  currency       String   @default("USD")
+  // User-typed period the figure covers (e.g. "2026-11" or "Nov 5-6").
+  periodLabel    String
+  note           String?
+  // Our ESTIMATE at save time — Σ over priced model groups, upper bound.
+  estimatedUsd   String
+  // UsageCall rows the estimate summed (0 pre-Phase-5 rows exist by design).
+  trackedRows    Int
+  // The ledger `since` at save — bounds what our ESTIMATE covered.
+  sinceAtSave    String?
+  pricingVersion String
+  createdAt      DateTime @default(now())
+
+  @@index([createdAt])
+}

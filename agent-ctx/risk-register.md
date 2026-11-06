@@ -133,3 +133,41 @@ options on the table for a separate decision: (a) restore the six models
 (git-recoverable from b8aa210), (b) rebuild the backend on the current agent
 tables, or (c) remove the re-added backend + panel for good. No repair, no
 code, no scope creep until the user rules.
+
+---
+
+## OPS-3 — Killed P5-b probe: no diffable gateway counter exists for the incident window (CLOSED — recorded inconclusive, bounded worst case stands)
+
+**Incident.** During P5-b harness development, one probe process
+(`p5b-probe-fd.ts`) hung for 60s and was killed before printing anything
+(phase5-stages.md §P5-B anomaly disclosure). Window bounded by git: the
+P5-a chokepoint commit `3124dbf` (2026-11-05 22:57:26 UTC) and the P5-b fix
+commit `7efabab` (2026-11-05 23:56:21 UTC).
+
+**Zero-spend closure check (user-directed, 2026-11-06; result recorded
+either way).** An observable counter DOES exist and WAS captured before the
+incident — phase3-stages.md §P3-A header JSON, verbatim:
+`x-ratelimit-user-daily-remaining: 370`, `x-ratelimit-remaining-daily: 170`,
+response date `Thu, 05 Nov 2026 13:00:19 GMT`, `x-ratelimit-reset: 1793883620`
+= **2026-11-05 13:00:20 UTC**.
+
+**Why the diff is structurally impossible (no live call spent on it):** the
+only pre-incident capture was taken in the daily window that ENDED one second
+after it was taken (reset 13:00:20). The incident fell inside the NEXT daily
+window (2026-11-05 13:00:20 → 2026-11-06 13:00:20 UTC), whose baseline was
+never observed; additionally the P4-B live-fire (phase4-stages.md, embedded
+before that record's 21:10:59 UTC commit) consumed the same window before the
+incident. A live re-read (which itself requires a free-tier call — headers
+ride successful responses only, proposal §5.2) cannot reconstruct a baseline
+that never existed, and after 2026-11-06 13:00:20 UTC the incident window's
+counter state is unrecoverable regardless. **RESULT: NOT DIFFABLE (baseline
+absent).** No GLM call — not even free-tier — was spent producing an
+uninterpretable number.
+
+**Bounded worst case (unchanged):** ≤1 unrecorded empty-prompt completion.
+
+**Mitigation — now a standing rule:** mock-first discipline for ALL future
+harness probes. A probe that needs gateway-shaped behavior proves the mocked
+path first and never constructs the real SDK (P5-b's FA–FF mock.module
+pattern is the template; the instrumented re-run proved the mock handled
+every call).

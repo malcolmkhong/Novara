@@ -389,3 +389,189 @@ harness process env) indicates the mock was active throughout.
 Pricing module (`src/lib/usage/pricing.ts`, ESTIMATE-labeled, §6),
 per-model split, the §6 invoice paste-slot, and the P5-d enablement gate
 remain. Slicing-first stays a working assumption only.
+
+---
+
+## §P5-C — Pricing module + per-model split + invoice reconciliation (evidence embedded)
+
+**Date: 2026-11-06 (UTC). Approval state: P5-b ACCEPTED (user, 2026-11-06) with
+three closers (OPS-3 zero-spend check, detect-route retrospective, P5-c
+requirements). Sextet + P5-b harness + NEW P5-c harness green. Lint clean.
+$0.00 GLM — zero billable, zero free-tier calls; the pricing sources were
+fetched LIVE from the public docs via plain HTTP (no model calls).**
+
+### Closers executed BEFORE P5-c code
+
+**1. OPS-3 anomaly closure — recorded NOT DIFFABLE, zero calls spent.**
+Observable counters exist and were captured pre-incident (phase3-stages.md
+§P3-A, verbatim: `user-daily-remaining: 370`, `remaining-daily: 170`, response
+date `2026-11-05 13:00:19 GMT`, `x-ratelimit-reset: 1793883620` =
+**2026-11-05 13:00:20 UTC**). The killed probe's window (bounded by commits
+`3124dbf` 22:57:26 → `7efabab` 23:56:21 UTC) fell in the NEXT daily window
+(Nov 5 13:00:20 → Nov 6 13:00:20 UTC), whose baseline was never observed; the
+P4-B live-fire (embedded before that record's 21:10:59 UTC commit) consumed
+the same window before the incident. A live re-read cannot reconstruct a
+baseline that never existed, and the window closed 2026-11-06 13:00:20 UTC.
+Full entry: risk-register.md OPS-3. Bounded worst case stands (≤1 unrecorded
+empty-prompt completion); mock-first is now the standing rule for all future
+probes.
+
+**2. Detect-route retrospective (for the P5-c report, two sentences).**
+Git dates: the missing-import defect was introduced by the P5-a chokepoint
+commit `3124dbf` (2026-11-05 22:57:26 UTC — both detect routes gained
+`recordUsageCall(...)` without importing it, alongside the still-present
+`recordGlobalUsage`) and fixed by the P5-b commit `7efabab` (2026-11-05
+23:56:21 UTC) — a 59-minute window. No real detect call occurred in that
+window: the surviving dev.log contains zero `/api/detect` requests (binary-
+safe scan, 0 matches), the detect UI panels are mounted nowhere (P5-b
+census), and the UsageCall table has held zero detect rows ever (census
+2026-11-06) — with the honest caveat that the defect's failure mode
+(ReferenceError at the record line, which executes only AFTER a completed GLM
+response) would have left no row even if a call had happened, so the log +
+orphaned-UI evidence, not the ledger, is what answers this.
+
+**3. Pricing sources fetched LIVE (2026-11-06, HTTP 200, plain curl — $0.00
+GLM, no model involved).**
+
+```
+curl https://docs.z.ai/guides/overview/pricing      → 200 (162,439 bytes)
+curl https://docs.z.ai/guides/llm/glm-4.6           → 200 (357,846 bytes)
+curl https://docs.z.ai/guides/llm/glm-4-flash       → 404 (no such docs page)
+parsed <thead>: Model | Input | Cached Input | Cached Input Storage | Output
+parsed rows (Prices per 1M tokens):
+  GLM-4.6     | $0.6 | $0.11 | Limited-time Free | $2.2
+  GLM-4.5-Air | $0.2 | $0.03 | Limited-time Free | $1.1
+  GLM-4.5-Flash / GLM-4.7-Flash | Free (all columns)
+  NO glm-4-flash row, NO glm-4-long row on the fetched page
+```
+
+### Files touched
+
+| file | change |
+|---|---|
+| `src/lib/usage/pricing.ts` | NEW — versioned static table (`2026-11-06.1`) keyed by request-side modelId; header carries sourceUrl + fetchedAt + the parsed rows verbatim; `priceForModelId` (gateway-default → UNPRICED by construction; unlisted ids → UNPRICED, never $0); `estimateUpperBoundUsd`; FOUR money formatters that permanently carry their labels |
+| `src/lib/usage/usage-shapes.ts` | additive: `LedgerModelUsage` (calls / failedCalls separately / tokens / priced / unpricedReason / estimatedUsd-null-when-unpriced / pricing provenance), `AccountEstimate` (upperBound:true, Σ over priced groups, unpricedGroups count), `models` + `estimate` on `AccountUsageSnapshot`; `InvoiceEntry` + `InvoiceSnapshot` |
+| `src/lib/usage/usage-store.ts` | `accountUsageSnapshot` gains TWO groupBys (modelId all + modelId failed) and prices each group from the static table; unpriced groups counted and EXCLUDED, never zeroed |
+| `prisma/schema.prisma` | additive `UsageInvoice` (actualUsd USER text verbatim · periodLabel · estimatedUsd OUR capture · trackedRows · sinceAtSave · pricingVersion; plain strings, no FK, permanent retention family) — db:push clean |
+| `src/app/api/usage/invoice/route.ts` | NEW — GET (entries latest-first, cap 20 + provenance) / POST (strict zod: `^\$?\d{1,7}(\.\d{1,2})?$`, non-negative, period required; captures OUR estimate at save; returns delta = display math) |
+| `src/components/novara/writer/usage-balance-badge.tsx` | central view ONLY: account ESTIMATE line, "By model · ESTIMATE (upper bound)" block with per-model failed counts + unpriced rows, invoice paste-slot + recorded-comparison list; **zero raw currency glyphs in the file** — every money string flows through the labeled pricing formatters |
+| `scripts/verify-p5-c.ts` | NEW harness — 30 checks (PR/DB/RT/SP/RS), ZERO GLM structural (never imports the SDK) |
+| `agent-ctx/risk-register.md` | OPS-3 filed (NOT DIFFABLE + standing mock-first rule) |
+
+Panel (`context-usage-panel.tsx`): **UNTOUCHED** — no pricing import, no
+currency glyph (harness-pinned); THIS-CALL/THIS-RUN invariant holds by
+construction, ALL-AI-SURFACES block unchanged from P5-b.
+
+### Browser verification (agent-browser, golden path, evidence verbatim)
+
+Fixture rows up (4 × `p5c-browser`, written directly — no model calls);
+`#/writer` → badge clicked → central view:
+
+```
+4 calls (incl. 1 failed · 0 tokens)   Σ 17.8K tok   in 16.5K · out 1.3K
+$0.0112 ESTIMATE (upper bound) | 1 model group unpriced (excluded)
+BY MODEL · ESTIMATE (UPPER BOUND)
+  glm-4.6                        ×3 (1 failed · 0 tok)  16.0K  $0.0112 EST
+  gateway default (no model field)  ×1                  1.8K   unpriced model
+  "Measured tokens × sourced price table (2026-11-06.1); the cached-input
+   discount is invisible to us, so every figure is an upper bound. Unpriced
+   rows have NO sourced price — shown, never guessed."
+```
+
+Paste-slot golden path (through the REAL UI): period "Nov 2026
+(browser-verify)" + figure "0.05" →
+
+```
+Recorded for Nov 2026 (browser-verify): $0.05 — your figure (as pasted) ·
+  +$0.0388 vs our ESTIMATE          [0.05 − 0.0112 = 0.0388, exact]
+Recorded comparisons (1): … our side: $0.0112 ESTIMATE (upper bound)
+  at save: 4 tracked rows · prices 2026-11-06.1
+```
+
+Screenshot: `agent-ctx/p5c-evidence-central-p5c.png`. Console: clean
+(HMR/Fast-Refresh only); dev.log error sweep: none. Empty-input submit in the
+real UI correctly shows the guard message. Cleanup: 4 fixture rows + 1
+browser-created invoice entry deleted; shipped initial state re-verified
+(calls=0, invoices=0).
+
+**UI defect found and fixed BY browser verification:** the P5-c additions
+made the popover 766px tall against a 577px viewport — the Record button was
+outside the viewport and unclickable. Fixed by capping + scrolling the
+popover body (`max-h-[calc(100vh-4rem)] overflow-y-auto`); re-verified
+clickable, harness SP pins re-run green (they read the badge source).
+
+### scripts/verify-p5-c.ts — full run output (ZERO GLM: never imports the SDK)
+
+```
+P5C: [PASS] PR glm-4.6 priced from the fetched table — 0.6 in / 2.2 out, cached 0.11 present-never-applied — v2026-11-06.1 fetched 2026-11-06
+P5C: [PASS] PR glm-4.6 row carries sourceUrl + fetchedAt (reproducible to a dated doc snapshot) — https://docs.z.ai/guides/overview/pricing
+P5C: [PASS] PR glm-4.5-air priced — 0.2 in / 1.1 out (fetched 2026-11-06) — priced
+P5C: [PASS] PR fixture math exact: glm-4.6 (1M in, 0.5M out) = 1.70; glm-4.5-air (2M in, 1M out) = 1.50 — a=1.7 b=1.5
+P5C: [PASS] PR gateway-default rows are UNPRICED by construction (never priced by guess) — reason=gateway-default
+P5C: [PASS] PR glm-4-flash + glm-4-long have NO row on the fetched docs (verified 2026-11-06; flash docs page 404s) → UNPRICED, never $0 — flash=unlisted-model long=unlisted-model
+P5C: [PASS] PR unknown future modelId → UNPRICED (unlisted-model), never guessed — reason=unlisted-model
+P5C: [PASS] PR formatEstimateUsd ALWAYS renders the full ESTIMATE (upper bound) label — e.g. $0.0051 ESTIMATE (upper bound) | $1234.56 ESTIMATE (upper bound)
+P5C: [PASS] PR compact per-row formatter still carries the EST label (no bare $ anywhere) — e.g. $0.0051 EST
+P5C: [PASS] PR pasted-figure formatter always marks it as the USER's input — e.g. $12.34 — your figure (as pasted)
+P5C: [PASS] PR delta formatter always frames the gap against OUR ESTIMATE — e.g. +$0.0049 vs our ESTIMATE
+P5C: [PASS] PR pricing version + source pinned: versioned table, dated docs URL — v2026-11-06.1
+P5C: [PASS] DB per-model split: glm-4.6 = 3 calls (2 measured + 1 failed), tokens ONLY from measured rows — calls=3 failed=1 tok=4500
+P5C: [PASS] DB failed COUNT shows separately next to the model's cost; failed rows contribute 0 tokens by definition — in/out=3000/1500 (failed row: 0/0)
+P5C: [PASS] DB glm-4.6 estimate == measured tokens x listed price (upper bound) — 0.0051
+P5C: [PASS] DB gateway-default group: UNPRICED (reason gateway-default), estimatedUsd NULL — never $0-by-guess — reason=gateway-default est=null
+P5C: [PASS] DB glm-4-flash group: UNPRICED (no sourced row on the fetched docs), estimatedUsd NULL — reason=unlisted-model est=null
+P5C: [PASS] DB account estimate = Σ over PRICED groups only; unpriced groups counted, excluded, never zeroed — usd=0.0051 unpricedGroups=2
+P5C: [PASS] RS fixture rows readable via a SECOND freshly constructed PrismaClient (persist beyond process memory) — db2 rows=5/5
+P5C: [PASS] RT /api/usage/ledger 200 with the P5-c models + estimate blocks — status=200 models=3 est=0.0051
+P5C: [PASS] RT route estimate matches the store's math on the same rows — route=0.0051 store=0.0051
+P5C: [PASS] RT invoice POST 201: pasted figure stored VERBATIM next to OUR captured ESTIMATE — actual=0.01 est=0.0051 rows=5
+P5C: [PASS] RT delta = actual − our ESTIMATE (display math, labeled on the client) — delta=0.0049
+P5C: [PASS] RT invoice GET lists the entry (latest first) with the pricing provenance — total=1
+P5C: [PASS] RT strict validation: junk figure, negative figure, empty period → ALL 400 (nothing coerced, nothing guessed) — 400/400/400
+P5C: [PASS] SP central view: ZERO raw currency glyphs — every money string flows through the labeled pricing formatters — glyphs=0
+P5C: [PASS] SP panel untouched by P5-c: no pricing import, no currency glyph (THIS-CALL/THIS-RUN invariant holds by construction) — pricing-import=false glyphs=0
+P5C: [PASS] SP pricing file header carries the fetched docs URL + date + both priced rows verbatim — header provenance pinned
+P5C: [PASS] SP panel Layer-3 still fetches the persisted ledger (P5-b swap intact) — source pin re-asserted
+P5C: [PASS] Cleanup: fixture rows fully removed, DB back to pre-run shape — calls 0->0 (deleted 5), invoices 0->0 (deleted 1)
+P5C: ALL CHECKS PASSED (30 checks)
+```
+
+### Regression EIGHTH-set + ship health (measured 2026-11-06, after ALL P5-c changes incl. the popover fix)
+
+| harness | checks | result |
+|---------|--------|--------|
+| verify-stage-a.ts | 17 | ALL CHECKS PASSED |
+| verify-p2-a.ts | 13 | ALL CHECKS PASSED |
+| verify-p2-b.ts | 35 | ALL CHECKS PASSED |
+| verify-p2-c.ts | 46 | ALL CHECKS PASSED |
+| verify-p4.ts | 38 | ALL CHECKS PASSED |
+| verify-p5.ts | 24 | ALL CHECKS PASSED |
+| verify-p5-b.ts | 24 | ALL CHECKS PASSED |
+| **verify-p5-c.ts** | **30 (NEW)** | **ALL CHECKS PASSED (twice: pre- and post-fix)** |
+
+- `bun run lint` — clean (no findings).
+- Dev server: restarted ONCE after `db:push` (running process held the
+  pre-push Prisma client without `UsageInvoice` — expected consequence of
+  additive client generation, same as P5-a/b). Post-restart probes:
+  `GET / → 200`; `GET /api/usage/ledger → 200` with `models` + `estimate`
+  (honest empty: usd 0, unpricedGroups 0); `GET /api/usage/invoice → 200`
+  (empty entries + provenance).
+- Post-cleanup DB state: UsageCall 0, UsageInvoice 0 — the honest empty
+  state IS the shipped initial state.
+
+### $0.00 GLM ledger — §P5-C
+
+**Billable calls spent: 0. Billable tokens: 0. Free-tier calls: 0. $0.00.**
+The pricing sources came from two plain HTTP fetches of the public docs
+(no model calls); every harness check is pure arithmetic, direct fixture
+writes, local HTTP, or source reads; the verify-p5-c harness never imports
+the SDK at all (structural zero-GLM). OPS-3 closure spent zero calls.
+
+### Next: P5-d (gate doc delivered with this stage; awaits user ruling)
+
+The enablement-gate document (`agent-ctx/phase5-gate-p5d.md`) ships DOCS-ONLY
+with this stage per §7: per-feature enablement packs, validation protocol,
+dashboard columns, rollback — recommended order slicing-first — and NO config
+change, NO code. Nothing flips without the user's ruling at that gate. The
+Phase 1–5 final close-out (`agent-ctx/phase1-5-closeout.md` supersedes the
+phase1-2 record's scope) ships alongside it.
