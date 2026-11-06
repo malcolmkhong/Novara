@@ -1,5 +1,6 @@
 // ---------------------------------------------------------------------------
-// Novara AI — persisted GLM usage ledger store (Phase 5 / P5-a, extended P5-b).
+// Novara AI — persisted GLM usage ledger store (Phase 5 / P5-a, extended
+// P5-b, P5-c; layered P5-f).
 //
 // Single source of truth for usage accounting (Ruling 2, user 2026-11-05):
 // ONE row per measured-or-failed provider ATTEMPT in the UsageCall table,
@@ -7,10 +8,14 @@
 // outright — this store is the only thing feeding any UI, with no debug
 // layer and no dual feed.
 //
-// Ruling 1 (user 2026-11-05): rows are PERMANENT account history — novelId /
-// runId are plain strings with NO foreign key and NO cascade, so deleting a
-// novel or a run never erases account-scope spend history (orphans render as
-// "(deleted novel)"). There is NO purge path in Phase 5 scope.
+// RETENTION LAYERING (Ruling R-2, user 2026-11-06 — supersedes Ruling 1's
+// "permanent, no purge"): detail rows live 90 days, then the retention
+// sweep (lib/usage/retention.ts) rolls them into UsageDaily — day × surface
+// × novel-or-null × model, NEVER deleted — and deletes the details. Every
+// read path here therefore merges BOTH sources: lifetime totals are
+// aggregates + retained details (invariant across a purge), and the history
+// block itemizes the last ~31 days of details plus older persisted daily
+// summaries, labeled "summary — details retained 90 days".
 //
 // Honesty rules (P5-b Policy F, see usage-shapes.ts):
 //   - MEASURED rows: the provider returned a usage object; tokens are billed
@@ -32,8 +37,25 @@
 // ---------------------------------------------------------------------------
 
 import { db } from "@/lib/db";
-import type { RealUsage } from "./usage-shapes";
+import {
+  DAILY_SUMMARY_NOTE,
+  type AccountUsageSnapshot,
+  type CountSum,
+  type LedgerDailySummary,
+  type LedgerNovelUsage,
+  type LedgerSurfaceUsage,
+  type NovelUsageSummary,
+  type RealUsage,
+  type UsageHistoryBlock,
+} from "./usage-shapes";
 import { estimateUpperBoundUsd, priceForModelId, PRICING_VERSION } from "./pricing";
+import {
+  ACCOUNT_WIDE_NOVEL_KEY,
+  USAGE_HISTORY_WINDOW_DAYS,
+  usageDetailCutoff,
+  usageHistoryCutoff,
+  utcDayKey,
+} from "./retention";
 
 export type {
   RealUsage,
@@ -45,9 +67,21 @@ export type {
   AccountUsageSnapshot,
   NovelUsageSummary,
   CountSum,
+  LedgerDailySummary,
+  UsageHistoryBlock,
 } from "./usage-shapes";
-export { extractRealUsage, classifyGlmFailure } from "./usage-shapes";
+export { extractRealUsage, classifyGlmFailure, DAILY_SUMMARY_NOTE } from "./usage-shapes";
 export { PRICING_VERSION, priceForModelId } from "./pricing";
+export {
+  ACCOUNT_WIDE_NOVEL_KEY,
+  USAGE_DETAIL_RETENTION_DAYS,
+  USAGE_HISTORY_WINDOW_DAYS,
+  purgeExpiredUsageCalls,
+  buildUsageStatement,
+  usageDetailCutoff,
+  usageHistoryCutoff,
+  utcDayKey,
+} from "./retention";
 
 /**
  * Request-side model label for calls that carried NO model field (the
@@ -147,7 +181,7 @@ export function recordProvenanceLink(
 // ---------------------------------------------------------------------------
 
 export const RETENTION_NOTE =
-  "Permanent account history — usage rows survive novel deletion; there is no purge in this build. Rows before the persisted ledger shipped (Phase 5) do not exist.";
+  "Detail rows are retained 90 days, then permanently deleted — their totals survive as permanent daily summaries (never deleted). Export the CSV statement before expiry to keep the per-call lines. Rows before the persisted ledger shipped (Phase 5) do not exist.";
 
 /** Expand "2026-11" into the UTC month window; null when unparseable. */
 function monthWindow(period: string): { gte: Date; lt: Date } | null {
@@ -167,16 +201,6 @@ interface SumRow {
   _count: { _all: number };
 }
 
-function toSurfaceUsage(sum: SumRow, surface: string): LedgerSurfaceUsage {
-  return {
-    surface,
-    calls: sum._count._all,
-    promptTokens: sum._sum.promptTokens ?? 0,
-    completionTokens: sum._sum.completionTokens ?? 0,
-    totalTokens: sum._sum.totalTokens ?? 0,
-  };
-}
-
 function sumsToTotals(rows: LedgerSurfaceUsage[]): Pick<
   AccountUsageSnapshot,
   "totalCalls" | "totalPromptTokens" | "totalCompletionTokens" | "totalTokens"
@@ -192,70 +216,157 @@ function sumsToTotals(rows: LedgerSurfaceUsage[]): Pick<
   );
 }
 
-/** Account-scope snapshot: every measured call, all surfaces, novel breakdown. */
+/** UI cap for the itemized history list (rows stay in the DB either way). */
+const HISTORY_ITEM_CAP = 150;
+
+interface CountAcc {
+  calls: number;
+  failedCalls: number;
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+}
+
+function emptyAcc(): CountAcc {
+  return { calls: 0, failedCalls: 0, promptTokens: 0, completionTokens: 0, totalTokens: 0 };
+}
+
+function addAcc(a: CountAcc, b: { calls: number; failedCalls?: number; promptTokens: number; completionTokens: number; totalTokens: number }): CountAcc {
+  return {
+    calls: a.calls + b.calls,
+    failedCalls: a.failedCalls + (b.failedCalls ?? 0),
+    promptTokens: a.promptTokens + b.promptTokens,
+    completionTokens: a.completionTokens + b.completionTokens,
+    totalTokens: a.totalTokens + b.totalTokens,
+  };
+}
+
+/** Account-scope snapshot: aggregates (UsageDaily) + retained details
+ *  (UsageCall) merged per dimension — invariant across a purge. */
 export async function accountUsageSnapshot(period?: string): Promise<AccountUsageSnapshot> {
   const window = period ? monthWindow(period) : null;
   const where = window ? { createdAt: window } : {};
+  // String day comparison is safe here: zero-padded same-width UTC keys.
+  const dailyWhere = window
+    ? { day: { gte: utcDayKey(window.gte), lt: utcDayKey(window.lt) } }
+    : {};
 
-  const [bySurface, byNovel, byModel, failedByModel, earliest, failedCount] = await Promise.all([
-    db.usageCall.groupBy({
-      by: ["surface"],
-      where,
-      _sum: { promptTokens: true, completionTokens: true, totalTokens: true },
-      _count: { _all: true },
-      orderBy: { surface: "asc" },
-    }),
-    db.usageCall.groupBy({
-      by: ["novelId"],
-      where: { ...where, novelId: { not: null } },
-      _sum: { promptTokens: true, completionTokens: true, totalTokens: true },
-      _count: { _all: true },
-    }),
-    // P5-c per-model split: modelId verbatim (request-side), failed rows
-    // contribute zero tokens by definition but ARE counted per model.
-    db.usageCall.groupBy({
-      by: ["modelId"],
-      where,
-      _sum: { promptTokens: true, completionTokens: true, totalTokens: true },
-      _count: { _all: true },
-    }),
-    db.usageCall.groupBy({
-      by: ["modelId"],
-      where: { ...where, status: "failed" },
-      _count: { _all: true },
-    }),
-    db.usageCall.findFirst({ where, orderBy: { createdAt: "asc" }, select: { createdAt: true } }),
-    db.usageCall.count({ where: { ...where, status: "failed" } }),
-  ]);
+  const [bySurface, byNovel, byModel, failedByModel, earliestDetail, failedCount, dailyRows] =
+    await Promise.all([
+      db.usageCall.groupBy({
+        by: ["surface"],
+        where,
+        _sum: { promptTokens: true, completionTokens: true, totalTokens: true },
+        _count: { _all: true },
+        orderBy: { surface: "asc" },
+      }),
+      db.usageCall.groupBy({
+        by: ["novelId"],
+        where: { ...where, novelId: { not: null } },
+        _sum: { promptTokens: true, completionTokens: true, totalTokens: true },
+        _count: { _all: true },
+      }),
+      db.usageCall.groupBy({
+        by: ["modelId"],
+        where,
+        _sum: { promptTokens: true, completionTokens: true, totalTokens: true },
+        _count: { _all: true },
+      }),
+      db.usageCall.groupBy({
+        by: ["modelId"],
+        where: { ...where, status: "failed" },
+        _count: { _all: true },
+      }),
+      db.usageCall.findFirst({ where, orderBy: { createdAt: "asc" }, select: { createdAt: true } }),
+      db.usageCall.count({ where: { ...where, status: "failed" } }),
+      db.usageDaily.findMany({ where: dailyWhere }),
+    ]);
 
-  const surfaces = bySurface
-    .map((row) => toSurfaceUsage(row as SumRow, row.surface))
+  // ---- merge the aggregate source into per-dimension accumulators -------
+  const aggBySurface = new Map<string, CountAcc>();
+  const aggByModel = new Map<string, CountAcc>();
+  const aggByNovelKey = new Map<string, CountAcc>();
+  let aggFailedTotal = 0;
+  for (const bucket of dailyRows) {
+    const acc: CountAcc = {
+      calls: bucket.calls,
+      failedCalls: bucket.failedCalls,
+      promptTokens: bucket.promptTokens,
+      completionTokens: bucket.completionTokens,
+      totalTokens: bucket.totalTokens,
+    };
+    aggFailedTotal += bucket.failedCalls;
+    aggBySurface.set(bucket.surface, addAcc(aggBySurface.get(bucket.surface) ?? emptyAcc(), acc));
+    aggByModel.set(bucket.modelId, addAcc(aggByModel.get(bucket.modelId) ?? emptyAcc(), acc));
+    if (bucket.novelKey !== ACCOUNT_WIDE_NOVEL_KEY) {
+      aggByNovelKey.set(
+        bucket.novelKey,
+        addAcc(aggByNovelKey.get(bucket.novelKey) ?? emptyAcc(), acc)
+      );
+    }
+  }
+
+  const detailFailedByModel = new Map(failedByModel.map((r) => [r.modelId, r._count._all]));
+  const failedFor = (modelId: string, agg: CountAcc | undefined) =>
+    (detailFailedByModel.get(modelId) ?? 0) + (agg?.failedCalls ?? 0);
+
+  // ---- surfaces ----------------------------------------------------------
+  const surfaceAcc = new Map<string, CountAcc>();
+  for (const row of bySurface) {
+    const sum = row as SumRow;
+    surfaceAcc.set(row.surface, {
+      calls: sum._count._all,
+      failedCalls: 0,
+      promptTokens: sum._sum.promptTokens ?? 0,
+      completionTokens: sum._sum.completionTokens ?? 0,
+      totalTokens: sum._sum.totalTokens ?? 0,
+    });
+  }
+  for (const [surface, acc] of aggBySurface) {
+    surfaceAcc.set(surface, addAcc(surfaceAcc.get(surface) ?? emptyAcc(), acc));
+  }
+  const surfaces: LedgerSurfaceUsage[] = [...surfaceAcc.entries()]
+    .map(([surface, acc]) => ({
+      surface,
+      calls: acc.calls,
+      promptTokens: acc.promptTokens,
+      completionTokens: acc.completionTokens,
+      totalTokens: acc.totalTokens,
+    }))
     .sort((a, b) => b.totalTokens - a.totalTokens);
 
-  // P5-c: join the failed-count per model, then price what the fetched docs
-  // actually list. Unpriced groups keep estimatedUsd null — never $0-by-guess.
-  const failedCountByModel = new Map(failedByModel.map((r) => [r.modelId, r._count._all]));
+  // ---- models (P5-c split, P5-f merged) ----------------------------------
+  const modelAcc = new Map<string, CountAcc>();
+  for (const row of byModel) {
+    const sum = row as SumRow;
+    modelAcc.set(row.modelId, {
+      calls: sum._count._all,
+      failedCalls: 0,
+      promptTokens: sum._sum.promptTokens ?? 0,
+      completionTokens: sum._sum.completionTokens ?? 0,
+      totalTokens: sum._sum.totalTokens ?? 0,
+    });
+  }
+  for (const [modelId, acc] of aggByModel) {
+    modelAcc.set(modelId, addAcc(modelAcc.get(modelId) ?? emptyAcc(), acc));
+  }
   let unpricedGroups = 0;
   let estimatedTotalUsd = 0;
-  const models = byModel
-    .map((row) => {
-      const sum = row as SumRow;
-      const pricing = priceForModelId(row.modelId);
-      const promptTokens = sum._sum.promptTokens ?? 0;
-      const completionTokens = sum._sum.completionTokens ?? 0;
-      const totalTokens = sum._sum.totalTokens ?? 0;
+  const models = [...modelAcc.entries()]
+    .map(([modelId, acc]) => {
+      const pricing = priceForModelId(modelId);
       const estimatedUsd = pricing.priced
-        ? estimateUpperBoundUsd(pricing.row, promptTokens, completionTokens)
+        ? estimateUpperBoundUsd(pricing.row, acc.promptTokens, acc.completionTokens)
         : null;
       if (estimatedUsd === null) unpricedGroups += 1;
       else estimatedTotalUsd += estimatedUsd;
       return {
-        modelId: row.modelId,
-        calls: sum._count._all,
-        failedCalls: failedCountByModel.get(row.modelId) ?? 0,
-        promptTokens,
-        completionTokens,
-        totalTokens,
+        modelId,
+        calls: acc.calls,
+        failedCalls: failedFor(modelId, aggByModel.get(modelId)),
+        promptTokens: acc.promptTokens,
+        completionTokens: acc.completionTokens,
+        totalTokens: acc.totalTokens,
         priced: pricing.priced,
         unpricedReason: pricing.priced ? null : pricing.reason,
         estimatedUsd,
@@ -266,7 +377,8 @@ export async function accountUsageSnapshot(period?: string): Promise<AccountUsag
     })
     .sort((a, b) => b.totalTokens - a.totalTokens);
 
-  const novelIds = byNovel.map((row) => row.novelId as string);
+  // ---- novels (deleted novels still render) ------------------------------
+  const novelIds = [...new Set([...byNovel.map((r) => r.novelId as string), ...aggByNovelKey.keys()])];
   const knownNovels =
     novelIds.length > 0
       ? await db.novel.findMany({
@@ -276,25 +388,110 @@ export async function accountUsageSnapshot(period?: string): Promise<AccountUsag
       : [];
   const titleById = new Map(knownNovels.map((n) => [n.id, n.title]));
 
-  const novels: LedgerNovelUsage[] = byNovel
-    .map((row) => {
-      const novelId = row.novelId as string;
+  const novelAcc = new Map<string, CountAcc>();
+  for (const row of byNovel) {
+    const sum = row as SumRow;
+    const novelId = row.novelId as string;
+    novelAcc.set(novelId, {
+      calls: sum._count._all,
+      failedCalls: 0,
+      promptTokens: sum._sum.promptTokens ?? 0,
+      completionTokens: sum._sum.completionTokens ?? 0,
+      totalTokens: sum._sum.totalTokens ?? 0,
+    });
+  }
+  for (const [novelKey, acc] of aggByNovelKey) {
+    novelAcc.set(novelKey, addAcc(novelAcc.get(novelKey) ?? emptyAcc(), acc));
+  }
+  const novels: LedgerNovelUsage[] = [...novelAcc.entries()]
+    .map(([novelId, acc]) => {
       const title = titleById.get(novelId) ?? null;
-      const sum = row as SumRow;
       return {
         novelId,
         title,
         deleted: title === null,
-        calls: sum._count._all,
-        promptTokens: sum._sum.promptTokens ?? 0,
-        completionTokens: sum._sum.completionTokens ?? 0,
-        totalTokens: sum._sum.totalTokens ?? 0,
+        calls: acc.calls,
+        promptTokens: acc.promptTokens,
+        completionTokens: acc.completionTokens,
+        totalTokens: acc.totalTokens,
       };
     })
     .sort((a, b) => b.totalTokens - a.totalTokens);
 
+  // ---- history block (P5-f): itemized window + persisted summaries -------
+  const historyCutoff = usageHistoryCutoff();
+  const [windowRows, windowCount, retainedNotItemized] = await Promise.all([
+    db.usageCall.findMany({
+      where: { createdAt: { gte: historyCutoff } },
+      orderBy: { createdAt: "desc" },
+      take: HISTORY_ITEM_CAP,
+      select: {
+        id: true,
+        createdAt: true,
+        surface: true,
+        modelId: true,
+        novelId: true,
+        status: true,
+        errorKind: true,
+        promptTokens: true,
+        completionTokens: true,
+        totalTokens: true,
+      },
+    }),
+    db.usageCall.count({ where: { createdAt: { gte: historyCutoff } } }),
+    db.usageCall.count({ where: { createdAt: { lt: historyCutoff } } }),
+  ]);
+  const history: UsageHistoryBlock = {
+    windowDays: USAGE_HISTORY_WINDOW_DAYS,
+    rows: windowRows.map((r) => ({
+      id: r.id,
+      at: r.createdAt.toISOString(),
+      surface: r.surface,
+      modelId: r.modelId,
+      novelId: r.novelId,
+      status: r.status,
+      errorKind: r.errorKind,
+      promptTokens: r.promptTokens,
+      completionTokens: r.completionTokens,
+      totalTokens: r.totalTokens,
+    })),
+    omitted: Math.max(0, windowCount - windowRows.length),
+    summaries: dailyRows
+      .filter((b) => b.day < utcDayKey(historyCutoff))
+      .sort((a, b) => (a.day === b.day ? a.surface.localeCompare(b.surface) : a.day.localeCompare(b.day)))
+      .map((b) => ({
+        day: b.day,
+        surface: b.surface,
+        modelId: b.modelId,
+        novelId: b.novelId,
+        novelKey: b.novelKey,
+        calls: b.calls,
+        failedCalls: b.failedCalls,
+        promptTokens: b.promptTokens,
+        completionTokens: b.completionTokens,
+        totalTokens: b.totalTokens,
+        estimatedUsd: b.estimatedUsd,
+        pricingVersion: b.pricingVersion,
+      })),
+    retainedNotItemized,
+    summaryNote: DAILY_SUMMARY_NOTE,
+  };
+
+  // ---- honest epoch: earliest detail OR earliest aggregate day -----------
+  const aggEarliest = dailyRows.length > 0
+    ? new Date(`${dailyRows.reduce((min, b) => (b.day < min ? b.day : min), dailyRows[0].day)}T00:00:00.000Z`)
+    : null;
+  const since =
+    earliestDetail && aggEarliest
+      ? (earliestDetail.createdAt < aggEarliest ? earliestDetail.createdAt : aggEarliest).toISOString()
+      : earliestDetail
+        ? earliestDetail.createdAt.toISOString()
+        : aggEarliest
+          ? aggEarliest.toISOString()
+          : null;
+
   return {
-    since: earliest ? earliest.createdAt.toISOString() : null,
+    since,
     period: period && window ? period : null,
     surfaces,
     novels,
@@ -306,8 +503,9 @@ export async function accountUsageSnapshot(period?: string): Promise<AccountUsag
       unpricedGroups,
     },
     ...sumsToTotals(surfaces),
-    failedCalls: failedCount,
+    failedCalls: failedCount + aggFailedTotal,
     retention: RETENTION_NOTE,
+    history,
   };
 }
 
@@ -338,6 +536,21 @@ export async function novelUsageSummary(novelId: string): Promise<NovelUsageSumm
     select: { correlationId: true },
   });
   const correlationIds = links.map((l) => l.correlationId);
+
+  // P5-f: this novel's purged rows, preserved as permanent daily aggregates
+  // (novelKey = novelId). They join `total` and the per-surface list, so the
+  // novel lifetime total is invariant across a purge.
+  const archivedRows = await db.usageDaily.findMany({
+    where: { novelKey: novelId },
+    select: {
+      surface: true,
+      day: true,
+      calls: true,
+      promptTokens: true,
+      completionTokens: true,
+      totalTokens: true,
+    },
+  });
 
   const [directRows, linkedRows] = await Promise.all([
     db.usageCall.findMany({
@@ -409,21 +622,69 @@ export async function novelUsageSummary(novelId: string): Promise<NovelUsageSumm
     bySurface.set(row.surface, entry);
   }
 
-  const since = rows.length > 0
+  // P5-f: purged rows preserved as aggregates join the surface list; they
+  // are disclosed as `archived` (a different epistemic layer than the
+  // detail-derived direct/linked splits) and are part of `total`.
+  let archived: NovelUsageSummary["archived"] = {
+    calls: 0,
+    promptTokens: 0,
+    completionTokens: 0,
+    totalTokens: 0,
+  };
+  for (const bucket of archivedRows) {
+    archived = {
+      calls: archived.calls + bucket.calls,
+      promptTokens: archived.promptTokens + bucket.promptTokens,
+      completionTokens: archived.completionTokens + bucket.completionTokens,
+      totalTokens: archived.totalTokens + bucket.totalTokens,
+    };
+    const entry = bySurface.get(bucket.surface) ?? {
+      surface: bucket.surface,
+      calls: 0,
+      promptTokens: 0,
+      completionTokens: 0,
+      totalTokens: 0,
+    };
+    entry.calls += bucket.calls;
+    entry.promptTokens += bucket.promptTokens;
+    entry.completionTokens += bucket.completionTokens;
+    entry.totalTokens += bucket.totalTokens;
+    bySurface.set(bucket.surface, entry);
+  }
+
+  const detailSince = rows.length > 0
     ? rows
         .map((r) => r.createdAt)
         .reduce((min, d) => (d < min ? d : min))
-        .toISOString()
     : null;
+  const aggEarliestDay = archivedRows.length > 0
+    ? archivedRows.reduce((min, b) => (b.day < min ? b.day : min), archivedRows[0].day)
+    : null;
+  const aggSince = aggEarliestDay ? new Date(`${aggEarliestDay}T00:00:00.000Z`) : null;
+  const since =
+    detailSince && aggSince
+      ? (detailSince < aggSince ? detailSince : aggSince).toISOString()
+      : detailSince
+        ? detailSince.toISOString()
+        : aggSince
+          ? aggSince.toISOString()
+          : null;
 
+  const total = addCounts(direct, linked);
   return {
     novelId,
     title: novel.title,
     direct,
     linked,
+    archived,
     surfaces: [...bySurface.values()].sort((a, b) => b.totalTokens - a.totalTokens),
     since,
-    total: addCounts(direct, linked),
+    total: {
+      calls: total.calls + archived.calls,
+      promptTokens: total.promptTokens + archived.promptTokens,
+      completionTokens: total.completionTokens + archived.completionTokens,
+      totalTokens: total.totalTokens + archived.totalTokens,
+    },
     retention: RETENTION_NOTE,
   };
 }

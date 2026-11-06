@@ -150,6 +150,64 @@ export interface LedgerNovelUsage {
   totalTokens: number;
 }
 
+// ---------------------------------------------------------------------------
+// P5-f (Ruling R-2, user 2026-11-06) — retention layering shapes. Detail rows
+// are kept 90 days, then rolled into UsageDaily (never deleted) and purged.
+// Views render ~31 days of itemized detail history + persisted daily
+// summaries for older days; lifetime totals are aggregates + retained
+// details, so they are invariant across a purge.
+// ---------------------------------------------------------------------------
+
+/** One persisted UsageDaily bucket, rendered as a daily summary line. */
+export interface LedgerDailySummary {
+  /** UTC day "YYYY-MM-DD" the rolled-up detail rows fell in. */
+  day: string;
+  surface: string;
+  modelId: string;
+  /** null = account-wide bucket (unlinked rows). */
+  novelId: string | null;
+  novelKey: string;
+  calls: number;
+  failedCalls: number;
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+  /** Rollup-time Σ upper-bound estimate over PRICED contributions;
+   *  null = nothing in this bucket was priced (never $0-by-guess). */
+  estimatedUsd: number | null;
+  pricingVersion: string;
+}
+
+/** Ruled disclosure attached to every summary render. */
+export const DAILY_SUMMARY_NOTE = "summary — details retained 90 days";
+
+export interface UsageHistoryBlock {
+  /** The itemized-detail window in days (ruled: 31). */
+  windowDays: number;
+  /** Itemized detail rows within the window, newest first (capped). */
+  rows: {
+    id: string;
+    at: string;
+    surface: string;
+    modelId: string;
+    novelId: string | null;
+    status: string;
+    errorKind: string | null;
+    promptTokens: number;
+    completionTokens: number;
+    totalTokens: number;
+  }[];
+  /** Detail rows inside the window beyond the UI cap (still in the DB). */
+  omitted: number;
+  /** Persisted daily summaries for days older than the window, day asc. */
+  summaries: LedgerDailySummary[];
+  /** Retained detail rows OLDER than the window (31–90 days): kept in the
+   *  DB, exportable, not itemized in the compact view. */
+  retainedNotItemized: number;
+  /** The ruled summary label for every aggregated line. */
+  summaryNote: string;
+}
+
 export interface AccountUsageSnapshot {
   /** Earliest persisted row (the honest epoch — rows before P5-a do not exist). */
   since: string | null;
@@ -167,8 +225,10 @@ export interface AccountUsageSnapshot {
   totalPromptTokens: number;
   totalCompletionTokens: number;
   totalTokens: number;
-  /** Permanent-retention disclosure (Ruling 1) for the UI to render. */
+  /** Permanent-retention disclosure (R-2) for the UI to render. */
   retention: string;
+  /** P5-f: recent itemized history (31d) + persisted daily summaries. */
+  history: UsageHistoryBlock;
 }
 
 export interface NovelUsageSummary {
@@ -178,9 +238,13 @@ export interface NovelUsageSummary {
   direct: { calls: number; promptTokens: number; completionTokens: number; totalTokens: number };
   /** Calls attached via provenance links (pre-novel wizard/init sessions). */
   linked: { calls: number; promptTokens: number; completionTokens: number; totalTokens: number };
+  /** P5-f: this novel's purged rows, preserved as UsageDaily aggregates
+   *  (never deleted) — part of `total`, disclosed separately. */
+  archived: { calls: number; promptTokens: number; completionTokens: number; totalTokens: number };
   surfaces: LedgerSurfaceUsage[];
   since: string | null;
-  /** direct + linked — the ruling's "complete per-novel total". */
+  /** direct + linked + archived — the ruling's "complete per-novel total",
+   *  aggregates + retained details (invariant across a purge). */
   total: CountSum;
   /** P5-b: retention disclosure travels with BOTH ledger routes. */
   retention: string;

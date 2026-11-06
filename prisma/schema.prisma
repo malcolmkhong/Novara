@@ -763,12 +763,16 @@ model AssetVersion {
 // truth for usage (Ruling 2, user 2026-11-05); the in-memory per-process
 // ledger it supersedes is retired in P5-b.
 //
-// RETENTION (Ruling 1, user 2026-11-05): rows are PERMANENT account history.
-// novelId / runId are PLAIN STRINGS — NO foreign key, NO cascade: deleting a
-// novel or a run must never erase account-scope spend history (orphans render
-// as "(deleted novel)" in the account view). There is NO purge path in
-// Phase 5 scope; if one is ever built it must be an explicit account-level
-// action, never a side effect of content deletion.
+// RETENTION (Ruling R-2, user 2026-11-06 — supersedes Ruling 1's
+// "permanent, no purge"): detail rows are retained 90 DAYS after their call,
+// then PERMANENTLY DELETED — but only AFTER their tokens/counts are rolled
+// up into UsageDaily (day × surface × novel-or-null × model), which is
+// NEVER deleted. The purge must remain an explicit, deterministic,
+// idempotent sweep keyed on createdAt alone — NEVER a side effect of content
+// deletion (novelId / runId are PLAIN STRINGS — NO foreign key, NO cascade:
+// deleting a novel or a run must never erase account-scope spend history;
+// orphans render as "(deleted novel)" in the account view). Users can
+// export a CSV statement of the retained window before expiry.
 //
 // HONESTY RULE: measured calls only — a null/stripped usage object records
 // NOTHING (never guessed, never padded). Estimates live in the agent usage
@@ -834,6 +838,57 @@ model UsageProvenance {
 
   @@unique([correlationId, novelId])
   @@index([novelId])
+}
+
+// ---------------------------------------------------------------------------
+// UsageDaily (Phase 5 / P5-f, Ruling R-2) — the permanent daily aggregate.
+// One row per (UTC day × surface × novel-or-null × model). Consumed by the
+// purge: every UsageCall row older than the 90-day retention window is
+// rolled up here BEFORE its detail row is deleted; aggregates are NEVER
+// deleted by any code path. Views render recent history from UsageCall
+// detail rows (~31 days) and everything older from these summaries, labeled
+// "summary — details retained 90 days"; account/novel lifetime totals are
+// aggregates + retained details, so totals are invariant across a purge
+// (tokens and counts are preserved exactly; the estimate is an upper bound
+// computed from preserved tokens at render time).
+//
+// novelKey is the uniqueness-safe form of the novel-or-null dimension (the
+// novelId, or "-" for account-wide rows): SQLite unique indexes treat NULLs
+// as distinct, so a nullable column alone cannot carry an idempotent upsert.
+// novelId stays alongside for readability and filtering; it is a plain
+// string — NO foreign key, NO cascade, same family as UsageCall.
+//
+// estimatedUsd is the bucket's Σ upper-bound ESTIMATE over its PRICED
+// contributions at rollup time (null = nothing in this bucket was priced —
+// never $0-by-guess). pricingVersion records which sourced price table
+// produced the latest contribution. If the 90-day window later crosses a
+// pricing-version change, the ESTIMATE column is a blend across versions —
+// the authoritative account estimate is recomputed from preserved tokens at
+// render time; this column is the statement's per-bucket figure, labeled.
+// ---------------------------------------------------------------------------
+
+model UsageDaily {
+  id               String   @id @default(cuid())
+  // UTC day of the rolled-up detail rows, "YYYY-MM-DD" (from createdAt).
+  day              String
+  surface          String
+  modelId          String
+  novelId          String?
+  // novelId, or "-" for account-wide (unlinked) rows — the upsert key.
+  novelKey         String
+  calls            Int
+  failedCalls      Int
+  promptTokens     Int
+  completionTokens Int
+  totalTokens      Int
+  estimatedUsd     Float?
+  pricingVersion   String
+  rolledAt         DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@unique([day, surface, novelKey, modelId])
+  @@index([day])
+  @@index([novelKey, day])
 }
 
 // ---------------------------------------------------------------------------

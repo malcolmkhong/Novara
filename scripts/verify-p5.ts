@@ -112,8 +112,11 @@ async function main() {
   );
   const schemaText = readFileSync("prisma/schema.prisma", "utf8");
   check(
-    "S1 retention documented in schema (permanent history, no purge path — Ruling 1)",
-    schemaText.includes("PERMANENT account history") && schemaText.includes("NO purge path"),
+    "S1 retention documented per R-2 (supersedes Ruling 1): 90-day detail window + UsageDaily rollup, aggregates NEVER deleted",
+    schemaText.includes("UsageDaily") &&
+      schemaText.includes("90 DAYS") &&
+      schemaText.includes("NEVER deleted") &&
+      schemaText.includes("NO foreign key, NO cascade"),
     "prisma/schema.prisma"
   );
 

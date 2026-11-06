@@ -399,7 +399,7 @@ export function ContextUsageButton({
               className="mt-1 cursor-help text-[10px] leading-4 text-muted-foreground/70"
               title={globalState.retention}
             >
-              Permanent account history — survives novel deletion · no purge in this build
+              Details retained 90 days · totals survive permanently as daily summaries
             </p>
           )}
         </div>

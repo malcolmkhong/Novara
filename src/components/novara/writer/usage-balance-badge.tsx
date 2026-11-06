@@ -42,6 +42,14 @@
 //   <date>" plus the explicit statement that earlier calls were not
 //   recorded. Nothing pretends history it does not have (Ruling 2: no
 //   backfill).
+//
+//   RETENTION LAYERING (P5-f, R-2) — the view shows the most recent ~31
+//   days as itemized per-call detail rows; older days render from the
+//   persisted daily aggregates, each labeled "summary — details retained
+//   90 days". Detail rows still retained beyond the itemized window (31–90
+//   days) are disclosed with their count and remain in the CSV statement.
+//   The statement (CSV export, in-memory, zero server-side files) carries
+//   ALL retained details + all summaries — the pre-expiry escape hatch.
 // ---------------------------------------------------------------------------
 
 import { useEffect, useState } from "react";
@@ -57,8 +65,10 @@ import {
 import type {
   AccountUsageSnapshot,
   InvoiceSnapshot,
+  LedgerDailySummary,
   LedgerModelUsage,
   LedgerSurfaceUsage,
+  UsageHistoryBlock,
 } from "@/lib/usage/usage-shapes";
 import {
   formatDeltaUsd,
@@ -210,6 +220,24 @@ export function UsageBalanceBadge({ guestAt }: { guestAt: string | null }) {
 
   const modelLabel = (m: LedgerModelUsage): string =>
     m.modelId === "gateway-default" ? "gateway default (no model field)" : m.modelId;
+
+  /** One line of the itemized history (detail rows, newest first). */
+  const historyLine = (row: UsageHistoryBlock["rows"][number]): string => {
+    const at = new Date(row.at).toLocaleString(undefined, {
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+    return `${at} · ${surfaceLabel(row.surface)} · ${row.modelId}${
+      row.status === "failed" ? " · FAILED (0 tok)" : ""
+    }`;
+  };
+
+  const summaryLine = (s: LedgerDailySummary): string =>
+    `${s.day} · ${surfaceLabel(s.surface)} · ${s.modelId} · ×${s.calls}${
+      s.failedCalls > 0 ? ` (${s.failedCalls} failed)` : ""
+    } · ${s.totalTokens.toLocaleString()} tok`;
 
   return (
     <Popover open={open} onOpenChange={handleOpenChange}>
@@ -405,6 +433,77 @@ export function UsageBalanceBadge({ guestAt }: { guestAt: string | null }) {
                     </ul>
                   </>
                 )}
+
+                {/* P5-f (R-2) — retention layering: itemized detail rows for
+                    the last ~31 days; older days render from the persisted
+                    daily aggregates, labeled "summary — details retained 90
+                    days". The 31–90 day window is retained (and exported)
+                    but not itemized here — disclosed with its count. */}
+                {(snapshot.history.rows.length > 0 ||
+                  snapshot.history.summaries.length > 0 ||
+                  snapshot.history.retainedNotItemized > 0) && (
+                  <>
+                    <p className="mt-2 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                      Transaction history · last {snapshot.history.windowDays} days
+                    </p>
+                    {snapshot.history.rows.length > 0 && (
+                      <ul className="mt-1 max-h-36 space-y-0.5 overflow-y-auto pr-1 nice-scroll">
+                        {snapshot.history.rows.map((row) => (
+                          <li
+                            key={row.id}
+                            className="flex items-center justify-between gap-2 text-[10px]"
+                          >
+                            <span className="min-w-0 flex-1 truncate font-mono text-muted-foreground">
+                              {historyLine(row)}
+                            </span>
+                            <span className="shrink-0 font-mono text-[10px]">
+                              {row.status === "failed" ? "—" : formatTokenCount(row.totalTokens)}
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                    {snapshot.history.omitted > 0 && (
+                      <p className="mt-0.5 text-[9px] text-muted-foreground/80">
+                        +{snapshot.history.omitted} more call
+                        {snapshot.history.omitted === 1 ? "" : "s"} inside the window — the
+                        CSV statement lists every retained line.
+                      </p>
+                    )}
+                    {snapshot.history.retainedNotItemized > 0 && (
+                      <p className="mt-0.5 text-[9px] leading-3 text-muted-foreground/80">
+                        {snapshot.history.retainedNotItemized} retained call
+                        {snapshot.history.retainedNotItemized === 1 ? "" : "s"} older than{" "}
+                        {snapshot.history.windowDays} days (details kept 90 days) — not
+                        itemized here; included in the CSV statement.
+                      </p>
+                    )}
+                    {snapshot.history.summaries.length > 0 && (
+                      <>
+                        <p className="mt-2 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                          Older days · {snapshot.history.summaryNote}
+                        </p>
+                        <ul className="mt-1 max-h-36 space-y-0.5 overflow-y-auto pr-1 nice-scroll">
+                          {snapshot.history.summaries.map((s) => (
+                            <li
+                              key={`${s.day}|${s.surface}|${s.novelKey}|${s.modelId}`}
+                              className="flex items-center justify-between gap-2 text-[10px]"
+                            >
+                              <span className="min-w-0 flex-1 truncate font-mono text-muted-foreground">
+                                {summaryLine(s)}
+                              </span>
+                              <span className="w-16 shrink-0 text-right font-mono text-[9px] text-muted-foreground/80">
+                                {s.estimatedUsd !== null
+                                  ? formatEstimateUsdCompact(s.estimatedUsd)
+                                  : "unpriced"}
+                              </span>
+                            </li>
+                          ))}
+                        </ul>
+                      </>
+                    )}
+                  </>
+                )}
               </div>
             </>
           )}
@@ -517,7 +616,10 @@ export function UsageBalanceBadge({ guestAt }: { guestAt: string | null }) {
           )}
         </div>
 
-        {/* Discontinuity + retention — from the persisted snapshot, verbatim */}
+        {/* Discontinuity + retention + statement export — from the persisted
+            snapshot, verbatim (P5-f: the CSV statement is the pre-expiry
+            escape hatch — all retained details + all daily summaries,
+            generated in memory, nothing persisted server-side). */}
         {snapshot && (
           <div className="mt-3 border-t pt-2">
             <p className="text-[10px] leading-4 text-muted-foreground">
@@ -526,6 +628,14 @@ export function UsageBalanceBadge({ guestAt }: { guestAt: string | null }) {
                 : "Persisted tracking began with Phase 5 — calls before it were not recorded. "}
               {snapshot.retention}
             </p>
+            <a
+              href="/api/usage/statement"
+              download
+              className="mt-1.5 inline-flex h-7 items-center justify-center rounded-md border px-2.5 text-[11px] font-medium outline-none transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
+              aria-label="Download the full usage statement as CSV"
+            >
+              Export statement (CSV)
+            </a>
           </div>
         )}
       </PopoverContent>

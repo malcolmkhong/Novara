@@ -799,3 +799,281 @@ P5-f builds the UsageDaily aggregate table + 90-day purge + 31-day display
 boundary + CSV export, with the backdated-fixture harness. P5-g produces the
 READ-ONLY TEAM-1 repair plan and waits for approval before any code. The
 Phase 1–5 final close-out will be refreshed after P5-f/P5-g land.
+
+---
+
+## §P5-E.1 — OPS-4 fix (ruled "FIX NOW, small and fence-safe"): guarded failure flip at executor loop exit (evidence embedded)
+
+Folded in per the user's ruling (2026-11-06) as its own evidence section,
+BEFORE the P5-f report closes. Code landed first; this section was written
+immediately after the green run (evidence embedded at production time).
+
+### 1. Root cause — pasted BEFORE the fix landed (requirement #1)
+
+`src/lib/agent/runtime.ts`, `executeRun()` — exact sequence on every real
+`runLoop` exception (pre-fix line numbers):
+
+```
+1196:    try {
+1197:      await runLoop(runId, controller.signal, guard, opts?.resume === true);   // ← throws E (timeout chain / persist failure)
+1198:    } finally {
+1199:      clearInterval(heartbeat);
+1200:      await releaseLease(runId, held);        // ← (A) messages.ts:345-352 sets leaseOwner = null — fence token destroyed
+1201:    }
+1202:  } catch (error) {                            // ← (B) runs AFTER (A)
+1212:    const run = await db.agentRun.findUnique(...)                    // status still running/awaiting_approval → proceeds
+1219:    const flipped = lease
+1220:      ? await db.agentRun.updateMany({
+1221:          where: { id: runId, leaseOwner: lease.owner, leaseEpoch: lease.epoch },   // ← (C) count = 0 ALWAYS
+1229:    } else {
+1230:      console.error(`...failure flip skipped — lease no longer owned (count=0)`);      // ← (D) SWALLOW POINT: dev.log only
+```
+
+The `finally` at :1200 releases our own lease BEFORE the `catch` at :1202
+runs its owner+epoch-fenced flip. `releaseLease` nulls `leaseOwner`
+(messages.ts:345-352), so the flip's WHERE (:1221) matched ZERO rows on
+EVERY real error — the fence was over-applied: it correctly blocks an
+evicted executor from writing over a newer holder, but it also blocked the
+RIGHTFUL executor from recording its own failure over NOBODY. The error
+message (:1216) was never persisted — no run-row update, no AgentEvent; its
+only trace was console line (D). The run then stuck at
+`running`/`awaiting_approval` until `healStaleRuns` (:770, 15-min janitor)
+healed it with the generic "Runtime restarted or the run stalled" message —
+the executor's real cause permanently lost from the event stream. This is
+the stuck-at-running shape observed in both P5-e attempts #1/#2.
+
+### 2. The fix — fenced contract preserved BOTH ways (requirements #2 + #3)
+
+New exported seam `guardedFailureFlip(runId, lease, message)`
+(`src/lib/agent/runtime.ts`); the `executeRun` catch now delegates to it.
+Contract, in order:
+1. **still-owner fenced flip** (owner/epoch CAS) — covers the corner where
+   `releaseLease` itself failed; the strongest claim may write directly.
+2. **released flip** — if `leaseIsAlive(runId)` is false, a second CAS on
+   `(status ∈ {running, awaiting_approval} AND leaseOwner: null)` writes
+   `status=failed` with the executor's REAL error on the run row. A claimant
+   that raced in between check and write loses the CAS; we stay silent.
+3. **a LIVE lease ⇒ silence** — the holder owns the row. An evicted executor
+   can NEVER write terminal state over a live lease; the fencing contract is
+   strengthened, not relaxed.
+4. **the cause lands in the event stream** — on a successful flip the real
+   message is emitted as a kind=error AgentEvent (`Run failed: <message>`);
+   never console-only again.
+5. **fail-closed** — an unverifiable aliveness check (DB hiccup) stays silent.
+
+NOT touched: `healStaleRuns` (15-min janitor behavior byte-unchanged,
+requirement #5 — source-pinned in the harness), author-owned paused rows,
+terminal rows. LeaseLostError path unchanged (evicted executor stays
+silent — there is no "real error" to record for an eviction; a
+holder-died-after-claim row remains the janitor's/resume's turf, as designed).
+
+### 3. Harness — scripts/verify-p5-e1.ts, FULL RUN OUTPUT verbatim (ZERO GLM; drives the exported production seam, not a copy)
+
+```
+P5E1: [PASS] RC root cause reproduced: the OLD fenced flip on a released row matches ZERO rows (count=0) — this is the swallow — count=0
+P5E1: [PASS] RC the shipped guardedFailureFlip heals the SAME row the dead fence refused — flip=true status=failed
+P5E1: [PASS] A stuck-at-running (lease released, no executor): guarded flip writes status=failed — flip=true status=failed
+P5E1: [PASS] A the executor's REAL error is persisted on the run row (not a generic janitor message) — timeout chain exhausted after 3 attempts (provider retry budget spent) — final persist also failed
+P5E1: [PASS] A the swallowed error is now VISIBLE in the event stream: kind=error event naming the cause — "Run failed: timeout chain exhausted after 3 attempts (provider retry budget spent) — final"
+P5E1: [PASS] B awaiting_approval row heals the same way: failed + real message + event — flip=true status=failed
+P5E1: [PASS] C evicted executor CANNOT flip a live-lease row: status still running — flip=false status=running
+P5E1: [PASS] C live-lease row untouched end-to-end: error unchanged, ZERO new events (silence is the contract) — error=null events 0->0
+P5E1: [PASS] D still-owner corner: owner/epoch CAS flips directly (strongest claim preserved) — flip=true status=failed
+P5E1: [PASS] E terminal row (completed) never touched: flip refused, status intact, zero events — flip=false status=completed
+P5E1: [PASS] F author-owned paused row not clobbered: guarded path only flips running/awaiting_approval — flip=false status=paused
+P5E1: [PASS] G stale-but-OWNED row: leaseOwner:null CAS refuses even when aliveness says dead — janitor's turf untouched — flip=false status=running owner=crashed-executor
+P5E1: [PASS] G silent means silent: zero new events on the refused row — events 0->0
+P5E1: [PASS] J healStaleRuns untouched (requirement #5): dual condition intact — live-lease continue + stale event age — heal body 2539 chars
+P5E1: [PASS] J the janitor does NOT route through the guarded seam (15-min behavior byte-unchanged) — no seam reference in healStaleRuns
+P5E1: [PASS] J executeRun's catch delegates to the exported production seam (harness tested exactly what ships) — catch → guardedFailureFlip(runId, lease, message)
+P5E1: [PASS] Z zero-spend proof: NO UsageCall rows were created by this harness (OPS-3 mock-first held) — usageCall 20->20
+P5E1: [PASS] Cleanup: fixture runs + events fully removed, DB back to pre-run shape — runs 0->0, events 0->0
+P5E1: ALL CHECKS PASSED (18 checks)
+```
+
+The harness output also captured the shipped CAS SQL verbatim:
+`UPDATE AgentRun SET status=?, error=? WHERE id=? AND status IN
+('running','awaiting_approval') AND leaseOwner IS NULL` — the fence
+predicate is exactly as designed. Case G proves the refusal is NOT
+aliveness-gated alone: a stale-but-OWNED row (owner recorded, heartbeat
+cold) is still refused because the CAS requires `leaseOwner IS NULL` —
+that row belongs to the janitor (requirement #5 held by construction).
+
+### 4. Ship health at close (measured 2026-11-06, after the fix)
+
+- Full harness family: verify-p2-a PASS · verify-p2-b PASS · verify-p2-c
+  PASS (46) · verify-stage-a PASS · verify-p4 PASS (38) · verify-p5 PASS
+  (24) · verify-p5-b PASS (24) · verify-p5-c PASS (30) · **verify-p5-e1
+  PASS (18, new ninth member)**.
+- `bun run lint`: clean (zero errors, zero warnings).
+- Dev server: 200 on `/` (checked before and after the fix landed);
+  dev.log shows no new errors.
+- GLM spend: $0.00 (zero billable calls; harness made ZERO model calls —
+  verified by the UsageCall count invariant in section Z).
+
+### 5. Risk register updates in the same pass
+
+- OPS-4 → **CLOSED (FIXED as P5-e.1)** with the full resolution contract
+  and harness pointer.
+- OPS-2 → **ADDENDUM** registered (per the ruling: no new OPS number): the
+  2× sqlite socket timeouts under DB-hammered polling; quiet poll is now a
+  standing rig rule (attempt #2's 2s-interval fix is the template).
+
+
+---
+
+## §P5-F — R-2 ledger retention (user 2026-11-06): 90-day rollup + purge, 31-day display layering, CSV statement (evidence embedded)
+
+Ruling R-2 supersedes Ruling 1's "permanent retention, no purge". Delivered in
+full: detail rows retained 90 days → rolled into a NEW UsageDaily aggregate
+(day × surface × novel-or-null × model) that NO code path ever deletes →
+details permanently deleted. UI shows the last ~31 days itemized + older days
+as summaries labeled "summary — details retained 90 days"; lifetime totals are
+aggregates + retained details (invariant across a purge). Users can export a
+CSV statement of the entire retained window before expiry.
+
+### Schema + mechanism
+
+- `prisma/schema.prisma`: `UsageDaily` — `@@unique([day, surface, novelKey,
+  modelId])` (novelKey = novelId or "-" sentinel: SQLite treats NULLs as
+  distinct in unique indexes, so the sentinel is what makes the upsert
+  idempotent); indexes on `day` and `[novelKey, day]`; `estimatedUsd` (null =
+  bucket unpriced — never $0) + `pricingVersion` + `rolledAt`. No FK, no
+  cascade anywhere in the ledger family (unchanged from P5-a).
+- `src/lib/usage/retention.ts` — the ONLY writer of UsageDaily and the ONLY
+  deleter of UsageCall. `purgeExpiredUsageCalls(retentionDays = 90)`:
+  bucket expired rows by (UTC day, surface, novelKey, modelId) → per bucket
+  delete-by-ids FIRST, then increment-upsert. Torn-crash bias documented in
+  the module header: an interrupted sweep can only UNDERCOUNT one bucket's
+  chunk (rows gone before the aggregate lands) — never double-count; a rerun
+  over a purged state sweeps zero rows.
+- Provenance survives the purge: an expired null-novel row whose
+  correlationId resolves through UsageProvenance (wizard precedent) rolls
+  into the LINKED novel's bucket, so novel lifetime totals survive; a
+  correlationId linked to >1 novel stays account-wide (counted, never
+  guessed between novels). UsageProvenance itself is never purged
+  (attribution metadata, not billing detail) — disclosed here per the
+  ruling's "never touch anything outside the 90-day UsageCall window".
+- Sweep triggers, both zero-dependency: `src/instrumentation.ts` (startup,
+  fire-and-forget, failure never blocks boot; verified live — dev.log shows
+  the sweep query `WHERE createdAt < ?` at boot, 0 expired rows, no errors)
+  + `scripts/purge-usage.ts` (on-demand; `bun scripts/purge-usage.ts [days]`).
+
+### View layering
+
+- `accountUsageSnapshot()` merges BOTH sources per dimension (surface /
+  model / novel): totals, failed counts, and the ESTIMATE are computed over
+  aggregates + retained details, so they are EXACTLY invariant across a
+  purge (tokens preserved; price table applied at render time). `since`
+  extends to the earliest aggregate day (honest epoch survives deletion).
+- New `history` block: itemized detail rows for the last 31 days (cap 150,
+  `omitted` disclosed), persisted daily summaries older than the window
+  (each carries `summaryNote = "summary — details retained 90 days"`), and
+  `retainedNotItemized` = the exact count of 31–90-day details that are
+  kept + exportable but not itemized in the compact view.
+- `novelUsageSummary()` gains `archived` (the novel's purged-but-preserved
+  buckets) inside `total` — the per-novel view discloses which layer each
+  number came from.
+- Central view (usage-balance-badge): new "Transaction history · last 31
+  days" section (itemized lines with FAILED markers), the retained-not-
+  itemized disclosure, the "Older days" summaries list (ESTIMATE per bucket,
+  "unpriced" where null), and the "Export statement (CSV)" anchor →
+  `GET /api/usage/statement` (in-memory CSV, zero server-side files).
+- Retention texts updated everywhere the old Ruling 1 wording was pinned:
+  RETENTION_NOTE, the Context Usage panel's one-liner (now "Details retained
+  90 days · totals survive permanently as daily summaries"), and the
+  verify-p5.ts S1 schema pin (now asserts the R-2 wording: 90-day window +
+  UsageDaily + "NEVER deleted"). This supersession is itself ruled (R-2).
+
+### scripts/verify-p5-f.ts — full run output verbatim (ZERO GLM; TENTH harness)
+
+```
+P5F: [PASS] FX 11 backdated fixture rows written (5 expired / 6 retained) — rows=11
+P5F: [PASS] BL pre-purge baseline: 11 detail calls, 2 failed, 12388 tokens, ESTIMATE = glm-4.6 tokens × sourced price — calls=11 failed=2 tok=12388 est=0.006950799999999999
+P5F: [PASS] BL pre-purge novel lifetime: direct 7 calls (6238 tok) + linked 1 call = 8 calls, 6238 tokens, archived 0 — total={"calls":8,"promptTokens":4233,"completionTokens":2005,"totalTokens":6238}
+P5F: [PASS] PG purge run 1: swept=5 deleted=5 buckets=4 (exact) — {"swept":5,"deleted":5,"buckets":4}
+P5F: [PASS] PG expired details GONE (0 remain ≥90d old), 6 retained details still present — expiredRemaining=0 retained=6
+P5F: [PASS] PG retained rows byte-untouched (spot-check: tokens/status/errorKind/createdAt of the 10d row) — 10d row intact id=zofu4b
+P5F: [PASS] PG bucket day100 (direct, glm-4.6): calls=2 in=3000 out=1500 tok=4500, ESTIMATE = 0.0051 upper bound — est=0.0051
+P5F: [PASS] PG LINKED wizard row rolled into the NOVEL's bucket (provenance survives purge): failedCalls=1 in the day95 glm-4.6 novelKey=novel bucket — novelKey=novel
+P5F: [PASS] PG unlinked row rolled ACCOUNT-WIDE (novelKey='-'): gateway-default 4000/2000/6000, estimatedUsd NULL (unpriced — never $0) — novelKey=- est=null
+P5F: [PASS] PG unlisted-model bucket (glm-4-flash): estimatedUsd NULL (unpriced — never $0-by-guess) — est=null
+P5F: [PASS] TI totals invariant across purge: calls/failed/in/out/tokens/ESTIMATE identical pre vs post — calls 11->11, tok 12388->12388, est 0.006950799999999999->0.006950799999999999
+P5F: [PASS] TI novel lifetime total invariant (8 calls / 6238 tok); archived discloses exactly the 4 rolled rows (3100/1550/4650) — total={"calls":8,"promptTokens":4233,"completionTokens":2005,"totalTokens":6238} archived={"calls":4,"promptTokens":3100,"completionTokens":1550,"totalTokens":4650}
+P5F: [PASS] TI account snapshot merges aggregates: by-novel line carries detail+archived (8 calls / 6238 tok) — calls=8 tok=6238
+P5F: [PASS] ID second sweep is a clean NO-OP (swept=0 deleted=0 buckets=0) — no double-count — {"swept":0,"deleted":0,"buckets":0}
+P5F: [PASS] ID aggregates NEVER deleted and value-identical after the no-op sweep — 4 buckets verified field-by-field
+P5F: [PASS] HB boundary exact: 31d−1h row itemized, 31d+1h row NOT itemized, in-window rows newest-first — windowRows=24
+P5F: [PASS] HB retainedNotItemized equals the EXACT DB count beyond the window (31–90d retained, disclosed) — disclosed=2 dbCount=2
+P5F: [PASS] HB summaries carry the ruled label 'summary — details retained 90 days' and include all 4 fixture buckets — summaries=4 windowDays=31
+P5F: [PASS] RT statement 200, text/csv attachment, zero server-side persistence (response body only) — status=200 type=text/csv; charset=utf-8
+P5F: [PASS] RT detail section lists EXACTLY the 6 retained fixture rows (expired ones exist nowhere) — detailLines=6
+P5F: [PASS] RT summary section lists the 4 rolled buckets with rollup-time ESTIMATE + pricing version — summaryLines=4
+P5F: [PASS] RT statement carries the retention header + labeled ESTIMATE totals (upper bound) — headers + totals pinned
+P5F: [PASS] Z zero-spend proof: harness created EXACTLY its 6 fixtures — nothing reached GLM (OPS-3 held) — fixture rows remaining=6
+P5F: [PASS] Cleanup: fixture details + buckets + link + novel fully removed, DB back to pre-run shape — calls 20->20, daily 0->0, prov 0->0, novels 2->2
+P5F: ALL CHECKS PASSED (24 checks)
+```
+
+First pass disclosed 4 failures: 1 harness assertion bug (summaryNote lives on
+the history block, not per-summary — fixed in the harness) and 3 RT failures
+caused by the dev server process holding the PRE-UsageDaily Prisma client
+(db:push regenerated the client; the long-running dev process needed a
+restart — a rig-hygiene note, not a product defect). Second pass: 24/24.
+
+### Browser verification (agent-browser, golden path, evidence verbatim)
+
+Writer route, badge popover opened:
+- Sections render: ACCOUNT USAGE → BY SURFACE / BY MODEL · ESTIMATE (UPPER
+  BOUND) / BY NOVEL → **TRANSACTION HISTORY · LAST 31 DAYS** (itemized lines
+  incl. a live "Agent team runs · glm-4-flash" row and a fixture line
+  "… · p5f-ui · glm-4.6 · FAILED (0 tok)") → disclosure line "1 retained call
+  older than 31 days (details kept 90 days) — not itemized here; included in
+  the CSV statement." → **Export statement (CSV)** anchor, href
+  `/api/usage/statement` (eval-verified).
+- `GET /api/usage/statement` over HTTP: 200, `text/csv; charset=utf-8`,
+  attachment. Screenshot: agent-ctx/p5f-evidence-central-history.png.
+- UI fixtures (3 rows, surface "p5f-ui") removed after the pass — DB back to
+  pre-run shape.
+
+### Ship health at close (measured 2026-11-06)
+
+- Full harness family, ALL GREEN: verify-p2-a · verify-p2-b · verify-p2-c
+  (46) · verify-stage-a · verify-p4 (38) · verify-p5 (24, S1 pin moved to the
+  ruled R-2 wording) · verify-p5-b (24) · verify-p5-c (30) · verify-p5-e1
+  (18) · **verify-p5-f (24, new tenth member)**.
+- `bun run lint`: clean. tsc: all P5-f files clean (pre-existing scratch-
+  script errors elsewhere unchanged).
+- Dev server: 200 on `/`; startup retention sweep verified live (rolled-0);
+  dev.log shows the merged snapshot queries (UsageDaily joined into the
+  ledger read) with no errors.
+- GLM spend: $0.00 (zero billable calls; zero model calls in any P5-f probe).
+
+### Pending user input (not a blocker)
+
+Invoice paste-slot unchanged and still awaiting the account holder's console
+row (closed-period USD total after Nov 5 + cached-discount applied yes/no).
+
+
+---
+
+## §P5-G — TEAM-1 READ-ONLY repair plan delivered (R-3; approval-gated, zero code)
+
+The plan is archived at **agent-ctx/p5g-team1-repair-plan.md** together with
+this report. Highlights (full detail in the plan):
+- Forensic chain re-verified from git: b8aa210 added five Team* models +
+  backend/UI; 7725023 added TeamTurnLog (the sixth); f32b9df (Nov 2) deleted
+  all six from the schema while the application code survived.
+- 500 path traced to the exact line: novel-workspace.tsx:365 →
+  GET /api/team/agents → ensureSeed (server.ts:212) → `db.teamAgent.count()`
+  on an undefined delegate → TypeError → 500 on every novel-workspace open.
+- Plan: restore the six models VERBATIM from b8aa210 / f32b9df^ with exactly
+  two current-convention adaptations (optional plain-string novelId scope
+  columns on TeamConversation + TeamTask, updated header comments); additive
+  db:push migration; seed via the existing upsert-safe ensureSeed; ledger
+  integration = surface "ai-team" (already instrumented dormant since P5-b)
+  + novelId threading for novel-scoped conversations + wizard-precedent
+  provenance link on create_novel for pre-novel sessions, else account-only.
+- Verification plan (post-approval): eleventh harness verify-p5-g, zero GLM.
+- GLM budget for this plan: $0.00 (read-only git/file analysis only).
+- **Status: AWAITING USER APPROVAL — no code has been touched.**

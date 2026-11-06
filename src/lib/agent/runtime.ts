@@ -1147,6 +1147,75 @@ export async function reconcileWrapUpFromDb(runId: string): Promise<{
 }
 
 /**
+ * OPS-4 (P5-e.1) — guarded exit flip for a dying executor's REAL error.
+ *
+ * The finally-block in executeRun ALWAYS releases the executor's own lease
+ * before the catch runs, so a pure owner/epoch-fenced flip matched zero rows
+ * on every real error (root cause of the stuck-at-running shape) and the
+ * message was swallowed to console only. This seam preserves the fencing
+ * contract in both directions:
+ *   (1) still-owner flip — if releaseLease itself failed, the executor still
+ *       holds the lease; the owner/epoch CAS is the strongest claim and may
+ *       write directly.
+ *   (2) released flip — if nobody holds the lease (leaseIsAlive false), a
+ *       second CAS on (running|awaiting_approval + leaseOwner: null) writes
+ *       the failure. A LIVE lease ⇒ stay silent: the holder owns the row.
+ *   An evicted executor can therefore NEVER write terminal state over a live
+ *   lease; a claimant that raced in between the aliveness check and the write
+ *   loses the CAS and the dying executor stays silent. Author-owned rows
+ *   (paused) and terminal rows are never clobbered. Fail-closed: an
+ *   unverifiable aliveness check (DB hiccup) stays silent.
+ *
+ * Returns true only when THIS call wrote the flip (and emitted the event —
+ * the executor's real cause lands in the event stream, never console-only).
+ * Exported for the P5-e.1 harness: the harness drives this exact production
+ * path, not a copy.
+ */
+export async function guardedFailureFlip(
+  runId: string,
+  lease: ExecutorLease | null,
+  message: string
+): Promise<boolean> {
+  const run = await db.agentRun
+    .findUnique({ where: { id: runId }, select: { status: true } })
+    .catch(() => null);
+  if (!run || TERMINAL_STATUSES.includes(run.status as AgentRunStatus)) return false;
+  const fenced = lease
+    ? await db.agentRun
+        .updateMany({
+          where: { id: runId, leaseOwner: lease.owner, leaseEpoch: lease.epoch },
+          data: { status: "failed", error: message },
+        })
+        .catch(() => ({ count: 0 }))
+    : { count: 0 };
+  let flipped = fenced.count === 1;
+  if (!flipped) {
+    const alive = await leaseIsAlive(runId).catch(() => true);
+    if (!alive) {
+      const guarded = await db.agentRun
+        .updateMany({
+          where: {
+            id: runId,
+            status: { in: ["running", "awaiting_approval"] as AgentRunStatus[] },
+            leaseOwner: null,
+          },
+          data: { status: "failed", error: message },
+        })
+        .catch(() => ({ count: 0 }));
+      flipped = guarded.count === 1;
+    }
+  }
+  if (flipped) {
+    await emitEvent({ runId, kind: "error", summary: `Run failed: ${truncate(message, 300)}` });
+    return true;
+  }
+  console.error(
+    `[agent-runtime] run ${runId}: failure flip skipped — a live executor holds the run or the row moved on; the holder owns the row`
+  );
+  return false;
+}
+
+/**
  * Entry point — called from the route handlers. Idempotent per process.
  *
  * Phase 1 lease lifecycle: claim (CAS on unowned/stale + epoch increment) →
@@ -1209,29 +1278,12 @@ export async function executeRun(
       );
       return;
     }
-    const run = await db.agentRun
-      .findUnique({ where: { id: runId }, select: { status: true } })
-      .catch(() => null);
-    if (run && !TERMINAL_STATUSES.includes(run.status as AgentRunStatus)) {
-      const message = error instanceof Error ? error.message : "Unknown runtime error";
-      // The failure flip is lease-fenced too — an evicted executor never
-      // writes run status behind a newer epoch.
-      const flipped = lease
-        ? await db.agentRun
-            .updateMany({
-              where: { id: runId, leaseOwner: lease.owner, leaseEpoch: lease.epoch },
-              data: { status: "failed", error: message },
-            })
-            .catch(() => ({ count: 0 }))
-        : { count: 0 };
-      if (flipped.count === 1) {
-        await emitEvent({ runId, kind: "error", summary: `Run failed: ${truncate(message, 300)}` });
-      } else {
-        console.error(
-          `[agent-runtime] run ${runId}: failure flip skipped — lease no longer owned (count=0)`
-        );
-      }
-    }
+    // OPS-4 (P5-e.1): the dying executor's REAL error goes through the guarded
+    // exit flip — terminal state is written only when the fencing contract
+    // allows it, and the cause lands in the AgentEvent stream, never
+    // console-only. See guardedFailureFlip for the contract.
+    const message = error instanceof Error ? error.message : "Unknown runtime error";
+    await guardedFailureFlip(runId, lease, message);
   } finally {
     executors.delete(runId);
   }

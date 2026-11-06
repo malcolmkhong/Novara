@@ -75,6 +75,18 @@ session after the controller died, and the standalone evidence pass ran clean.
 agent-ctx/phase1-2-closeout.md §3 (P2-c attempt 1) — all verbatim, embedded
 at production time 2026-11-05.
 
+**ADDENDUM (2026-11-06, P5-e attempts #1–#3).** SQLite socket timeouts were
+observed 2× while a harness controller DB-polled the run row in a tight loop
+during live-fire (SQLITE_BUSY-adjacent socket errors under a hammered
+single-writer DB). Lesson registered HERE under OPS-2, not as a new OPS
+number: **quiet poll is now a standing rig rule.** Harness/observer polling
+of live run state must sleep between reads (attempt #2's fix — a 2s interval
+polled cleanly for the rest of the session); tight zero-sleep polling of the
+same SQLite file as the dev server is treated as rig misuse, equivalent in
+spirit to the ~15-min reap: an environmental constraint the rig must absorb,
+not a product defect. The product's own DB access (per-call, low-frequency)
+was never the trigger.
+
 ---
 
 ## TEAM-1 — ai-team backend re-added without its schema models; surface 500s (OPEN defect — user decides: fix, rebuild, or remove)
@@ -174,7 +186,7 @@ every call).
 
 ---
 
-## OPS-4 — Run-level failure flip is lease-scoped and fires after lease release: stuck-at-running + swallowed error (OPEN defect — fix awaiting ruling)
+## OPS-4 — Run-level failure flip is lease-scoped and fires after lease release: stuck-at-running + swallowed error (CLOSED — FIXED as P5-e.1, 2026-11-06)
 
 **Found during P5-e** (attempts #1 and #2 of the slicing live-fire,
 2026-11-06 — READ-ONLY observation, no repair performed, no code touched).
@@ -210,6 +222,30 @@ error-handling is not the ruled P5-e surface). Fix options for a ruling:
 0-row match; (b) reorder flip-before-release; (c) log+emit the message
 unconditionally in the skipped branch. Smallest honest step is (c) —
 observability only.
+
+**RESOLUTION (P5-e.1, user ruling 2026-11-06: "FIX NOW, small and
+fence-safe").** Shipped fix = a guarded flip at loop exit
+(`guardedFailureFlip`, exported seam in `src/lib/agent/runtime.ts`; the
+`executeRun` catch delegates to it). Contract, in order:
+1. still-owner fenced flip (owner/epoch CAS) — covers the corner where
+   `releaseLease` itself failed (strongest claim);
+2. else, if `leaseIsAlive(runId)` is false (nobody holds it), a second CAS on
+   `(status ∈ {running, awaiting_approval} AND leaseOwner: null)` writes
+   `status=failed` — a claimant that raced in between check and write loses
+   the CAS and we stay silent;
+3. a LIVE lease ⇒ silence (the holder owns the row); evicted executors can
+   NEVER write terminal state over a live lease — the fencing contract is
+   strengthened, not relaxed;
+4. on a successful flip the executor's REAL error is persisted on the run row
+   AND emitted as a kind=error AgentEvent — visible in the event stream,
+   never console-only;
+5. fail-closed: an unverifiable aliveness check (DB hiccup) stays silent.
+`healStaleRuns` was NOT touched (15-min janitor behavior byte-unchanged;
+requirement #5); author-owned paused rows and terminal rows are never
+clobbered. Harness: `scripts/verify-p5-e1.ts` (18 checks, zero GLM — RC dead-
+fence reproduction, stuck-at-running heal with named cause, evicted-vs-live-
+lease silence, still-owner flip, terminal/paused/stale-owned refusals,
+janitor source pins, zero-spend proof). Full harness family green 2026-11-06.
 
 **Evidence:** agent-ctx/phase5-stages.md §P5-E attempt history (verbatim,
 embedded 2026-11-06); agent-ctx/p5e-live-attempt1-evidence.log.txt and
