@@ -1,5 +1,5 @@
 // ---------------------------------------------------------------------------
-// Novara AI — persisted GLM usage ledger store (Phase 5 / P5-a, extended
+// Novara AI — persisted AI usage ledger store (Phase 5 / P5-a, extended
 // P5-b, P5-c; layered P5-f).
 //
 // Single source of truth for usage accounting (Ruling 2, user 2026-11-05):
@@ -59,7 +59,7 @@ import {
 
 export type {
   RealUsage,
-  GlmFailureKind,
+  AiFailureKind,
   LedgerSurfaceUsage,
   LedgerNovelUsage,
   LedgerModelUsage,
@@ -70,7 +70,7 @@ export type {
   LedgerDailySummary,
   UsageHistoryBlock,
 } from "./usage-shapes";
-export { extractRealUsage, classifyGlmFailure, DAILY_SUMMARY_NOTE } from "./usage-shapes";
+export { extractRealUsage, classifyAiFailure, DAILY_SUMMARY_NOTE } from "./usage-shapes";
 export { PRICING_VERSION, priceForModelId } from "./pricing";
 export {
   ACCOUNT_WIDE_NOVEL_KEY,

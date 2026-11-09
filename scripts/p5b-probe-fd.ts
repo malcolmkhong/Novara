@@ -16,7 +16,7 @@ mock.module("z-ai-web-dev-sdk", () => ({
   },
 }));
 
-const { glmChat } = await import("../src/lib/novara/glm");
+const { chatCompletion } = await import("../src/lib/ai/chat");
 
 async function dump(label: string) {
   const rows = await db.usageCall.findMany({ where: { correlationId: CORR }, orderBy: { createdAt: "asc" } });
@@ -35,7 +35,7 @@ async function main() {
   });
   let threw = "";
   try {
-    await glmChat({
+    await chatCompletion({
       messages: [{ role: "user", content: "probe" }],
       tag: "p5b probe FD",
       surface: "p5b-probe",

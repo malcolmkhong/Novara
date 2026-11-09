@@ -38,7 +38,7 @@ export interface ChapterReviewResult {
 }
 
 /**
- * GLM structured review of one chapter, PERSISTED as a ChapterReview row
+ * AI structured review of one chapter, PERSISTED as a ChapterReview row
  * (Phase 6 — the E2 gate reads the latest row per chapter to decide whether
  * the chapter may be finalized). Throws on missing/empty chapter or AI
  * failure — callers map errors to their own transport (404/502 vs feed).
@@ -53,7 +53,7 @@ export async function reviewChapter(
     include: {
       novel: {
         include: {
-          characters: { orderBy: { createdAt: "asc" }, take: budgets.glm.snapshotCastLimit },
+          characters: { orderBy: { createdAt: "asc" }, take: budgets.ai.snapshotCastLimit },
           outlineBeats: { orderBy: { index: "asc" }, take: 30 },
           digests: {
             include: { chapter: { select: { index: true } } },
@@ -101,7 +101,7 @@ export async function reviewChapter(
       `PREVIOUS CHAPTER ${d.chapter.index} SUMMARY:\n${d.summary.slice(0, PREV_DIGEST_CLIP)}`
     );
   }
-  parts.push(`CHAPTER ${chapter.index} TEXT:\n${chapter.content.slice(0, budgets.glm.chapterContextChars)}`);
+  parts.push(`CHAPTER ${chapter.index} TEXT:\n${chapter.content.slice(0, budgets.ai.chapterContextChars)}`);
 
   const issuesSpec = isChinese
     ? `任务：审读这一章，输出 JSON：{"issues":[...]}。每个 issue：

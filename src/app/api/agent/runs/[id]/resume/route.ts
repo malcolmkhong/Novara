@@ -12,7 +12,7 @@
 //     → 409 unless body { resolvePending: "discard" }. Nothing is ever
 //     auto-committed — discard only abandons the uncommitted draft(s).
 //   - wrap-up already granted AND the turn budget spent → deterministic
-//     ZERO-GLM reconciliation: the final report is built from persisted
+//     ZERO-AI reconciliation: the final report is built from persisted
 //     state only (AgentTask statuses + event-derived counters + latest
 //     ChapterReviews), the run is closed, and the report is returned in THIS
 //     response (no executor is started — no further model turns exist).
@@ -82,12 +82,12 @@ export async function POST(req: Request, { params }: Params) {
       );
     }
 
-    // Deterministic wrap-up reconciliation (ZERO-GLM): the one-shot budget
+    // Deterministic wrap-up reconciliation (ZERO-AI): the one-shot budget
     // wrap-up turn was already granted and the executor died before closing
     // the run. No further model turn may be minted (wrapUpGranted is a
     // lifetime property) — the report is built from the DB instead.
     const state = await readLoopState(id);
-    const maxTurns = getBudgets().glm.leaderMaxTurns;
+    const maxTurns = getBudgets().ai.leaderMaxTurns;
     if (state?.wrapUpGranted && state.turnsUsed >= maxTurns) {
       const lease = await claimLease(id);
       if (!lease) {

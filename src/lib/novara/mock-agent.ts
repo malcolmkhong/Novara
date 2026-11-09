@@ -13,6 +13,7 @@
 // ---------------------------------------------------------------------------
 
 import { MOCK_BUDGETS } from "@/config/writer";
+import { DEFAULT_MODEL_ID } from "@/lib/ai/providers/registry";
 import type {
   AgentEvent,
   AgentEventKind,
@@ -332,7 +333,7 @@ export const mockAgentRuntime = {
           goal: parsed.goal,
           mode: parsed.mode,
           status: "running",
-          modelId: parsed.modelId ?? "glm-4.6",
+          modelId: parsed.modelId ?? DEFAULT_MODEL_ID,
           thinkingLevel: parsed.thinkingLevel ?? "off",
           finalReport: null,
           pinned: parsed.pinned ?? [],

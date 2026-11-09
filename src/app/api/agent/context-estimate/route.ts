@@ -5,7 +5,7 @@
 // first turn would send (Atlas system card + tool protocol + skills + story
 // snapshot) and counts it with the same hybrid tokenizer the runtime meters
 // use, so the composer's panel has honest numbers before any run has ever
-// executed. No GLM call is made.
+// executed. No AI call is made.
 //
 // Response: { estimate: ContextUsage } (actor: "estimate").
 // ---------------------------------------------------------------------------

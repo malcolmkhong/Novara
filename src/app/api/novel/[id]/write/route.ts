@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 
 import { db } from "@/lib/db";
-import { streamGlmProse } from "@/lib/novel/glm";
+import { streamProse } from "@/lib/ai/writing";
 import { buildWriteMessages, type WriteBrief } from "@/lib/novel/prompts";
 import {
   chineseWordCount,
@@ -138,7 +138,7 @@ export async function POST(req: Request, ctx: RouteContext) {
       };
 
       let accumulated = "";
-      const outcome = await streamGlmProse(
+      const outcome = await streamProse(
         messages,
         {
           onDelta: (text) => {

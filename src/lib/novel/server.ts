@@ -288,12 +288,12 @@ export async function loadNovelDetail(id: string): Promise<NovelDetail | null> {
 }
 
 // ---------------------------------------------------------------------------
-// Master-outline normalization (defensive against GLM range mistakes)
+// Master-outline normalization (defensive against AI range mistakes)
 // ---------------------------------------------------------------------------
 
 /**
  * Ensure the volume list is a perfect partition of chapters 1..target.
- * If GLM's ranges already form one, keep them; otherwise re-partition
+ * If AI's ranges already form one, keep them; otherwise re-partition
  * evenly (last volume takes the remainder) while preserving names/conflicts.
  */
 export function normalizeVolumes(
@@ -389,7 +389,7 @@ export function chineseWordCount(text: string): number {
 }
 
 /**
- * Strip markdown headings / chapter-title lines GLM sometimes prepends
+ * Strip markdown headings / chapter-title lines AI sometimes prepends
  * despite instructions, e.g. "# 第12章 xxx" or "**第12章 xxx**".
  */
 export function stripProseArtifacts(text: string): string {

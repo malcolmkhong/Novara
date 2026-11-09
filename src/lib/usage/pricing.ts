@@ -1,5 +1,7 @@
+import { PROVIDER_MODELS } from "@/lib/ai/providers/registry";
+
 // ---------------------------------------------------------------------------
-// Novara AI — GLM pricing table (Phase 5 / P5-c, proposal §6.1).
+// Novara AI — AI pricing table (Phase 5 / P5-c, proposal §6.1).
 //
 // ONE versioned, static, request-side-modelId-keyed table. This module is the
 // only place in the codebase that knows a token price; it is PURE (zero
@@ -8,21 +10,21 @@
 //
 // PRICING VERSION 2026-11-06.1 — sources (fetched LIVE 2026-11-06, HTTP 200):
 //
-//   https://docs.z.ai/guides/overview/pricing
+//   (source removed)
 //     — section "Models · Text Models", table "Prices per 1M tokens",
 //       columns: Model | Input | Cached Input | Cached Input Storage | Output
 //       (parsed from the fetched page's <table> rows, verbatim:)
-//         GLM-4.6     | $0.6 | $0.11 | Limited-time Free | $2.2
-//         GLM-4.5-Air | $0.2 | $0.03 | Limited-time Free | $1.1
-//         GLM-4.5-Flash | Free | Free | Free | Free
-//         GLM-4.7-Flash | Free | Free | Free | Free
-//   https://docs.z.ai/guides/llm/glm-4.6  (model page, HTTP 200, fetched
-//     2026-11-06 — corroborates the GLM-4.6 row; matches the numbers already
+//         AI-4.6     | $0.6 | $0.11 | Limited-time Free | $2.2
+//         AI-4.5-Air | $0.2 | $0.03 | Limited-time Free | $1.1
+//         AI-4.5-Flash | Free | Free | Free | Free
+//         AI-4.7-Flash | Free | Free | Free | Free
+//   (source removed)  (model page, HTTP 200, fetched
+//     2026-11-06 — corroborates the AI-4.6 row; matches the numbers already
 //     user-approved in phase5-proposal.md §6.1, investigated P3-a)
 //
-//   NOT LISTED (verified 2026-11-06): registry ids "glm-4-flash" and
-//   "glm-4-long" have NO row on the fetched pricing page, and
-//   https://docs.z.ai/guides/llm/glm-4-flash returns HTTP 404. Binding rule
+//   NOT LISTED (verified 2026-11-06): registry ids "ai-4-flash" and
+//   "ai-4-long" have NO row on the fetched pricing page, and
+//   (source removed) returns HTTP 404. Binding rule
 //   (§6.2.3): a missing pricing row renders UNPRICED — never a guess, never
 //   $0-by-assumption ("free tier" is P4 operational lore, not a priced row).
 //
@@ -33,7 +35,7 @@
 // HONESTY RULES (proposal §6.2, binding):
 //   1. Every $ figure = measured tokens × listed price, from UsageCall rows
 //      only, and is labeled ESTIMATE — ALWAYS, because the cached-input
-//      discount (cached-in $0.11/1M on GLM-4.6) is invisible to us: we never
+//      discount (cached-in $0.11/1M on AI-4.6) is invisible to us: we never
 //      observe which bytes hit the cache. Our figure is an UPPER BOUND.
 //   2. No per-call cached discount, no echo-derived tiering, no hand
 //      adjustments. Retries are real rows and real money.
@@ -48,7 +50,7 @@
 export const PRICING_VERSION = "2026-11-06.1";
 
 /** Docs page every row below was parsed from, fetched 2026-11-06 (HTTP 200). */
-export const PRICING_SOURCE_URL = "https://docs.z.ai/guides/overview/pricing";
+export const PRICING_SOURCE_URL = "(source removed)";
 export const PRICING_FETCHED_AT = "2026-11-06";
 
 export interface PriceRow {
@@ -62,23 +64,29 @@ export interface PriceRow {
   fetchedAt: string;
 }
 
-/** The static table — keyed by REQUEST-side modelId exactly as sent. */
-const PRICE_TABLE: Record<string, PriceRow> = {
-  "glm-4.6": {
-    inputUsdPer1M: 0.6,
-    outputUsdPer1M: 2.2,
-    cachedInputUsdPer1M: 0.11,
-    sourceUrl: PRICING_SOURCE_URL,
-    fetchedAt: PRICING_FETCHED_AT,
-  },
-  "glm-4.5-air": {
-    inputUsdPer1M: 0.2,
-    outputUsdPer1M: 1.1,
-    cachedInputUsdPer1M: 0.03,
-    sourceUrl: PRICING_SOURCE_URL,
-    fetchedAt: PRICING_FETCHED_AT,
-  },
-};
+/**
+ * Generated strictly from PROVIDER_MODELS — registry.ts is the single source
+ * of truth for every price. No legacy ids are aliased in: rows already
+ * persisted under ai-* ids render UNPRICED rather than inheriting a price
+ * from an unrelated model (honesty rule 3: never guessed, never $0).
+ *
+ * Provenance is deliberately labelled UNVERIFIED. The registry defaults were
+ * NOT fetched from docs.example.com, so they must not inherit PRICING_SOURCE_URL /
+ * PRICING_FETCHED_AT, which describe the old AI-only table.
+ */
+const PRICE_TABLE: Record<string, PriceRow> = (() => {
+  const table: Record<string, PriceRow> = {};
+  for (const model of PROVIDER_MODELS) {
+    table[model.id] = {
+      inputUsdPer1M: model.price.inputUsdPer1M,
+      outputUsdPer1M: model.price.outputUsdPer1M,
+      cachedInputUsdPer1M: model.price.cachedInputUsdPer1M,
+      sourceUrl: "src/lib/ai/providers/registry.ts (UNVERIFIED default)",
+      fetchedAt: "UNVERIFIED",
+    };
+  }
+  return table;
+})();
 
 export type PricingResult =
   | {

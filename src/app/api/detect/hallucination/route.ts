@@ -1,13 +1,13 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import ZAI from "z-ai-web-dev-sdk";
-import { classifyGlmFailure, extractRealUsage } from "@/lib/usage/usage-shapes";
+import ZAI from "@/lib/ai/router";
+import { classifyAiFailure, extractRealUsage } from "@/lib/usage/usage-shapes";
 import { recordUsageCall } from "@/lib/usage/usage-store";
 import {
-  capForGlm,
+  capOutputTokens,
   clamp,
   extractJson,
-  GLM_TIMEOUT_MS,
+  AI_TIMEOUT_MS,
   withTimeout,
 } from "@/lib/ai-heuristics";
 
@@ -30,7 +30,7 @@ const OPEN_DOMAIN_SYSTEM_PROMPT = `You are a rigorous fact-checking analyst dete
 const GROUNDED_SYSTEM_PROMPT = `You are a rigorous fact-checking analyst detecting hallucinations in an AI-generated answer. Extract the most significant checkable factual claims (up to 20) about dates, numbers, names, events, quotes, statistics, attributions and causal statements. Verify each claim STRICTLY against the provided source document. Classify each claim as: "supported" (directly stated or entailed by the source), "unsupported" (not present in the source; invented), "contradicted" (contradicts the source), "unverifiable" (the source does not cover it). The hallucinationScore (0-100) expresses the degree of (un)grounding: 0 means every claim is grounded in the source, 100 means most claims are fabricated or absent from the source. ${JSON_SHAPE_INSTRUCTION}`;
 
 // ---------------------------------------------------------------------------
-// Types (GLM output is untrusted — validated defensively below)
+// Types (AI output is untrusted — validated defensively below)
 // ---------------------------------------------------------------------------
 
 type ClaimStatus = "supported" | "unsupported" | "contradicted" | "unverifiable";
@@ -51,17 +51,17 @@ interface CheckedClaim {
   confidence: number;
 }
 
-interface GlmHallucinationAnalysis {
+interface HallucinationAnalysis {
   hallucinationScore: number; // required — without it the parse is considered failed
   summary: string;
   claims: CheckedClaim[];
 }
 
 // ---------------------------------------------------------------------------
-// GLM plumbing (server-side only)
+// AI plumbing (server-side only)
 // ---------------------------------------------------------------------------
 
-interface GlmMessage {
+interface AiMessage {
   role: "assistant" | "user";
   content: string;
 }
@@ -72,7 +72,7 @@ function buildMessages(
   source: string | undefined,
   question: string | undefined,
   forceJson: boolean,
-): GlmMessage[] {
+): AiMessage[] {
   const parts: string[] = [];
   parts.push(
     `QUESTION (if any):\n${
@@ -110,10 +110,10 @@ function extractCompletionContent(completion: unknown): string | null {
 }
 
 /**
- * One GLM request. Returns the reply text, or null on ANY failure
+ * One AI request. Returns the reply text, or null on ANY failure
  * (transport error, empty content, unexpected shape). Never throws.
  */
-async function requestGlmText(messages: GlmMessage[]): Promise<string | null> {
+async function requestText(messages: AiMessage[]): Promise<string | null> {
   // Policy F (P5-b): ZAI.create() failing below is a PRE-SEND failure — no
   // row (F3). A sent attempt that produces no completion payload records one
   // zero-token failed row (F1); a completion without usage records nothing (F4).
@@ -134,16 +134,16 @@ async function requestGlmText(messages: GlmMessage[]): Promise<string | null> {
         surface: "detect",
         usage: null,
         status: "failed",
-        errorKind: classifyGlmFailure(error),
+        errorKind: classifyAiFailure(error),
       });
     }
-    console.error("[detect/hallucination] GLM request failed:", error);
+    console.error("[detect/hallucination] AI request failed:", error);
     return null;
   }
 }
 
 // ---------------------------------------------------------------------------
-// Defensive parsing of GLM JSON
+// Defensive parsing of AI JSON
 // ---------------------------------------------------------------------------
 
 function mapClaim(value: unknown): CheckedClaim | null {
@@ -165,7 +165,7 @@ function mapClaim(value: unknown): CheckedClaim | null {
   return { claim, status, explanation, confidence };
 }
 
-function parseGlmAnalysis(raw: string): GlmHallucinationAnalysis | null {
+function parseAnalysis(raw: string): HallucinationAnalysis | null {
   const parsed: unknown = extractJson(raw);
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
     return null;
@@ -237,35 +237,35 @@ export async function POST(req: Request) {
       : "open-domain";
   const source = mode === "grounded" ? parsedBody.data.source : undefined;
 
-  // GLM gets a bounded excerpt of both answer and source so the prompt and
+  // AI gets a bounded excerpt of both answer and source so the prompt and
   // the JSON it must return stay small and the call finishes well within
   // upstream proxy timeouts. Nothing else changes semantically.
-  const glmText = capForGlm(text);
-  const glmSource =
+  const teamText = capOutputTokens(text);
+  const sourceExcerpt =
     mode === "grounded" && source !== undefined
-      ? capForGlm(source)
+      ? capOutputTokens(source)
       : undefined;
 
   try {
     let raw = await withTimeout(
-      requestGlmText(
-        buildMessages(mode, glmText, glmSource, parsedBody.data.question, false),
+      requestText(
+        buildMessages(mode, teamText, sourceExcerpt, parsedBody.data.question, false),
       ),
-      GLM_TIMEOUT_MS,
-      "[detect/hallucination] first GLM attempt",
+      AI_TIMEOUT_MS,
+      "[detect/hallucination] first AI attempt",
     );
-    let analysis = raw === null ? null : parseGlmAnalysis(raw);
+    let analysis = raw === null ? null : parseAnalysis(raw);
 
     // Retry ONCE with an explicit JSON-only instruction before giving up.
     if (analysis === null) {
       raw = await withTimeout(
-        requestGlmText(
-          buildMessages(mode, glmText, glmSource, parsedBody.data.question, true),
+        requestText(
+          buildMessages(mode, teamText, sourceExcerpt, parsedBody.data.question, true),
         ),
-        GLM_TIMEOUT_MS,
-        "[detect/hallucination] retry GLM attempt",
+        AI_TIMEOUT_MS,
+        "[detect/hallucination] retry AI attempt",
       );
-      analysis = raw === null ? null : parseGlmAnalysis(raw);
+      analysis = raw === null ? null : parseAnalysis(raw);
     }
 
     if (analysis === null) {
@@ -273,7 +273,7 @@ export async function POST(req: Request) {
         {
           success: false,
           error:
-            "GLM could not finish the fact-check in time. Please try again — shorter text checks faster.",
+            "AI could not finish the fact-check in time. Please try again — shorter text checks faster.",
         },
         { status: 502 },
       );
@@ -290,7 +290,7 @@ export async function POST(req: Request) {
       riskLevel,
       summary: analysis.summary,
       claims: analysis.claims,
-      checkedWith: "GLM",
+      checkedWith: "AI",
       mode,
     });
   } catch (error) {

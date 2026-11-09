@@ -3,21 +3,21 @@
  *
  * Responsibilities:
  *  - seed the default team (leader + 4 specialists)
- *  - GLM plumbing for agent replies (system role verified working)
+ *  - AI plumbing for agent replies (system role verified working)
  *  - parse/strip the ```team-delegate protocol from replies
- *  - task lifecycle: claim → progress logs → GLM execution → reports
+ *  - task lifecycle: claim → progress logs → AI execution → reports
  *
- * Every GLM call is bounded by withTimeout (see ai-heuristics) so a single
+ * Every AI call is bounded by withTimeout (see ai-heuristics) so a single
  * exchange always finishes well inside the gateway budget. Task execution
  * runs in the background via next/server `after()` — routes respond fast and
  * the UI polls task state.
  */
-import ZAI from "z-ai-web-dev-sdk";
+import ZAI from "@/lib/ai/router";
 import type { Prisma } from "@prisma/client";
 
 import { db } from "@/lib/db";
-import { capForGlm, extractJson, withTimeout } from "@/lib/ai-heuristics";
-import { classifyGlmFailure, extractRealUsage } from "@/lib/usage/usage-shapes";
+import { capOutputTokens, extractJson, withTimeout } from "@/lib/ai-heuristics";
+import { classifyAiFailure, extractRealUsage } from "@/lib/usage/usage-shapes";
 import { recordProvenanceLink, recordUsageCall } from "@/lib/usage/usage-store";
 import {
   buildDelegationRepairMessages,
@@ -46,34 +46,34 @@ import type {
 } from "@/lib/ai-team/types";
 
 // ---------------------------------------------------------------------------
-// GLM plumbing
+// AI plumbing
 // ---------------------------------------------------------------------------
 
-const GLM_TIMEOUT_MS = 55_000;
+const AI_TIMEOUT_MS = 55_000;
 /** Budget for the post-tool follow-up call of an agent turn. */
 const TOOL_FOLLOWUP_TIMEOUT_MS = 35_000;
-/** Per-message cap when replaying conversation history to GLM. */
+/** Per-message cap when replaying conversation history to AI. */
 const HISTORY_MESSAGE_CAP = 1200;
 /** How much of the conversation history (messages) is replayed. */
 const HISTORY_WINDOW = 12;
 /** Max chars of recent user/agent chat injected into a task execution. */
 const TASK_CONTEXT_CAP = 1800;
 
-type GlmRole = "system" | "user" | "assistant";
-interface GlmMessage {
-  role: GlmRole;
+type AiRole = "system" | "user" | "assistant";
+interface AiMessage {
+  role: AiRole;
   content: string;
 }
 
 /**
- * P5-g scope threading: attribution + model selection carried on every GLM
+ * P5-g scope threading: attribution + model selection carried on every AI
  * call. novelId = workspace-pinned direct attribution (the conversation's
  * pinned scope); correlationId = pre-novel session namespace
  * ("ai-team:<sessionKey>", wizard precedent — provenance links retro-adopt
  * these rows into the created novel's ledger); model = explicit request-side
  * model id (undefined = gateway default, recorded as "gateway-default").
  */
-export interface GlmScope {
+export interface AiScope {
   novelId?: string;
   correlationId?: string;
   model?: string;
@@ -93,12 +93,12 @@ function extractCompletionContent(completion: unknown): string | null {
 }
 
 /**
- * Backoff schedule for rate-limited (HTTP 429) GLM calls. The multi-agent
- * flow fires several GLM requests in a burst (chat turn → task rounds →
+ * Backoff schedule for rate-limited (HTTP 429) AI calls. The multi-agent
+ * flow fires several AI requests in a burst (chat turn → task rounds →
  * report → leader follow-up), so the gateway throttles us; a 429 is
  * transient and a short backoff almost always recovers the turn.
  */
-const GLM_429_BACKOFF_MS = [1_200, 2_800] as const;
+const AI_429_BACKOFF_MS = [1_200, 2_800] as const;
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 function isRateLimitError(error: unknown): boolean {
@@ -107,14 +107,14 @@ function isRateLimitError(error: unknown): boolean {
 }
 
 /**
- * One GLM request (with 429-aware retry). Returns reply text or null on ANY
+ * One AI request (with 429-aware retry). Returns reply text or null on ANY
  * failure. Never throws.
  */
-export async function glmText(
-  messages: GlmMessage[],
+export async function teamText(
+  messages: AiMessage[],
   label: string,
-  timeoutMs: number = GLM_TIMEOUT_MS,
-  scope?: GlmScope,
+  timeoutMs: number = AI_TIMEOUT_MS,
+  scope?: AiScope,
 ): Promise<string | null> {
   for (let attempt = 0; ; attempt++) {
     // Policy F (P5-b): one row per HTTP attempt. ZAI.create() failing below
@@ -134,7 +134,7 @@ export async function glmText(
             ...message,
             // System prompts now carry persona + team/novel-tool protocol +
             // library snapshot, so they get the same budget as user turns.
-            content: capForGlm(message.content, message.role === "system" ? 6500 : 6000),
+            content: capOutputTokens(message.content, message.role === "system" ? 6500 : 6000),
           })),
           thinking: { type: "disabled" },
         }),
@@ -158,17 +158,17 @@ export async function glmText(
           surface: "ai-team",
           usage: null,
           status: "failed",
-          errorKind: classifyGlmFailure(error),
+          errorKind: classifyAiFailure(error),
           novelId: scope?.novelId,
           correlationId: scope?.correlationId,
           modelId: scope?.model,
         });
       }
-      console.error(`[team/${label}] GLM request failed:`, error);
+      console.error(`[team/${label}] AI request failed:`, error);
       // Retry ONLY transient rate limits; timeouts and other errors fail
       // immediately so request budgets stay bounded.
-      if (attempt < GLM_429_BACKOFF_MS.length && isRateLimitError(error)) {
-        await sleep(GLM_429_BACKOFF_MS[attempt]);
+      if (attempt < AI_429_BACKOFF_MS.length && isRateLimitError(error)) {
+        await sleep(AI_429_BACKOFF_MS[attempt]);
         continue;
       }
       return null;
@@ -387,7 +387,7 @@ export async function getOrCreateConversation(
 export type AgentTurnOutcome = "answered" | "tool_exhausted" | "model_error";
 
 export interface AgentTurnResult {
-  /** Final visible reply (novel-tool blocks stripped), or null on GLM failure. */
+  /** Final visible reply (novel-tool blocks stripped), or null on AI failure. */
   text: string | null;
   /** Formatted tool activity (also the data payload), null when no tools used. */
   toolLog: string | null;
@@ -395,7 +395,7 @@ export interface AgentTurnResult {
   writes: string[];
   /** How the turn ended — drives downstream self-healing. */
   outcome: AgentTurnOutcome;
-  /** GLM calls consumed by this turn (1..MAX_TOOL_ROUNDS). */
+  /** AI calls consumed by this turn (1..MAX_TOOL_ROUNDS). */
   rounds: number;
   /** Per-action results across all rounds (telemetry). */
   toolCalls: { round: number; action: string; ok: boolean; error: string | null }[];
@@ -403,7 +403,7 @@ export interface AgentTurnResult {
   lastResults: string | null;
   /** Conversation state after the final tool round — the continuation
    *  entry point: appending one user message resumes exactly here. */
-  finalMessages: GlmMessage[];
+  finalMessages: AiMessage[];
   durationMs: number;
   /** TeamTurnLog row id (callers attach corrections to it). */
   turnLogId: string | null;
@@ -414,7 +414,7 @@ export interface AgentTurnResult {
 
 const MAX_TOOL_ROUNDS = 3; // 1 initial call + up to 2 tool-execution rounds
 
-/** Plain length cap for telemetry strings (no GLM budget formatting). */
+/** Plain length cap for telemetry strings (no AI budget formatting). */
 function capText(text: string, max: number): string {
   return text.length <= max ? text : `${text.slice(0, max)}…`;
 }
@@ -467,20 +467,20 @@ export async function noteTurnCorrections(
  * + plain-text ```novel-write chapter blocks):
  *   call → blocks? → execute → call with results → … (max 3 calls)
  * Multi-round lets chained writes work (read ids → write chapters). Every
- * request's GLM usage stays bounded; each round gets its own timeout so a
+ * request's AI usage stays bounded; each round gets its own timeout so a
  * single exchange never hangs.
  */
-export async function glmAgentTurn(
-  messages: GlmMessage[],
+export async function teamAgentTurn(
+  messages: AiMessage[],
   label: string,
-  timeoutMs: number = GLM_TIMEOUT_MS,
-  scope?: GlmScope,
+  timeoutMs: number = AI_TIMEOUT_MS,
+  scope?: AiScope,
 ): Promise<AgentTurnResult> {
   const startedAt = Date.now();
   let toolLog: string | null = null;
-  let current: GlmMessage[] = messages;
+  let current: AiMessage[] = messages;
   let lastRaw = "";
-  let glmDied = false;
+  let modelDied = false;
   let lastRoundHadTools = false;
   let lastResults: string | null = null;
   let roundsUsed = 0;
@@ -521,7 +521,7 @@ export async function glmAgentTurn(
   };
 
   for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
-    const raw = await glmText(
+    const raw = await teamText(
       current,
       label,
       round === 0 ? timeoutMs : TOOL_FOLLOWUP_TIMEOUT_MS,
@@ -529,7 +529,7 @@ export async function glmAgentTurn(
     );
     roundsUsed = round + 1;
     if (raw === null) {
-      glmDied = true;
+      modelDied = true;
       break;
     }
     lastRaw = raw;
@@ -581,15 +581,15 @@ export async function glmAgentTurn(
     ];
   }
 
-  // GLM died mid-loop (rate limit / timeout): never recycle the stale
+  // AI died mid-loop (rate limit / timeout): never recycle the stale
   // partial text (e.g. a “我将…首先让我读取…” preamble) as the final
   // answer — report failure so tasks fail honestly and the leader
   // follow-up can recover the chain.
-  if (glmDied) {
+  if (modelDied) {
     return finish("model_error", null);
   }
 
-  // Loop exhausted while GLM was alive — strip any trailing tool blocks.
+  // Loop exhausted while AI was alive — strip any trailing tool blocks.
   const clean = cleanAll(lastRaw);
   // A very short leftover after writes (e.g. "现在创建第二章：") is a
   // truncated mid-sentence fragment — replace it with a proper closing.
@@ -611,10 +611,10 @@ export async function glmAgentTurn(
   return finish("tool_exhausted", text.length > 0 ? text : null);
 }
 
-/** Recent history (oldest → newest) mapped into GLM messages. */
+/** Recent history (oldest → newest) mapped into AI messages. */
 export async function buildHistoryMessages(
   conversationId: string,
-): Promise<GlmMessage[]> {
+): Promise<AiMessage[]> {
   const rows = await db.teamMessage.findMany({
     where: { conversationId },
     orderBy: { createdAt: "desc" },
@@ -624,8 +624,8 @@ export async function buildHistoryMessages(
     .reverse()
     .filter((row) => row.role !== "system")
     .map((row) => ({
-      role: (row.role === "user" ? "user" : "assistant") as GlmRole,
-      content: capForGlm(row.content, HISTORY_MESSAGE_CAP),
+      role: (row.role === "user" ? "user" : "assistant") as AiRole,
+      content: capOutputTokens(row.content, HISTORY_MESSAGE_CAP),
     }));
 }
 
@@ -735,7 +735,7 @@ function isContinuationTask(title: string): boolean {
  * The chat turn ended mid-tooling: the round budget ran out while the model
  * was still emitting tool blocks. Instead of dead-ending with a canned
  * “回复继续” message, spawn ONE tracked continuation task assigned to the
- * SAME agent — task execution has its own full GLM budget and appends its
+ * SAME agent — task execution has its own full AI budget and appends its
  * result to the same conversation, so the job finishes without the user
  * nudging. Bounded by construction: only the chat route spawns these, and
  * task execution never spawns further continuations.
@@ -757,10 +757,10 @@ export async function createContinuationTask(
       "Your previous reply in the chat was interrupted by the tool-round budget while you were still working. Finish the job NOW and deliver the final answer to the user.",
       "",
       "The user's original message:",
-      capForGlm(userMessage, 1200),
+      capOutputTokens(userMessage, 1200),
       "",
       "Tool results already collected (authoritative — do NOT repeat these reads):",
-      turn.lastResults ? capForGlm(turn.lastResults, 3500) : "(no tool results recorded)",
+      turn.lastResults ? capOutputTokens(turn.lastResults, 3500) : "(no tool results recorded)",
       receipts,
       "",
       "Rules:",
@@ -833,11 +833,11 @@ export function claimsNovelCompletion(text: string): boolean {
  * corrective round emitted so the caller can create real tasks from them.
  */
 export async function verifyCompletionClaims(options: {
-  baseMessages: GlmMessage[];
+  baseMessages: AiMessage[];
   draftReply: string;
   label: string;
   /** P5-g: attribution scope for the corrective round's ledger rows. */
-  scope?: GlmScope;
+  scope?: AiScope;
 }): Promise<{ text: string; delegations: Delegation[] }> {
   const { baseMessages, draftReply, label } = options;
   if (draftReply.trim().length === 0) {
@@ -863,7 +863,7 @@ export async function verifyCompletionClaims(options: {
     "- Plain text and/or the team-delegate block only — NO novel-tool/novel-write blocks in this reply.",
     "- If your reply above was already fully accurate, restate it (possibly trimmed).",
   ].join("\n");
-  const raw = await glmText(
+  const raw = await teamText(
     [
       ...baseMessages,
       { role: "assistant", content: draftReply },
@@ -937,7 +937,7 @@ const WRITE_REPAIR_INSTRUCTION = [
 
 /**
  * Execute one task: atomic claim (prevents double runs from concurrent
- * pollers) → progress logs → GLM deliverable → persist result → append the
+ * pollers) → progress logs → AI deliverable → persist result → append the
  * exchange to the assignee's conversation → forward a report to the
  * creator's conversation (or the leader's when the user assigned directly).
  */
@@ -957,7 +957,7 @@ export async function runTask(taskId: string): Promise<void> {
   // creation → direct attribution; otherwise the pre-novel session
   // namespace "ai-team:<sessionKey>" (wizard precedent — a create_novel
   // inside the task retro-adopts these rows via the provenance link).
-  const scope: GlmScope = task.novelId
+  const scope: AiScope = task.novelId
     ? { novelId: task.novelId }
     : { correlationId: `ai-team:${task.sessionKey}` };
   const setTask = (data: Prisma.TeamTaskUpdateInput) =>
@@ -990,7 +990,7 @@ export async function runTask(taskId: string): Promise<void> {
               : message.role === "assistant"
                 ? task.assignee.name
                 : "Note";
-          return `${who}: ${capForGlm(message.content, 300)}`;
+          return `${who}: ${capOutputTokens(message.content, 300)}`;
         })
         .join("\n")
         .slice(0, TASK_CONTEXT_CAP);
@@ -1012,7 +1012,7 @@ export async function runTask(taskId: string): Promise<void> {
         ? { ...message, content: `${message.content}\n\n${novelToolPrompt}` }
         : message,
     );
-    const turn = await glmAgentTurn(execMessages, "task", GLM_TIMEOUT_MS, scope);
+    const turn = await teamAgentTurn(execMessages, "task", AI_TIMEOUT_MS, scope);
     // Self-healing: the execution turn burned its tool-round budget while
     // still working. ONE bounded closeout round (resuming from the exact
     // tool-state conversation) finishes the deliverable instead of failing
@@ -1021,7 +1021,7 @@ export async function runTask(taskId: string): Promise<void> {
     let effectiveTurn = turn;
     if (turn.outcome === "tool_exhausted") {
       await addTaskLog(taskId, "工具轮次预算耗尽 — 自动追加一轮收尾执行…", 55);
-      const closeout = await glmAgentTurn(
+      const closeout = await teamAgentTurn(
         [
           ...turn.finalMessages,
           {
@@ -1064,14 +1064,14 @@ export async function runTask(taskId: string): Promise<void> {
       (isNovelWriteTask(task) || claimsNovelCompletion(result))
     ) {
       await addTaskLog(taskId, "No database write detected — requesting persistence repair…", 60);
-      const repair = await glmAgentTurn(
+      const repair = await teamAgentTurn(
         [
           ...execMessages,
           { role: "assistant", content: turn.text ?? "" },
           { role: "user", content: WRITE_REPAIR_INSTRUCTION },
         ],
         "task-write-repair",
-        GLM_TIMEOUT_MS,
+        AI_TIMEOUT_MS,
         scope,
       );
       const repairedClean =
@@ -1099,7 +1099,7 @@ export async function runTask(taskId: string): Promise<void> {
     }
 
     if (result === null || result.length === 0) {
-      throw new Error("GLM did not return a usable result in time.");
+      throw new Error("AI did not return a usable result in time.");
     }
 
     await setTask({ progress: 90 });
@@ -1260,10 +1260,10 @@ function mergeToolLogs(base: string | null, extra: string | null): string | null
   return `${base}\n${extra.split("\n").slice(1).join("\n")}`;
 }
 
-/** Run a batch of tasks sequentially (each GLM call has its own budget). */
+/** Run a batch of tasks sequentially (each AI call has its own budget). */
 export async function runTasksSequentially(taskIds: string[]): Promise<void> {
   for (let index = 0; index < taskIds.length; index++) {
-    // Small stagger between tasks: back-to-back GLM bursts trip the rate
+    // Small stagger between tasks: back-to-back AI bursts trip the rate
     // limiter and waste the whole chain.
     if (index > 0) await sleep(900);
     try {
@@ -1297,9 +1297,9 @@ export async function runLeaderFollowUp(
   sessionKey: string,
   reportContent: string,
   depth: number,
-  /** P5-g: the reporting task's attribution scope, threaded to every GLM
+  /** P5-g: the reporting task's attribution scope, threaded to every AI
    *  call and inherited by any tasks the follow-up delegates. */
-  scope?: GlmScope,
+  scope?: AiScope,
 ): Promise<void> {
   try {
     const leader = await getLeader();
@@ -1349,12 +1349,12 @@ export async function runLeaderFollowUp(
       "Never reply with a bare acknowledgment like “Understood” or “好的”。",
     ].join("\n");
 
-    const followUpMessages: GlmMessage[] = [
+    const followUpMessages: AiMessage[] = [
       { role: "system", content: systemPrompt },
       ...history,
       { role: "user", content: instruction },
     ];
-    const turn = await glmAgentTurn(followUpMessages, "leader-followup", GLM_TIMEOUT_MS, scope);
+    const turn = await teamAgentTurn(followUpMessages, "leader-followup", AI_TIMEOUT_MS, scope);
     if (turn.text === null) {
       // Never die silently: the user just saw a task report land with no
       // reaction. Leave a visible recovery hint instead.
@@ -1387,7 +1387,7 @@ export async function runLeaderFollowUp(
         clean.toLowerCase().includes(member.name.toLowerCase()),
       );
       if (mentioned.length > 0) {
-        const repairRaw = await glmText(
+        const repairRaw = await teamText(
           [
             ...followUpMessages,
             { role: "assistant", content: turn.text },

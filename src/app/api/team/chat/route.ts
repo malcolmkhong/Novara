@@ -10,8 +10,8 @@ import {
   createTasksFromDelegations,
   ensureSeed,
   getOrCreateConversation,
-  glmAgentTurn,
-  glmText,
+  teamAgentTurn,
+  teamText,
   noteTurnCorrections,
   parseDelegations,
   runTasksSequentially,
@@ -21,7 +21,7 @@ import {
   toTaskDto,
   verifyCompletionClaims,
 } from "@/lib/ai-team/server";
-import type { GlmScope, TaskRow } from "@/lib/ai-team/server";
+import type { AiScope, TaskRow } from "@/lib/ai-team/server";
 import { buildDelegationRepairMessages, buildLeaderSystemPrompt, buildMemberChatPrompt } from "@/lib/ai-team/prompts";
 import { buildNovelToolPrompt } from "@/lib/ai-team/novel-tools";
 import type { ChatSendResponse } from "@/lib/ai-team/types";
@@ -93,7 +93,7 @@ export async function GET(req: Request) {
 /**
  * POST /api/team/chat — send a message to an agent (leader or member).
  *
- * The GLM reply is produced first (so failures leave no phantom messages),
+ * The AI reply is produced first (so failures leave no phantom messages),
  * then the user message + cleaned reply are persisted, then any
  * delegations are turned into tasks which run in the background.
  */
@@ -131,7 +131,7 @@ export async function POST(req: Request) {
     // session namespace "ai-team:<sessionKey>" (wizard precedent — a
     // create_novel later retro-adopts these rows via the provenance link).
     const effectiveNovelId = conversation.novelId ?? parsed.data.novelId ?? null;
-    const scope: GlmScope = effectiveNovelId
+    const scope: AiScope = effectiveNovelId
       ? { novelId: effectiveNovelId, ...(parsed.data.model ? { model: parsed.data.model } : {}) }
       : {
           correlationId: `ai-team:${sessionKey}`,
@@ -154,13 +154,13 @@ export async function POST(req: Request) {
     // Members get full read/write tools.
     systemPrompt += `\n\n${await buildNovelToolPrompt({ readonly: agent.isLeader })}`;
 
-    const glmMessages: { role: "system" | "user" | "assistant"; content: string }[] = [
+    const messages: { role: "system" | "user" | "assistant"; content: string }[] = [
       { role: "system", content: systemPrompt },
       ...history,
       { role: "user", content },
     ];
 
-    const turn = await glmAgentTurn(glmMessages, agent.key, undefined, scope);
+    const turn = await teamAgentTurn(messages, agent.key, undefined, scope);
     if (turn.text === null) {
       return NextResponse.json(
         {
@@ -195,9 +195,9 @@ export async function POST(req: Request) {
         clean.toLowerCase().includes(candidate.name.toLowerCase()),
       );
       if (mentioned.length > 0) {
-        const repairRaw = await glmText(
+        const repairRaw = await teamText(
           [
-            ...glmMessages,
+            ...messages,
             { role: "assistant", content: turn.text },
             ...buildDelegationRepairMessages(mentioned.map((candidate) => candidate.name)),
           ],
@@ -222,7 +222,7 @@ export async function POST(req: Request) {
     // emits become real tasks below.
     if (turnAnswered && delegations.length === 0 && clean.length > 0) {
       const verified = await verifyCompletionClaims({
-        baseMessages: glmMessages,
+        baseMessages: messages,
         draftReply: clean,
         label: `${agent.key}-claim-verify`,
         scope,

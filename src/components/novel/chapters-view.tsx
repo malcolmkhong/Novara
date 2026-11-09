@@ -510,7 +510,7 @@ export function ChaptersView({ novel, onDataChanged }: ChaptersViewProps) {
                   >
                     {displayedContent ?? (
                       <span className="text-muted-foreground">
-                        No prose yet. Hit “Write chapter” — GLM drafts it live
+                        No prose yet. Hit “Write chapter” — AI drafts it live
                         from the outline, previous summaries and open
                         foreshadowing.
                       </span>

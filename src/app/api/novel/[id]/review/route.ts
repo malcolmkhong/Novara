@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 
 import { db } from "@/lib/db";
-import { glmJson } from "@/lib/novel/glm";
+import { completeJson } from "@/lib/ai/writing";
 import {
   buildReviewMessages,
   parseReviewResponse,
@@ -98,7 +98,7 @@ export async function POST(req: Request, ctx: RouteContext) {
       content: chapter.content,
     };
 
-    const review = await glmJson(buildReviewMessages(brief), {
+    const review = await completeJson(buildReviewMessages(brief), {
       label: "review",
       parse: parseReviewResponse,
       // P5 — review spend lands on the novel in the ledger.
@@ -109,7 +109,7 @@ export async function POST(req: Request, ctx: RouteContext) {
         {
           success: false,
           error:
-            "GLM could not complete the review in time. Please try again.",
+            "AI could not complete the review in time. Please try again.",
         },
         { status: 502 },
       );

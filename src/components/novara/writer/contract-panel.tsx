@@ -95,7 +95,7 @@ export function ContractPanel({
         onFinalize={() => void setContractLock(true)}
         onReopen={() => void setContractLock(false)}
         onGenerate={async () => {
-          // Phase 9 — AI contract draft: GLM writes the 5-line promise
+          // Phase 9 — AI contract draft: AI writes the 5-line promise
           // document from the novel's genre/logline; the author edits and
           // saves (human-in-the-loop, same as the wizard).
           try {
@@ -161,7 +161,7 @@ function ContractDocument({
   lockBusy?: boolean;
   onFinalize?: () => void;
   onReopen?: () => void;
-  /** Optional AI draft hook (Phase 9) — fills the textarea with GLM output. */
+  /** Optional AI draft hook (Phase 9) — fills the textarea with AI output. */
   onGenerate?: () => Promise<string | null>;
 }) {
   const [draft, setDraft] = useState(value);

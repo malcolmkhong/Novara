@@ -66,7 +66,7 @@ export interface AIDetectSuccess {
   success: true;
   verdict: AIVerdict;
   aiScore: number;
-  glmScore: number;
+  llmScore: number;
   confidence: number;
   summary: string;
   signals: AISignal[];

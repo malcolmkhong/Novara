@@ -25,7 +25,7 @@
 //   enabled, shipped FALSE at rest — the module is inert exactly like
 //   compaction (P2): production enablement is an explicit product decision.
 //   The gate is passed in by the single runtime call site; this module stays
-//   pure (zero GLM, zero I/O, zero config reads).
+//   pure (zero AI, zero I/O, zero config reads).
 //
 // A3 — PINNED-BLOCK TREATMENT (declared): author-pinned refs are NOT an input
 //   to, or output of, this module — they ride the envelope after the snapshot

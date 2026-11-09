@@ -49,8 +49,8 @@ export async function loadStorySnapshot(novelId: string): Promise<StorySnapshotD
         orderBy: { index: "asc" },
         select: { id: true, index: true, title: true, wordCount: true, status: true, content: true },
       },
-      outlineBeats: { orderBy: { index: "asc" }, take: budgets.glm.snapshotOutlineLimit },
-      characters: { orderBy: { createdAt: "asc" }, take: budgets.glm.snapshotCastLimit },
+      outlineBeats: { orderBy: { index: "asc" }, take: budgets.ai.snapshotOutlineLimit },
+      characters: { orderBy: { createdAt: "asc" }, take: budgets.ai.snapshotCastLimit },
       contract: true,
       storylines: {
         where: { status: { in: ["active", "dormant"] } },
@@ -59,7 +59,7 @@ export async function loadStorySnapshot(novelId: string): Promise<StorySnapshotD
       },
       timelineEntries: { orderBy: { order: "asc" }, take: 20 },
       characterArcs: { orderBy: [{ characterName: "asc" }, { order: "asc" }], take: 24 },
-      worldEntries: { orderBy: { createdAt: "asc" }, take: budgets.glm.snapshotCastLimit },
+      worldEntries: { orderBy: { createdAt: "asc" }, take: budgets.ai.snapshotCastLimit },
       foreshadows: {
         where: { status: { in: ["open", "advanced"] } },
         orderBy: { createdAt: "asc" },
@@ -163,7 +163,7 @@ export async function loadStorySnapshot(novelId: string): Promise<StorySnapshotD
   };
 }
 
-/** Renders the snapshot as the compact text block fed to GLM. */
+/** Renders the snapshot as the compact text block fed to AI. */
 export function renderSnapshot(s: StorySnapshotData): string {
   const lines: string[] = [];
   lines.push(`NOVEL: ${s.novel.title}${s.novel.genre ? ` (${s.novel.genre})` : ""}`);

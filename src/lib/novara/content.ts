@@ -48,7 +48,7 @@ const skillsRegistrySchema = z.object({
 });
 
 export const budgetsSchema = z.object({
-  glm: z.object({
+  ai: z.object({
     timeoutMs: z.number().int().positive(),
     routeMaxDuration: z.number().int().positive(),
     maxTurns: z.number().int().min(1).max(8),
@@ -62,7 +62,7 @@ export const budgetsSchema = z.object({
     snapshotOutlineLimit: z.number().int().min(1),
     snapshotFactsLimit: z.number().int().min(1),
     repairRounds: z.number().int().min(0).max(4),
-    // Phase 6: transient-error retry + global GLM concurrency semaphore.
+    // Phase 6: transient-error retry + global AI concurrency semaphore.
     retryAttempts: z.number().int().min(0).max(5),
     retryBackoffMs: z.number().int().min(250),
     maxConcurrent: z.number().int().min(1).max(8),
@@ -123,7 +123,7 @@ export const budgetsSchema = z.object({
 export type Budgets = z.infer<typeof budgetsSchema>;
 
 export const DEFAULT_BUDGETS: Budgets = {
-  glm: {
+  ai: {
     timeoutMs: 60_000,
     routeMaxDuration: 90,
     maxTurns: 3,
@@ -136,9 +136,9 @@ export const DEFAULT_BUDGETS: Budgets = {
     snapshotOutlineLimit: 40,
     snapshotFactsLimit: 20,
     repairRounds: 2,
-    retryAttempts: 2,      // Phase 6: transient-error retries per GLM call
+    retryAttempts: 2,      // Phase 6: transient-error retries per AI call
     retryBackoffMs: 2_500, // exponential backoff base (2.5s → 5s)
-    maxConcurrent: 2,      // global in-flight GLM calls
+    maxConcurrent: 2,      // global in-flight AI calls
   },
   qc: {
     revisionRounds: 2,     // Phase 6 E2: repair cycles per chapter (hard budget)

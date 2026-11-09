@@ -12,12 +12,12 @@
 //       "rate-limit"), attempt-2 measured (tokens = billed truth). Retries
 //       are separate rows.
 //   FB. Ultimately-failed call (F2): every attempt 429s ⇒ three failed rows,
-//       zero measured rows, glmChat throws the last error.
+//       zero measured rows, chatCompletion throws the last error.
 //   FC. Completion WITHOUT a usage object (F4): rowless — token counts are
 //       unknowable and a 0-token row would understate. Measured-only intact.
 //   FD. Billed-truth completeness fix: completion WITH usage but EMPTY
 //       content ⇒ ONE measured row (the provider billed it) even though
-//       glmChat still throws empty-response. (Pre-P5-b this call leaked.)
+//       chatCompletion still throws empty-response. (Pre-P5-b this call leaked.)
 //   FE. Pre-send failure (F3): ZAI.create() throws ⇒ NO row — the provider
 //       was never reached.
 //   FF. Timeout shape (F1): withTimeout fires ⇒ failed rows, errorKind
@@ -54,7 +54,7 @@ import { PrismaClient } from "@prisma/client";
 const db = new PrismaClient();
 const db2 = new PrismaClient(); // the "restart" client (RS)
 
-const SURFACE_F = "p5b-verify-f"; // mocked glmChat scenarios
+const SURFACE_F = "p5b-verify-f"; // mocked chatCompletion scenarios
 const SURFACE_N = "p5b-verify-n"; // novel-scope route fixture
 const CORR_FA = "p5b-verify-fa-retry";
 const CORR_FB = "p5b-verify-fb-allfail";
@@ -113,7 +113,7 @@ mock.module("z-ai-web-dev-sdk", () => ({
   },
 }));
 
-const { glmChat } = await import("../src/lib/novara/glm");
+const { chatCompletion } = await import("../src/lib/ai/chat");
 
 const completionOf = (content: string, usage?: Record<string, number> | null) => ({
   choices: [{ message: { content } }],
@@ -152,7 +152,7 @@ async function main() {
     if (faCalls === 1) throw new Error("429 Too Many Requests — slow down");
     return completionOf("retry-ok", OK_USAGE);
   };
-  const fa = await glmChat({
+  const fa = await chatCompletion({
     messages: [{ role: "user", content: "fa" }],
     tag: "p5b FA",
     surface: SURFACE_F,
@@ -191,7 +191,7 @@ async function main() {
   };
   let fbThrew = "";
   try {
-    await glmChat({
+    await chatCompletion({
       messages: [{ role: "user", content: "fb" }],
       tag: "p5b FB",
       surface: SURFACE_F,
@@ -214,7 +214,7 @@ async function main() {
 
   // ---------- FC: completion without usage (F4 — rowless) ----------
   behavior = async () => completionOf("prose without usage", null);
-  const fc = await glmChat({
+  const fc = await chatCompletion({
     messages: [{ role: "user", content: "fc" }],
     tag: "p5b FC",
     surface: SURFACE_F,
@@ -229,7 +229,7 @@ async function main() {
   );
 
   // ---------- FD: billed-truth completeness (empty content WITH usage) ----------
-  // NOTE: glmChat's loop retries EVERY error (backoff is transient-only —
+  // NOTE: chatCompletion's loop retries EVERY error (backoff is transient-only —
   // pre-existing P4 semantics): the non-transient empty-content error makes
   // 3 INSTANT attempts. Each attempt returned usage {77,0,77} — so Policy F
   // lands ONE measured row PER ATTEMPT (3 rows). Pre-P5-b this shape leaked
@@ -237,7 +237,7 @@ async function main() {
   behavior = async () => completionOf("", { prompt_tokens: 77, completion_tokens: 0, total_tokens: 77 });
   let fdThrew = "";
   try {
-    await glmChat({
+    await chatCompletion({
       messages: [{ role: "user", content: "fd" }],
       tag: "p5b FD",
       surface: SURFACE_F,
@@ -262,7 +262,7 @@ async function main() {
   initFailure = new Error("SDK init failed (p5b scenario)");
   let feThrew = "";
   try {
-    await glmChat({
+    await chatCompletion({
       messages: [{ role: "user", content: "fe" }],
       tag: "p5b FE",
       surface: SURFACE_F,
@@ -284,7 +284,7 @@ async function main() {
   behavior = () => new Promise(() => undefined); // never resolves
   let ffThrew = "";
   try {
-    await glmChat({
+    await chatCompletion({
       messages: [{ role: "user", content: "ff" }],
       tag: "p5b FF",
       timeoutMs: 60,
@@ -480,7 +480,7 @@ async function main() {
   );
   const glmSource = readFileSync("src/lib/novara/glm.ts", "utf8");
   check(
-    "SP glmChat keeps the dual-feed source pin (emitUsageEvent in runtime + recordUsageCall in glm) and records failed attempts",
+    "SP chatCompletion keeps the dual-feed source pin (emitUsageEvent in runtime + recordUsageCall in glm) and records failed attempts",
     glmSource.includes('status: "failed"') && glmSource.includes("recordUsageCall({"),
     "runtime.ts + glm.ts"
   );

@@ -17,7 +17,7 @@ function safeParse(raw: string | null): unknown {
  * GET /api/team/turns?limit=50&outcome=…&agentKey=…
  *
  * Turn telemetry feed — the observability layer of the self-healing loop.
- * Lists recent glmAgentTurn records (outcome classification, per-tool-call
+ * Lists recent teamAgentTurn records (outcome classification, per-tool-call
  * results, corrections fired) plus an outcome histogram so problem rates
  * (tool_exhausted / model_error) are measurable over time.
  */

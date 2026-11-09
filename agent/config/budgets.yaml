@@ -1,16 +1,16 @@
 # ---------------------------------------------------------------------------
-# Novara AI — budgets.yaml
+# Novara AI â€” budgets.yaml
 # Single source of truth for every runtime magic number (development plan
-# §2.10, Phase 1 leftover: QUOTA 300/4000, GLM 60s, context caps… collected).
+# Â§2.10, Phase 1 leftover: QUOTA 300/4000, GLM 60s, context capsâ€¦ collected).
 # Loaded by src/lib/novara/content.ts with hard-coded defaults as fallback;
 # team.yaml / skills.yaml are fail-fast (required), budgets degrade gracefully.
 # ---------------------------------------------------------------------------
 
-glm:
+ai:
   timeoutMs: 60000            # per-call GLM timeout (matches withTimeout usage)
   routeMaxDuration: 90        # export const maxDuration on AI route handlers
-  maxTurns: 3                 # bounded tool loop per task (Think→Tool→Observe ≤3)
-  maxActionsPerTurn: 3        # novel-tool blocks per turn (plan §7.1)
+  maxTurns: 3                 # bounded tool loop per task (Thinkâ†’Toolâ†’Observe â‰¤3)
+  maxActionsPerTurn: 3        # novel-tool blocks per turn (plan Â§7.1)
   planMaxTasks: 44            # Atlas may not plan more than this (10-chapter QC runs need ~3 orders/chapter)
   leaderMaxTurns: 22          # Phase 5: Atlas delegate-loop turns per run (raised for multi-chapter runs)
   chapterContextChars: 24000  # max chapter text fed to GLM (review/sediment)
@@ -20,16 +20,16 @@ glm:
   snapshotFactsLimit: 20      # story facts in the story snapshot
   repairRounds: 2             # write-verification repair rounds per task
   retryAttempts: 2            # Phase 6: retries for transient GLM errors (429/5xx/timeout)
-  retryBackoffMs: 2500        # Phase 6: exponential backoff base (2.5s → 5s)
+  retryBackoffMs: 2500        # Phase 6: exponential backoff base (2.5s â†’ 5s)
   maxConcurrent: 2            # Phase 6: global in-flight GLM call semaphore
 
 qc:
-  revisionRounds: 2           # Phase 6 E2: review→repair→re-review cycles per chapter (hard budget)
+  revisionRounds: 2           # Phase 6 E2: reviewâ†’repairâ†’re-review cycles per chapter (hard budget)
   approvalWaitMs: 1800000     # gate wait ceiling (30 min) before a gate times out
 
 draft:
-  quotaMinWords: 300          # QUOTA_MIN — chapter quota clamp floor
-  quotaMaxWords: 4000         # QUOTA_MAX — chapter quota clamp ceiling
+  quotaMinWords: 300          # QUOTA_MIN â€” chapter quota clamp floor
+  quotaMaxWords: 4000         # QUOTA_MAX â€” chapter quota clamp ceiling
   avgChapterWordsSignal: 200  # min avg chapter length to trust as quota signal
   fallbackChapterWords: [500, 800]  # EN fallback range without signals
   appendFloorWords: 200       # append mode: minimum additional words
@@ -37,7 +37,7 @@ draft:
 sse:
   snapshotIntervalMs: 1200    # server: DB poll interval while streaming
   heartbeatMs: 15000          # server: SSE comment keepalive
-  staleRunMs: 900000          # 15 min without events → heal marks failed
+  staleRunMs: 900000          # 15 min without events â†’ heal marks failed
 
 client:
   fallbackPollMs: 2000        # browser polling fallback when SSE dies
@@ -52,47 +52,47 @@ memory:
   itemContentChars: 240       # per-item clip inside the block
   digestWindow: 3             # recent chapter digests injected verbatim
   digestSummaryChars: 500     # per-digest clip
-  recencyHalfLifeChapters: 12 # chapters until an item's recency ≈ 0.75
-  staleLoopChapters: 10       # doctor: open loop untouched for N chapters → warn
+  recencyHalfLifeChapters: 12 # chapters until an item's recency â‰ˆ 0.75
+  staleLoopChapters: 10       # doctor: open loop untouched for N chapters â†’ warn
 
-# Phase 2 — context compaction (agent-ctx/p2-design.md). Eligibility keys off
-# THIS section only — never off contextSpec (which decides system-note wire
+# Phase 2 â€” context compaction (agent-ctx/p2-design.md). Eligibility keys off
+# THIS section only â€” never off contextSpec (which decides system-note wire
 # delivery exclusively). Wiring scope (P2-c, declared): the LEADER loop is the
 # only consumer; the member loop stays deliberately inert (member
 # conversations are never replayed and never approach the trigger).
 contextCompaction:
-  # SHIPPED STATE (P2-c final): enabled=false — the P1×P2 seam, the
+  # SHIPPED STATE (P2-c final): enabled=false â€” the P1Ã—P2 seam, the
   # counterfactual harnesses and the P2-c probe run have proven the machinery,
   # but turning compaction on for real production runs is an explicit product
   # decision, not a phase side-effect. The P2-c report carries the recommended
   # enablement pack (measured, not predicted) for when that decision is made.
   enabled: false
-  # REACHABLE default: the §8-predicted conversation-section ceiling of a
-  # full-budget 22-turn leader run is ~9–10K tok, so 24K could never fire.
+  # REACHABLE default: the Â§8-predicted conversation-section ceiling of a
+  # full-budget 22-turn leader run is ~9â€“10K tok, so 24K could never fire.
   # 6000 fires on busy leader runs (measured per-call conversation totals in
   # the P2-b report); P2-c may tune further. Validated by measurement, never
   # hand math.
-  triggerTokens: 6000   # compact when the METERED ACTIVE CONTEXT (the meter's total `used` snapshot — the full next-call wire) reaches this
+  triggerTokens: 6000   # compact when the METERED ACTIVE CONTEXT (the meter's total `used` snapshot â€” the full next-call wire) reaches this
   tailTurns: 8          # verbatim reply+tool_results turns kept after the cut
   minCompactableRows: 12 # never compact below this many coverable rows (absorption must pay for itself)
   # P2-c PROBE PACK (temporary, already restored after the probe run):
   #   enabled: true, triggerTokens: 4000, tailTurns: 2, minCompactableRows: 6
-  # — the only lowered-threshold values the one live flash run ever saw; the
+  # â€” the only lowered-threshold values the one live flash run ever saw; the
   # harness asserts the shipped file never carries them at rest.
 
-# Phase 4 — member snapshot slicing (agent-ctx/phase4-proposal.md, O1 + A4).
+# Phase 4 â€” member snapshot slicing (agent-ctx/phase4-proposal.md, O1 + A4).
 # Gated HERE. When false, every member envelope carries the FULL story
 # snapshot byte-identical to pre-P4. The declared per-shape slice map lives
 # in src/lib/agent/snapshot-slice.ts with its A2 conservative-by-default
 # rule + deterministic brief-reference guard. ENABLED since P5-e (user
-# ruling R-1, 2026-11-06) — the first optimization that changes
+# ruling R-1, 2026-11-06) â€” the first optimization that changes
 # model-visible bytes; see the section below for the rollback contract.
 contextSlicing:
-  # SHIPPED STATE (P5-e, user ruling R-1 of 2026-11-06): enabled=true —
+  # SHIPPED STATE (P5-e, user ruling R-1 of 2026-11-06): enabled=true â€”
   # slicing is ON for all agent member wires. Rollback is ONE flip of this
-  # key to false (no data migration, no schema coupling — the ledger stores
+  # key to false (no data migration, no schema coupling â€” the ledger stores
   # request-side modelId + tokens and is indifferent to wire shape); a
   # rollback stage re-runs the regression eighth-set and re-probes the
-  # panel/central view (phase5-gate-p5d.md §4). Validated by the P5-e
-  # free-flash live-fire (agent-ctx/phase5-stages.md §P5-E).
+  # panel/central view (phase5-gate-p5d.md Â§4). Validated by the P5-e
+  # free-flash live-fire (agent-ctx/phase5-stages.md Â§P5-E).
   enabled: true

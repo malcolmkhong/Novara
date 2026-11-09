@@ -8,7 +8,7 @@
 //     round primary send).
 // P1: typing "@" opens a mention-style context search over the loaded novel
 //     tree (chapters, characters, world entries, outline beats, volumes).
-// P2: the GLM badge becomes the ModelPicker — registry-driven model list
+// P2: the AI badge becomes the ModelPicker — registry-driven model list
 //     plus per-model thinking levels; the selection rides the next run.
 // P3: typing "/" as the first character opens the agent command menu — six
 //     goal templates (/next /write /review /outline /recap /doctor) that
@@ -550,6 +550,7 @@ export function PromptBox({
           <ContextUsageButton
             novelId={novelId}
             modelId={modelSelection.modelId}
+            thinkingLevel={modelSelection.thinkingLevel}
             events={usageEvents}
           />
         </div>

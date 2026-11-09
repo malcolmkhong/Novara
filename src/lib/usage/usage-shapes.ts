@@ -56,7 +56,7 @@ export function extractRealUsage(completion: unknown): RealUsage | null {
  * Policy F error taxonomy for status:"failed" rows. The kind classifies what
  * our boundary observed; it never claims what the provider billed.
  */
-export type GlmFailureKind =
+export type AiFailureKind =
   | "timeout"
   | "rate-limit"
   | "server-error"
@@ -71,7 +71,7 @@ const NETWORK_RE =
   /econn|enet|ehost|fetch failed|network|socket|premature close|dns|reset/i;
 const ABORT_RE = /abort/i;
 
-export function classifyGlmFailure(error: unknown): GlmFailureKind {
+export function classifyAiFailure(error: unknown): AiFailureKind {
   const message =
     error instanceof Error
       ? error.message

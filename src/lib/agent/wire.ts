@@ -7,7 +7,7 @@
 // that — the byte-identity guarantee asserted by scripts/verify-p2-b.ts.
 //
 // Binding input rule (agent-ctx/p2-design.md §2.0): every summary row is a
-// DETERMINISTIC, ZERO-GLM projection recomputed from the raw canonical
+// DETERMINISTIC, ZERO-AI projection recomputed from the raw canonical
 // AgentMessage rows over [fromSeq..toSeq] ONLY. Prior summary text is NEVER
 // an input — the superseded row exists solely to define the prior cut and as
 // the audit trail of cuts.
@@ -355,7 +355,7 @@ export interface GuardVerdict {
 
 /**
  * MONOTONE COST GUARD (design §2.3.1): an ENABLED compaction must never make
- * the NEXT model call more expensive than not compacting. Zero-GLM: both
+ * the NEXT model call more expensive than not compacting. Zero-AI: both
  * candidate next-call wires are assembled in memory and compared with the
  * meter's estimator —
  *   baseline  = the wire that would be sent if this cycle SKIPS (the current
@@ -367,7 +367,7 @@ export interface GuardVerdict {
  *               projection + its verbatim tail + live injections).
  * Adopt only if candidate < baseline − slack. Otherwise the caller skips
  * LOUDLY (telemetry event, NO row written) and the live wire stays untouched.
- * Pure + deterministic: same inputs ⇒ same verdict, zero GLM, no I/O.
+ * Pure + deterministic: same inputs ⇒ same verdict, zero AI, no I/O.
  */
 export function monotoneGuardCheck(params: {
   baselineMessages: WireMessage[];

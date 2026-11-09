@@ -97,7 +97,7 @@ export function QcPanel() {
                 </Badge>
                 <span className="text-xs text-muted-foreground">
                   {report.totalMs} ms · budget: {report.budgets.revisionRounds} repair
-                  round(s)/chapter · glm retries {report.budgets.glmRetries} · concurrency{" "}
+                  round(s)/chapter · ai retries {report.budgets.aiRetries} · concurrency{" "}
                   {report.budgets.maxConcurrent}
                 </span>
               </>

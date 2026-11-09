@@ -62,7 +62,7 @@ export interface AgentRun {
 }
 
 // ---------------------------------------------------------------------------
-// Context usage (P2 — what one GLM call actually sends, per section)
+// Context usage (P2 — what one AI call actually sends, per section)
 // ---------------------------------------------------------------------------
 
 /**
@@ -184,7 +184,7 @@ export type AgentEventKind =
   | "message"
   | "error"
   | "approval"
-  /** P2 — per-GLM-call Context Usage snapshot (payload: ContextUsage). */
+  /** P2 — per-AI-call Context Usage snapshot (payload: ContextUsage). */
   | "usage";
 
 export interface AgentEvent {

@@ -10,7 +10,7 @@
 import { db } from "@/lib/db";
 
 import { emitNovelChange } from "./events";
-import { glmJson } from "./glm";
+import { completeJson } from "@/lib/ai/writing";
 import {
   buildReviewMessages,
   buildSedimentMessages,
@@ -104,7 +104,7 @@ async function buildReviewBrief(
  *
  * `force: false` (the AI-team pipeline) reuses an existing review when one
  * is present; `force: true` (the studio review button) always re-reviews.
- * Returns null when the chapter has no prose or GLM could not produce a
+ * Returns null when the chapter has no prose or AI could not produce a
  * usable review — callers must treat "no review" as "cannot finalize".
  */
 export async function ensureChapterReview(
@@ -124,7 +124,7 @@ export async function ensureChapterReview(
     if (parsed) return { review: parsed, chapterId: ctx.chapterId };
   }
 
-  const review = await glmJson(buildReviewMessages(ctx.brief), {
+  const review = await completeJson(buildReviewMessages(ctx.brief), {
     label: "chapter-review",
     parse: parseReviewResponse,
     // P5 — review spend lands on the novel in the ledger.
@@ -223,7 +223,7 @@ export async function applySedimentResult(
 /**
  * Sediment a chapter into memory and finalize it (status=final).
  * The E2 gate must already have passed — callers' responsibility.
- * Returns null when the chapter has no prose or GLM failed; the chapter
+ * Returns null when the chapter has no prose or AI failed; the chapter
  * stays untouched (drafted) in that case.
  */
 export async function sedimentChapter(
@@ -239,7 +239,7 @@ export async function sedimentChapter(
     orderBy: { plantedAt: "asc" },
   });
 
-  const result = await glmJson<SedimentResult>(
+  const result = await completeJson<SedimentResult>(
     buildSedimentMessages(
       chapterNumber,
       chapter.content,

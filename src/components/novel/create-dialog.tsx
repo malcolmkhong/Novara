@@ -30,7 +30,7 @@ import { NOVEL_GENRES } from "@/lib/novel/types";
 const CHAPTER_OPTIONS = [12, 24, 36, 48, 96] as const;
 const VOLUME_OPTIONS = [2, 3, 4, 5, 6] as const;
 
-/** Rotating stage hints shown while GLM designs the book skeleton. */
+/** Rotating stage hints shown while AI designs the book skeleton. */
 const STAGE_HINTS = [
   "Distilling the story core (logline & central conflict)…",
   "Designing the world, power system & golden finger…",
@@ -120,7 +120,7 @@ export function CreateDialog({ onCreated }: CreateDialogProps) {
             Start a new novel
           </DialogTitle>
           <DialogDescription>
-            GLM designs the story bible (world, power system, golden finger,
+            AI designs the story bible (world, power system, golden finger,
             cast) and partitions the master outline into volumes — the
             webnovel-writer init step.
           </DialogDescription>
@@ -149,7 +149,7 @@ export function CreateDialog({ onCreated }: CreateDialogProps) {
                 id="novel-title"
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
-                placeholder="Leave empty and GLM names it"
+                placeholder="Leave empty and AI names it"
                 maxLength={60}
               />
             </div>
@@ -255,7 +255,7 @@ export function CreateDialog({ onCreated }: CreateDialogProps) {
             ) : (
               <Sparkles aria-hidden="true" />
             )}
-            {submitting ? "Designing…" : "Generate with GLM"}
+            {submitting ? "Designing…" : "Generate with AI"}
           </Button>
         </DialogFooter>
       </DialogContent>

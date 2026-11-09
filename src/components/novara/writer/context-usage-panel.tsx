@@ -5,7 +5,7 @@
 //
 // Real-time token accounting, three layers of transparency:
 //
-//   1. THIS CALL — what the latest GLM call sent, section by section:
+//   1. THIS CALL — what the latest AI call sent, section by section:
 //      System Prompt · Tools · Skills · Novel Context · Conversation · MCP.
 //      P4: the TOTAL is the provider's billed prompt_tokens (measured, hard
 //      truth); the section split is the local estimate scaled proportionally
@@ -17,7 +17,7 @@
 //      honestly as "estimated" in the label.
 //
 //   3. ALL AI SURFACES (this account) — GET /api/usage/ledger: every measured
-//      GLM call the PERSISTED ledger holds since tracking began (Phase 5),
+//      AI call the PERSISTED ledger holds since tracking began (Phase 5),
 //      grouped by surface (agent / draft / review / sediment / studio / detect /
 //      generate / wizard / ai-team). Token transparency doesn't stop at the run
 //      boundary. P5-b (Ruling 2): this is the ONE source of truth — the
@@ -25,7 +25,7 @@
 //      (rows before Phase 5 do not exist) renders from the persisted `since`.
 //
 // Data sources, in priority order:
-//   1. The displayed run's `usage` events — measured per GLM call, streamed
+//   1. The displayed run's `usage` events — measured per AI call, streamed
 //      via the existing SSE detail snapshots (live during runs, correct when
 //      browsing history).
 //   2. GET /api/agent/context-estimate — an honest pre-run estimate assembled
@@ -141,11 +141,14 @@ function summarizeRun(events: AgentEvent[]): RunStats {
 export function ContextUsageButton({
   novelId,
   modelId,
+  thinkingLevel = "low",
   events,
 }: {
   novelId: string;
   /** The composer's selected model — drives the pre-run estimate window. */
   modelId: string;
+  /** The composer's selected thinking level — forwarded to the estimate route. */
+  thinkingLevel?: string;
   /** The displayed run's events (latest `usage` wins). */
   events: AgentEvent[];
 }) {
@@ -163,7 +166,7 @@ export function ContextUsageButton({
 
   const live = useMemo(() => latestContextUsage(events), [events]);
   const runStats = useMemo(() => summarizeRun(events), [events]);
-  const estimateKey = `${novelId}:${modelId}`;
+  const estimateKey = `${novelId}:${modelId}:${thinkingLevel}`;
   const estimate = estimateState.key === estimateKey ? estimateState.usage : null;
 
   // Pre-run estimate — fetched only while the panel has no measured data.
@@ -171,7 +174,7 @@ export function ContextUsageButton({
     if (live || !open || estimateState.key === estimateKey) return;
     let alive = true;
     fetch(
-      `/api/agent/context-estimate?novelId=${encodeURIComponent(novelId)}&modelId=${encodeURIComponent(modelId)}`,
+      `/api/agent/context-estimate?novelId=${encodeURIComponent(novelId)}&modelId=${encodeURIComponent(modelId)}&thinkingLevel=${encodeURIComponent(thinkingLevel)}`,
       { cache: "no-store" }
     )
       .then((res) => res.json())
@@ -185,7 +188,7 @@ export function ContextUsageButton({
     return () => {
       alive = false;
     };
-  }, [live, open, estimateKey, estimateState.key, novelId, modelId]);
+  }, [live, open, estimateKey, estimateState.key, novelId, modelId, thinkingLevel]);
 
   // App-wide persisted ledger (P5-b swap) — fetched when the panel opens.
   useEffect(() => {

@@ -4,7 +4,7 @@
 // Measures what ONE agent conversation actually sends to the model, section
 // by section, so the composer's Context Usage panel shows real numbers
 // instead of guesses. One meter per conversation (leader loop or member
-// task); the runtime snapshots it before every GLM call and emits the result
+// task); the runtime snapshots it before every AI call and emits the result
 // as a `usage` event — which rides the existing SSE stream to the panel.
 //
 // Sections (the honest map of THIS system — there is no MCP):
@@ -19,7 +19,7 @@
 //                "do we use MCP?" with a visible 0% instead of silence.
 //
 // Token counting: gpt-tokenizer cl100k for latin text, 0.7 tokens/CJK char
-// for Chinese (cl100k over-counts CJK ~1.4×; GLM's tokenizer compresses
+// for Chinese (cl100k over-counts CJK ~1.4×; AI's tokenizer compresses
 // Chinese to roughly 0.6–0.7 tok/char). It is an estimate by nature — the
 // panel says so.
 // ---------------------------------------------------------------------------
@@ -91,7 +91,7 @@ export interface ContextMeter {
    * rides every wire regardless of compaction (design §2.0.1).
    */
   addConversation(text: string, tag?: "tail" | "shared"): void;
-  /** Current usage snapshot — what the NEXT glm call would send. */
+  /** Current usage snapshot — what the NEXT ai call would send. */
   snapshot(actor: string): ContextUsage;
 }
 

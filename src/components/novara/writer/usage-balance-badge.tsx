@@ -7,7 +7,7 @@
 // header (P5-b browser census: the badge is the ONLY session-bearing element
 // present on every spend-producing surface — writer dashboard, novel
 // workspace, and the wizard entry behind it; marketing routes produce zero
-// GLM spend and carry no badge).
+// AI spend and carry no badge).
 //
 // Sections, all from GET /api/usage/ledger (Ruling 2: the ONE source of
 // truth — the in-memory process ledger was deleted outright in P5-b):

@@ -13,14 +13,14 @@
  *            本章目标）+ 可执行建议。
  *
  * Wire format: repetitive structures use PIPE-DELIMITED strings
- * ("name|role|desire|flaw|arc") instead of arrays of objects. GLM corrupts
+ * ("name|role|desire|flaw|arc") instead of arrays of objects. AI corrupts
  * repeated JSON keys under long outputs ({"name苏晴"} losing `":"`), and the
  * pipe format removes that failure mode while cutting output tokens ~35%.
- * Scalar fields stay as plain JSON strings. GLM output is UNTRUSTED: every
+ * Scalar fields stay as plain JSON strings. AI output is UNTRUSTED: every
  * parser validates shape defensively.
  */
 import { extractJson } from "@/lib/ai-heuristics";
-import { asString, asStringArray, clampInt, repairJson, type GlmMessage } from "./glm";
+import { asString, asStringArray, clampInt, repairJson, type AiMessage } from "@/lib/ai/writing";
 import type {
   ChapterOutline,
   ChapterReview,
@@ -44,7 +44,7 @@ function splitRow(row: string): string[] {
 const RANGE_RE = /(\d+)\s*[-–—~至]\s*(\d+)/;
 
 /**
- * Parse a loose JSON object out of a GLM reply: direct parse first (never
+ * Parse a loose JSON object out of a AI reply: direct parse first (never
  * risk repairing valid JSON), repairJson fallback for known corruption
  * patterns (merged keys, trailing commas, smart quotes).
  */
@@ -133,7 +133,7 @@ export interface InitInput {
   platform?: string;
 }
 
-export function buildInitMessages(input: InitInput): GlmMessage[] {
+export function buildInitMessages(input: InitInput): AiMessage[] {
   const system = `你是资深网文主编兼故事架构师，擅长为长篇连载设计"能写几百章不崩"的骨架。设计原则：
 1. 设定服务于冲突：世界观、力量体系、金手指都要能持续产生矛盾与爽点，而不是名词堆砌。
 2. 金手指必须有清晰的核心功能、触发条件、代价/限制、反制方式与升级路径。
@@ -312,7 +312,7 @@ export interface PlanContext {
   openForeshadows: ForeshadowRef[];
 }
 
-export function buildPlanMessages(ctx: PlanContext): GlmMessage[] {
+export function buildPlanMessages(ctx: PlanContext): AiMessage[] {
   const system = `你是网文结构编辑，负责把一卷从"卷级目标"细化为可执行的节拍表与章纲。硬规则：
 1. 危机链至少 3 次递进（每档压力明显高于上一档）。
 2. 必须安排中段反转；确无反转可在描述中写明理由。
@@ -449,7 +449,7 @@ export interface WriteBrief {
   charStates: { name: string; change: string }[];
 }
 
-export function buildWriteMessages(brief: WriteBrief): GlmMessage[] {
+export function buildWriteMessages(brief: WriteBrief): AiMessage[] {
   const system = `你是签约网文作者的代笔。按下面给出的【写作任务书】写本章正文。硬规则：
 1. 只输出正文本身：不用章节标题、不用序号、不用 markdown、不用任何括号说明或占位符。
 2. 开头三句内把读者拉进具体情境（场景/动作/对话），禁止以天气、历史、设定综述开头。
@@ -508,7 +508,7 @@ export function buildSedimentMessages(
   chapterNumber: number,
   content: string,
   openForeshadows: ForeshadowRef[],
-): GlmMessage[] {
+): AiMessage[] {
   const system = `你是网文项目的事实记录员（memory keeper）。读完本章正文，提取写后续章时必须记住的信息。要求：
 1. summary：80-120字摘要，写清关键转折与结果，不剧透未来。
 2. facts：新确立的事实（获得物品/能力变化/身世揭示/重要承诺/世界规则新信息），每条25字内，最多6条；没有就给空数组。
@@ -610,7 +610,7 @@ export interface ReviewBrief {
   content: string;
 }
 
-export function buildReviewMessages(brief: ReviewBrief): GlmMessage[] {
+export function buildReviewMessages(brief: ReviewBrief): AiMessage[] {
   const system = `你是严格的网文审稿人。对给出的章节正文做结构化审查。审查维度（6条，按顺序）：钩子强度（开头3句）、节奏（场景推进与信息密度）、人物一致性（是否符合欲望/缺陷/当前状态）、对话自然度、伏笔处理（该推进的是否推进、是否误回收）、文笔（show don't tell、是否有AI腔）。
 判为 blocking 的标准：与设定/前情明显矛盾；未完成本章目标；遗漏全部必须节点；正文含占位符或半截。轻微问题一律放 suggestions。
 严格输出 JSON 对象（无 markdown 代码块、无解释），列表用字符串数组（内部用竖线|），不要用对象数组。结构：

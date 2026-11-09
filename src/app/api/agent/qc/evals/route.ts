@@ -14,8 +14,8 @@ export async function GET() {
     ...report,
     budgets: {
       revisionRounds: budgets.qc.revisionRounds,
-      glmRetries: budgets.glm.retryAttempts,
-      maxConcurrent: budgets.glm.maxConcurrent,
+      aiRetries: budgets.ai.retryAttempts,
+      maxConcurrent: budgets.ai.maxConcurrent,
     },
   });
 }

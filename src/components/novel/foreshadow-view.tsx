@@ -65,7 +65,7 @@ export function ForeshadowViewPanel({ novel }: { novel: NovelDetail }) {
           </CardDescription>
         </CardHeader>
         <CardContent className="text-sm text-muted-foreground">
-          Loops appear here automatically when chapters are sedimented: GLM
+          Loops appear here automatically when chapters are sedimented: AI
           registers planted hooks as “Open”, tracks advances, and closes them
           as “Paid” — so chapter 80 still remembers chapter 3.
         </CardContent>

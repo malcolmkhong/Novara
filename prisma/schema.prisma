@@ -9,8 +9,9 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
 }
 
 // Reserved for the future authentication system (NextAuth-ready).
@@ -532,8 +533,8 @@ model AgentRun {
   status   String   @default("running")
   // P2 — model registry id + thinking level this run executes with
   // (validated against src/lib/novara/models.ts at creation AND execution)
-  modelId        String @default("glm-4.6")
-  thinkingLevel  String @default("off")
+  modelId        String @default("gemini:fast")
+  thinkingLevel  String @default("low")
   // RunFinalReport JSON (reported vs verified numbers) — null until finished
   finalReport String?
   // PinnedRef[] JSON — author-pinned context refs resolved at execution time

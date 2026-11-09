@@ -1,15 +1,15 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import ZAI from "z-ai-web-dev-sdk";
-import { classifyGlmFailure, extractRealUsage } from "@/lib/usage/usage-shapes";
+import ZAI from "@/lib/ai/router";
+import { classifyAiFailure, extractRealUsage } from "@/lib/usage/usage-shapes";
 import { recordUsageCall } from "@/lib/usage/usage-store";
 import {
-  capForGlm,
+  capOutputTokens,
   clamp,
   computeFictionHeuristics,
   computeHeuristics,
   extractJson,
-  GLM_TIMEOUT_MS,
+  AI_TIMEOUT_MS,
   type HeuristicResult,
   withTimeout,
 } from "@/lib/ai-heuristics";
@@ -30,7 +30,7 @@ const AI_SYSTEM_PROMPT = `You are an expert AI-content forensic analyst. Determi
 const NOVEL_SYSTEM_PROMPT = `You are a fiction-forensics expert who detects AI-generated NOVEL PROSE. Judge the text as creative fiction — narrative, scene, or dialogue — not as an essay. Look for hallmark LLM fiction tells: purple or overwrought metaphors and over-description; emotional over-narration (telling feelings instead of showing them); formulaic dialogue tags with adverbs ("she said softly", "he murmured gently"); heavy em-dash use and trailing participial phrases (", turning toward her"); tricolon sentence rhythm (three parallel clauses); evenly-cadenced paragraphs; generic sensory filler ("the air hung heavy", "a mixture of awe and fear"); stock phrases ("couldn't help but", "let out a breath she didn't know she was holding", "something shifted", "eyes widened", "a beat of silence", "heart pounded against her ribs"); absence of a distinctive narrative voice, idiolect, or productive messiness; overly safe, polished, conflict-free storytelling. Also weigh what makes prose feel HUMAN: irregular rhythm, specific odd details, subtext, imperfect grammar used deliberately, distinct character voices, restraint. Respond with ONLY valid JSON — no markdown fences, no commentary — in exactly this shape: {"score": <integer 0-100 = probability the prose is AI-generated>, "confidence": <integer 0-100 = your confidence>, "verdict": "ai"|"human"|"mixed"|"uncertain", "summary": "<2-3 sentence explanation focused on craft>", "signals": [{"label": "...", "description": "...", "severity": "high"|"medium"|"low"|"info"}], "sentences": [{"text": "<exact sentence or dialogue line copied from the input>", "aiLikelihood": <integer 0-100>, "note": "<short reason>"}]}. List up to 30 sentences or dialogue lines of the provided text; keep each note under 12 words. Be concise.`;
 
 // ---------------------------------------------------------------------------
-// Types (GLM output is untrusted — validated defensively below)
+// Types (AI output is untrusted — validated defensively below)
 // ---------------------------------------------------------------------------
 
 type Severity = "high" | "medium" | "low" | "info";
@@ -51,7 +51,7 @@ interface DetectedSentence {
   note?: string;
 }
 
-interface GlmAiAnalysis {
+interface AiAnalysis {
   score: number; // required — without it the parse is considered failed
   confidence: number;
   verdict: Verdict | null; // null -> derived from composite score
@@ -61,10 +61,10 @@ interface GlmAiAnalysis {
 }
 
 // ---------------------------------------------------------------------------
-// GLM plumbing (server-side only)
+// AI plumbing (server-side only)
 // ---------------------------------------------------------------------------
 
-interface GlmMessage {
+interface AiMessage {
   role: "assistant" | "user";
   content: string;
 }
@@ -73,7 +73,7 @@ function buildMessages(
   text: string,
   textType: "general" | "novel",
   forceJson: boolean,
-): GlmMessage[] {
+): AiMessage[] {
   const userContent = forceJson
     ? `Analyze this text:\n\n${text}\n\nReturn only the JSON object.`
     : `Analyze this text:\n\n${text}`;
@@ -100,10 +100,10 @@ function extractCompletionContent(completion: unknown): string | null {
 }
 
 /**
- * One GLM request. Returns the reply text, or null on ANY failure
+ * One AI request. Returns the reply text, or null on ANY failure
  * (transport error, empty content, unexpected shape). Never throws.
  */
-async function requestGlmText(messages: GlmMessage[]): Promise<string | null> {
+async function requestText(messages: AiMessage[]): Promise<string | null> {
   // Policy F (P5-b): ZAI.create() failing below is a PRE-SEND failure — no
   // row (F3). A sent attempt that produces no completion payload records one
   // zero-token failed row (F1); a completion without usage records nothing (F4).
@@ -125,16 +125,16 @@ async function requestGlmText(messages: GlmMessage[]): Promise<string | null> {
         surface: "detect",
         usage: null,
         status: "failed",
-        errorKind: classifyGlmFailure(error),
+        errorKind: classifyAiFailure(error),
       });
     }
-    console.error("[detect/ai] GLM request failed:", error);
+    console.error("[detect/ai] AI request failed:", error);
     return null;
   }
 }
 
 // ---------------------------------------------------------------------------
-// Defensive parsing of GLM JSON
+// Defensive parsing of AI JSON
 // ---------------------------------------------------------------------------
 
 function mapSignal(value: unknown): DetectedSignal | null {
@@ -171,7 +171,7 @@ function mapSentence(value: unknown): DetectedSentence | null {
     : { text, aiLikelihood };
 }
 
-function parseGlmAnalysis(raw: string): GlmAiAnalysis | null {
+function parseAnalysis(raw: string): AiAnalysis | null {
   const parsed: unknown = extractJson(raw);
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
     return null;
@@ -218,10 +218,10 @@ function deriveVerdict(aiScore: number): Verdict {
   return "human";
 }
 
-/** Composite: 70% GLM judgment + 30% local heuristics, clamped to 0-100. */
-function compositeScore(glmScore: number, heuristics: HeuristicResult): number {
+/** Composite: 70% AI judgment + 30% local heuristics, clamped to 0-100. */
+function compositeScore(llmScore: number, heuristics: HeuristicResult): number {
   return clamp(
-    Math.round(0.7 * glmScore + 0.3 * heuristics.heuristicScore),
+    Math.round(0.7 * llmScore + 0.3 * heuristics.heuristicScore),
     0,
     100,
   );
@@ -255,51 +255,51 @@ export async function POST(req: Request) {
     );
   }
   const { text, textType } = parsedBody.data;
-  // Heuristics see the FULL text; GLM gets a bounded excerpt so the JSON it
+  // Heuristics see the FULL text; AI gets a bounded excerpt so the JSON it
   // must echo back stays small and the call finishes within proxy budgets.
-  const glmText = capForGlm(text);
+  const teamText = capOutputTokens(text);
   const computeLocal = textType === "novel" ? computeFictionHeuristics : computeHeuristics;
 
   try {
-    // Run the GLM analysis and the local heuristics in parallel.
+    // Run the AI analysis and the local heuristics in parallel.
     const [firstRaw, heuristics] = await Promise.all([
       withTimeout(
-        requestGlmText(buildMessages(glmText, textType, false)),
-        GLM_TIMEOUT_MS,
-        "[detect/ai] first GLM attempt",
+        requestText(buildMessages(teamText, textType, false)),
+        AI_TIMEOUT_MS,
+        "[detect/ai] first AI attempt",
       ),
       Promise.resolve(computeLocal(text)),
     ]);
 
-    let analysis = firstRaw === null ? null : parseGlmAnalysis(firstRaw);
+    let analysis = firstRaw === null ? null : parseAnalysis(firstRaw);
 
     // Retry ONCE with an explicit JSON-only instruction before falling back.
     if (analysis === null) {
       const retryRaw = await withTimeout(
-        requestGlmText(buildMessages(glmText, textType, true)),
-        GLM_TIMEOUT_MS,
-        "[detect/ai] retry GLM attempt",
+        requestText(buildMessages(teamText, textType, true)),
+        AI_TIMEOUT_MS,
+        "[detect/ai] retry AI attempt",
       );
-      analysis = retryRaw === null ? null : parseGlmAnalysis(retryRaw);
+      analysis = retryRaw === null ? null : parseAnalysis(retryRaw);
     }
 
-    // GLM completely unavailable -> heuristic-only result (never a 500).
+    // AI completely unavailable -> heuristic-only result (never a 500).
     if (analysis === null) {
-      const glmScore = heuristics.heuristicScore;
-      const aiScore = compositeScore(glmScore, heuristics);
+      const llmScore = heuristics.heuristicScore;
+      const aiScore = compositeScore(llmScore, heuristics);
       return NextResponse.json({
         success: true,
         verdict: deriveVerdict(aiScore),
         aiScore,
-        glmScore,
+        llmScore,
         confidence: 0,
         summary:
-          "GLM did not respond in time — this score comes from local heuristics only. Run the analysis again for the full LLM judgment; shorter text also helps.",
+          "AI did not respond in time — this score comes from local heuristics only. Run the analysis again for the full LLM judgment; shorter text also helps.",
         signals: [],
         sentences: [],
         heuristics,
         textType,
-        model: "GLM",
+        model: "AI",
       });
     }
 
@@ -308,14 +308,14 @@ export async function POST(req: Request) {
       success: true,
       verdict: analysis.verdict ?? deriveVerdict(aiScore),
       aiScore,
-      glmScore: analysis.score,
+      llmScore: analysis.score,
       confidence: analysis.confidence,
       summary: analysis.summary,
       signals: analysis.signals,
       sentences: analysis.sentences,
       heuristics,
       textType,
-      model: "GLM",
+      model: "AI",
     });
   } catch (error) {
     console.error("[detect/ai] unexpected failure:", error);

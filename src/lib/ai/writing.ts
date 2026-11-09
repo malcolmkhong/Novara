@@ -1,35 +1,35 @@
 /**
- * Server-side GLM plumbing for the Novel Creator.
+ * Server-side AI plumbing for the Novel Creator.
  *
  * Two call styles:
- *  - glmJson: bounded non-streaming call for structured JSON (init/plan/
+ *  - completeJson: bounded non-streaming call for structured JSON (init/plan/
  *    sediment/review). Output stays compact so the whole exchange fits in
  *    the ~60s gateway budget; one automatic retry on parse failure.
- *  - streamGlmProse: streaming call for chapter prose. The SDK's
+ *  - streamProse: streaming call for chapter prose. The SDK's
  *    `stream: true` returns raw SSE byte fragments; we decode + parse them
  *    ourselves. Streaming keeps bytes flowing so long generations are immune
  *    to idle-proxy cutoffs, and the UI can render the chapter live.
  *
- * "z-ai-web-dev-sdk" is backend-only — never import this from a client
+ * "the provider SDK" is backend-only — never import this from a client
  * component.
  */
-import ZAI from "z-ai-web-dev-sdk";
+import ZAI from "@/lib/ai/router";
 
 import { withTimeout } from "@/lib/ai-heuristics";
 import {
-  classifyGlmFailure,
+  classifyAiFailure,
   extractRealUsage,
 } from "@/lib/usage/usage-shapes";
 import { recordUsageCall, type UsageCallScope } from "@/lib/usage/usage-store";
 
-export interface GlmMessage {
+export interface AiMessage {
   role: "assistant" | "user";
   content: string;
 }
 
-const GLM_JSON_TIMEOUT_MS = 60_000;
+const AI_JSON_TIMEOUT_MS = 60_000;
 
-/** Common schema keys used to repair GLM's merged-key corruption. */
+/** Common schema keys used to repair AI's merged-key corruption. */
 const KNOWN_KEYS =
   "title|logline|coreConflict|world|power|goldenFinger|themes|characters|" +
   "villain|volumes|beats|chapters|summary|facts|charStates|foreshadows|" +
@@ -38,7 +38,7 @@ const KNOWN_KEYS =
   "action|ref|note|score|comment|issue|fix|change|startChapter|endChapter";
 
 /**
- * Best-effort repair of GLM's known JSON corruption patterns:
+ * Best-effort repair of AI's known JSON corruption patterns:
  *  1. smart quotes → ASCII quotes
  *  2. trailing commas before } or ]
  *  3. merged key+value strings ("name苏晴" — the model drops `":"`) for
@@ -75,7 +75,7 @@ function extractCompletionContent(completion: unknown): string | null {
   return typeof content === "string" ? content : null;
 }
 
-interface GlmJsonOptions<T> {
+interface JsonOptions<T> {
   /** Label used in logs. */
   label: string;
   /**
@@ -93,16 +93,16 @@ interface GlmJsonOptions<T> {
 }
 
 /**
- * Non-streaming GLM call with a domain parse function. Attempts:
- * generate → parse twice, then one GLM self-repair round-trip showing the
+ * Non-streaming AI call with a domain parse function. Attempts:
+ * generate → parse twice, then one AI self-repair round-trip showing the
  * model its own broken output. First successful parse wins; null on total
  * failure. Never throws.
  */
-export async function glmJson<T>(
-  messages: GlmMessage[],
-  options: GlmJsonOptions<T>,
+export async function completeJson<T>(
+  messages: AiMessage[],
+  options: JsonOptions<T>,
 ): Promise<T | null> {
-  const generate = async (msgs: GlmMessage[]): Promise<string | null> => {
+  const generate = async (msgs: AiMessage[]): Promise<string | null> => {
     const zai = await ZAI.create();
     // Policy F (P5-b): one row per HTTP attempt. ZAI.create() above failing
     // is a PRE-SEND failure — it throws before any provider contact, no row
@@ -113,7 +113,7 @@ export async function glmJson<T>(
           messages: msgs,
           thinking: { type: "disabled" },
         }),
-        GLM_JSON_TIMEOUT_MS,
+        AI_JSON_TIMEOUT_MS,
         `[novel/${options.label}]`,
       );
       // Measured row when the provider returned usage (billed truth — even
@@ -132,7 +132,7 @@ export async function glmJson<T>(
         surface: "studio",
         usage: null,
         status: "failed",
-        errorKind: classifyGlmFailure(error),
+        errorKind: classifyAiFailure(error),
         ...options.ledger,
       });
       throw error;
@@ -160,7 +160,7 @@ export async function glmJson<T>(
     try {
       const capped =
         lastRaw.length > 4000 ? `${lastRaw.slice(0, 4000)}…` : lastRaw;
-      const repairMessages: GlmMessage[] = [
+      const repairMessages: AiMessage[] = [
         ...messages,
         {
           role: "user",
@@ -170,7 +170,7 @@ export async function glmJson<T>(
       const fixedRaw = await generate(repairMessages);
       const parsed = fixedRaw === null ? null : options.parse(fixedRaw);
       if (parsed !== null) return parsed;
-      console.warn(`[novel/${options.label}] GLM self-repair failed`);
+      console.warn(`[novel/${options.label}] AI self-repair failed`);
     } catch (error) {
       console.error(`[novel/${options.label}] self-repair failed:`, error);
     }
@@ -186,7 +186,7 @@ export interface StreamCallbacks {
 export interface StreamOutcome {
   /** Full accumulated prose (or whatever arrived before failure). */
   text: string;
-  /** True if the GLM stream completed normally ([DONE] received). */
+  /** True if the AI stream completed normally ([DONE] received). */
   completed: boolean;
   /** Error message when completed === false. */
   error?: string;
@@ -212,12 +212,12 @@ function toBytes(raw: unknown): Uint8Array | null {
 }
 
 /**
- * Streaming GLM call for chapter prose. Parses the SDK's raw SSE byte
+ * Streaming AI call for chapter prose. Parses the SDK's raw SSE byte
  * fragments (data: {...} lines) and forwards content deltas. Enforces a
  * stall watchdog (no bytes for 45s) and an overall cap (150s). Never throws.
  */
-export async function streamGlmProse(
-  messages: GlmMessage[],
+export async function streamProse(
+  messages: AiMessage[],
   callbacks: StreamCallbacks,
   /** P5 — persisted-ledger scope links (novel-scoped write route). */
   ledger?: UsageCallScope,
@@ -322,7 +322,7 @@ export async function streamGlmProse(
           surface: "studio",
           usage: null,
           status: "failed",
-          errorKind: aborted ? "aborted" : classifyGlmFailure(error),
+          errorKind: aborted ? "aborted" : classifyAiFailure(error),
           ...ledger,
         });
       }
@@ -343,7 +343,7 @@ export async function streamGlmProse(
 }
 
 /**
- * Defensive string helper: coerce unknown GLM output into a trimmed
+ * Defensive string helper: coerce unknown AI output into a trimmed
  * non-empty string, else null.
  */
 export function asString(value: unknown): string | null {

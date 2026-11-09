@@ -22,7 +22,7 @@
 //       debug layer, no dual feed).
 //   S6. Double-book reconciliation (§4.5, fixture-level): AgentEvent
 //       kind="usage" payloads and UsageCall rows for the same calls agree
-//       ROW-FOR-ROW (sorted token triples); source pin: every glmChat result
+//       ROW-FOR-ROW (sorted token triples); source pin: every chatCompletion result
 //       feeds BOTH books (emitUsageEvent + recordUsageCall).
 //   S7. Config at rest (Addition 1; state per P5-e ruling R-1 of 2026-11-06):
 //       contextCompaction.enabled === false (still inert) AND
@@ -313,7 +313,7 @@ async function main() {
   const runtimeSource = readFileSync("src/lib/agent/runtime.ts", "utf8");
   const glmSource = readFileSync("src/lib/novara/glm.ts", "utf8");
   check(
-    "S6 source pin: every glmChat result feeds BOTH books (emitUsageEvent + recordUsageCall)",
+    "S6 source pin: every chatCompletion result feeds BOTH books (emitUsageEvent + recordUsageCall)",
     runtimeSource.includes("emitUsageEvent(runId, meter") && glmSource.includes("recordUsageCall({"),
     "runtime.ts + glm.ts"
   );

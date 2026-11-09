@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 
 import { db } from "@/lib/db";
-import { glmJson } from "@/lib/novel/glm";
+import { completeJson } from "@/lib/ai/writing";
 import { recordProvenanceLink } from "@/lib/usage/usage-store";
 import {
   buildInitMessages,
@@ -58,7 +58,7 @@ export async function GET() {
 }
 
 // ---------------------------------------------------------------------------
-// POST /api/novel — create a book via GLM init (设定集 + 总纲)
+// POST /api/novel — create a book via AI init (设定集 + 总纲)
 // ---------------------------------------------------------------------------
 
 const createSchema = z.object({
@@ -95,14 +95,14 @@ export async function POST(req: Request) {
   }
   const input = parsedBody.data;
 
-  // P5 — request-scoped correlation id: every GLM call of this init request
+  // P5 — request-scoped correlation id: every AI call of this init request
   // records it; the provenance link (written after db.novel.create below)
   // retro-tags all of them onto the created novel. Zero client changes.
   const ledgerCorrelationId = crypto.randomUUID();
 
   try {
-    // GLM init: 设定集（世界观/力量体系/金手指/角色/反派）+ 总纲（分卷）。
-    const parsed = await glmJson<InitParsed>(
+    // AI init: 设定集（世界观/力量体系/金手指/角色/反派）+ 总纲（分卷）。
+    const parsed = await completeJson<InitParsed>(
       buildInitMessages({
         genre: input.genre,
         idea: input.idea,
@@ -119,7 +119,7 @@ export async function POST(req: Request) {
         {
           success: false,
           error:
-            "GLM could not generate the story bible in time. Please try again — a more specific idea also helps.",
+            "AI could not generate the story bible in time. Please try again — a more specific idea also helps.",
         },
         { status: 502 },
       );

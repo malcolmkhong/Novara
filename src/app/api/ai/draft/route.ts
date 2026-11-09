@@ -2,7 +2,7 @@ import { db } from "@/lib/db";
 import { getBudgets } from "@/lib/novara/content";
 import { retrieveMemory } from "@/lib/novara/memory";
 import { jsonError, parseBody, validationError } from "@/lib/novara/api-helpers";
-import { glmChat } from "@/lib/novara/glm";
+import { chatCompletion } from "@/lib/ai/chat";
 import { countWords } from "@/lib/novara/words";
 import { z } from "zod";
 
@@ -79,7 +79,7 @@ export async function POST(req: Request) {
   // remaining = target − written; the budget for one chapter is roughly the
   // remaining words spread over the outline beats still ahead, or (without
   // beats) the average length of the chapters already written. Capped so a
-  // single GLM call stays realistic.
+  // single AI call stays realistic.
   // -------------------------------------------------------------------------
   const totalWords = novel.chapters.reduce((sum, c) => sum + c.wordCount, 0);
   const remainingWords = Math.max(0, novel.targetWords - totalWords);
@@ -234,11 +234,11 @@ export async function POST(req: Request) {
 
   try {
     // Phase 6: A/B drafts — the SAME grounded context, two independent
-    // generations (sequential; the global GLM semaphore paces them).
+    // generations (sequential; the global AI semaphore paces them).
     const variantCount = schema.data.variants ?? 1;
     const variants: { content: string; wordCount: number }[] = [];
     for (let i = 0; i < variantCount; i++) {
-      const { text: content } = await glmChat({
+      const { text: content } = await chatCompletion({
         messages: [
           { role: "assistant", content: system },
           { role: "user", content: parts.join("\n\n") },

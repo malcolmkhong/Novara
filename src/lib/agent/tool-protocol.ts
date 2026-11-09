@@ -140,7 +140,7 @@ export interface ParsedTurn {
 
 const FENCE_RE = /```[ \t]*\r?\n?[ \t]*([a-zA-Z][a-zA-Z0-9_-]*)[ \t]*\r?\n?([\s\S]*?)```/g;
 const BLOCKED_RE = /(^|\n)[ \t]*BLOCKED[:：][ \t]*(.+)/;
-/** GLM sometimes drops the closing fence — salvage a trailing known block. */
+/** AI sometimes drops the closing fence — salvage a trailing known block. */
 const UNCLOSED_RE = /```[ \t]*\r?\n?[ \t]*(novel-write|run-report|novel-tool|team-delegate)\b[ \t]*\r?\n?([\s\S]*)$/;
 
 function parseJsonObject(raw: string): { ok: true; value: unknown } | { ok: false; error: string } {
@@ -236,7 +236,7 @@ export function parseAgentTurn(reply: string): ParsedTurn {
     return kept === null ? match : kept;
   });
 
-  // Pass 2: GLM occasionally drops the closing ``` — if a KNOWN block opener
+  // Pass 2: AI occasionally drops the closing ``` — if a KNOWN block opener
   // trails in the leftover text, treat everything after it as that body.
   const unclosed = narration.match(UNCLOSED_RE);
   if (unclosed) {

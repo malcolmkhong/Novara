@@ -19,7 +19,7 @@
 //     finalReport compares claimed (model) vs verified (measured) numbers;
 //     review-found blocking issues without a repair order are flagged.
 //   - context compaction (Phase 2, lib/agent/wire.ts) — LEADER loop only,
-//     fires between turns: a deterministic zero-GLM projection replaces the
+//     fires between turns: a deterministic zero-AI projection replaces the
 //     covered span on the next wire; canonical rows are never rewritten;
 //     metered as sent (agent-ctx/p2-design.md).
 //
@@ -38,12 +38,13 @@
 
 import { db } from "@/lib/db";
 import { getBudgets, buildSystemPrompt, getSkillEntry } from "@/lib/novara/content";
-import { glmChat } from "@/lib/novara/glm";
+import { chatCompletion } from "@/lib/ai/chat";
 import {
   resolveModelSelection,
   type ModelSelection,
   type SdkModelParams,
 } from "@/lib/novara/models";
+import { DEFAULT_MODEL_ID } from "@/lib/ai/providers/registry";
 import {
   createContextMeter,
   formatUsageSummary,
@@ -252,7 +253,7 @@ function serializeRun(run: AgentRunRow): AgentRun {
     goal: run.goal,
     mode: run.mode as AgentRunMode,
     status: run.status as AgentRunStatus,
-    modelId: run.modelId ?? "glm-4.6",
+    modelId: run.modelId ?? DEFAULT_MODEL_ID,
     thinkingLevel: run.thinkingLevel ?? "off",
     finalReport: parseJsonSafe<RunFinalReport | null>(run.finalReport, null),
     pinned: parseJsonSafe<PinnedRef[]>(run.pinnedJson, []),
@@ -551,7 +552,7 @@ export function errorStatus(error: unknown): { message: string; status: number }
 
 // ---------------------------------------------------------------------------
 // P2 — resolved run model + Context Usage meter plumbing.
-// Every GLM call of a run goes through a conversation-scoped meter; each call
+// Every AI call of a run goes through a conversation-scoped meter; each call
 // snapshots it (what THAT call sent) and emits a `usage` event. The SSE
 // stream carries events to the composer's Context Usage panel in real time.
 // ---------------------------------------------------------------------------
@@ -992,7 +993,7 @@ async function findAdoptableChapter(
 }
 
 /**
- * Stage C — resume-path event reconciliation (ZERO-GLM, deterministic).
+ * Stage C — resume-path event reconciliation (ZERO-AI, deterministic).
  * A crash inside the commit→event window (db.chapter.create landed,
  * emitEvent never ran — Stage C E2E run cmw37k70w…: SIGKILL landed 5ms
  * after the commit) leaves a committed chapter with NO create_chapter
@@ -1047,7 +1048,7 @@ async function reconcileMissingCreateEvents(runId: string, novelId: string): Pro
 }
 
 /**
- * Phase 1 — deterministic, ZERO-GLM end-of-run reconciliation for a run whose
+ * Phase 1 — deterministic, ZERO-AI end-of-run reconciliation for a run whose
  * single budgeted wrap-up turn was already granted and then interrupted
  * (turnsUsed >= leaderMaxTurns && wrapUpGranted). Builds the final report
  * from persisted state ONLY — AgentTask statuses + event-derived measured
@@ -1378,7 +1379,7 @@ async function leaderLoop(
   const run = await db.agentRun.findUnique({ where: { id: runId } });
   if (!run) return;
   const novelId = run.novelId;
-  // P2 — resolve the run's registry selection once; every GLM call of the
+  // P2 — resolve the run's registry selection once; every AI call of the
   // run (leader + members) goes out with these exact params.
   const modelCtx = resolveRunModel(run.modelId, run.thinkingLevel);
 
@@ -1786,9 +1787,9 @@ async function leaderLoop(
   // estimate is the fallback (see maybeCompact below).
   let lastCallRealTokens: number | null = null;
 
-  const glmCall = async (tag: string, turn: number): Promise<string> => {
+  const aiCall = async (tag: string, turn: number): Promise<string> => {
     if (signal.aborted) throw new Error("Run aborted");
-    const { text: reply, usage } = await glmChat({
+    const { text: reply, usage } = await chatCompletion({
       messages,
       tag,
       signal,
@@ -1806,7 +1807,7 @@ async function leaderLoop(
   // transcript batch is appended and the cursor checkpointed, before the
   // next model call. LEADER-ONLY wiring (members stay deliberately inert —
   // see executeTask): eligibility keys off budgets.contextCompaction ONLY,
-  // never off contextSpec (design §1). Zero GLM, deterministic, fenced.
+  // never off contextSpec (design §1). Zero AI, deterministic, fenced.
   // Trigger measure: the last call's PROVIDER-RECONCILED prompt tokens (the
   // billed truth for the wire just sent) when available, else the meter's
   // raw estimate. Measured live in the P2-c probe: the raw estimate
@@ -1823,7 +1824,7 @@ async function leaderLoop(
     if (!decision) return; // too few coverable rows — absorption cannot pay for itself
 
     // P2-d — MONOTONE COST GUARD (design §2.3.1): an enabled compaction must
-    // never make the NEXT call more expensive than not compacting. Zero-GLM:
+    // never make the NEXT call more expensive than not compacting. Zero-AI:
     // assemble BOTH candidate next-call wires from the same canonical rows —
     //   baseline  = the current live wire (what the next call sends if this
     //               cycle SKIPS; on the FIRST cycle this IS the legacy full
@@ -1963,10 +1964,10 @@ async function leaderLoop(
   // closed properly) or run to exhaustion; only exhaustion earns the one-shot
   // budget wrap-up turn below.
   let loopExhausted = true;
-  for (let turn = turnsUsed + 1; turn <= budgets.glm.leaderMaxTurns; turn++) {
+  for (let turn = turnsUsed + 1; turn <= budgets.ai.leaderMaxTurns; turn++) {
     if (signal.aborted) return;
     await guard.assertHeld();
-    const reply = await glmCall(`leader turn ${turn}`, turn);
+    const reply = await aiCall(`leader turn ${turn}`, turn);
     const parsed = parseAgentTurn(reply);
 
     if (parsed.narration) {
@@ -1989,7 +1990,7 @@ async function leaderLoop(
       // turns are terminal — completed/failed runs never resume — and stay
       // excluded from the turn cursor, keeping cursor == checkpoint timing.
       // Meter/usage untouched: the closing call's usage event was already
-      // emitted by glmCall above, and the reply is generated-never-sent
+      // emitted by aiCall above, and the reply is generated-never-sent
       // (no further model call exists on a terminal path).
       await guard.append({
         runId,
@@ -2013,8 +2014,8 @@ async function leaderLoop(
     // 1) Atlas's own read tools.
     for (let i = 0; i < parsed.toolCalls.length; i++) {
       const call = parsed.toolCalls[i];
-      if (i >= budgets.glm.maxActionsPerTurn) {
-        feeds.push(`${i + 1}. [rejected] action budget exceeded (${budgets.glm.maxActionsPerTurn} per turn)`);
+      if (i >= budgets.ai.maxActionsPerTurn) {
+        feeds.push(`${i + 1}. [rejected] action budget exceeded (${budgets.ai.maxActionsPerTurn} per turn)`);
         continue;
       }
       if (call.error || !call.action) {
@@ -2046,8 +2047,8 @@ async function leaderLoop(
         feeds.push(`delegate: [error] ${d.error}`);
         continue;
       }
-      if (delegateCount >= budgets.glm.planMaxTasks) {
-        feeds.push(`delegate "${truncate(d.order.title, 60)}": [rejected] delegate budget exceeded (${budgets.glm.planMaxTasks} per run)`);
+      if (delegateCount >= budgets.ai.planMaxTasks) {
+        feeds.push(`delegate "${truncate(d.order.title, 60)}": [rejected] delegate budget exceeded (${budgets.ai.planMaxTasks} per run)`);
         continue;
       }
       delegateCount += 1;
@@ -2124,7 +2125,7 @@ async function leaderLoop(
       // consistent. Append-ownership rule: THIS exit owns the turn's append;
       // the per-turn batch below is unreachable once it fires. No checkpoint
       // bump (terminal turn); meter/usage untouched (usage was emitted by
-      // glmCall above; the reply is generated-never-sent).
+      // aiCall above; the reply is generated-never-sent).
       const closingResults =
         feeds.length > 0 ? `TOOL RESULTS:\n${feeds.join("\n")}` : null;
       await guard.append(
@@ -2181,7 +2182,7 @@ async function leaderLoop(
   // wrap-up turn per run LIFETIME: wrapUpGranted is checkpointed BEFORE the
   // model call, so crash→resume cycles can never mint a second one — a resume
   // that finds the flag already set (turnsUsed >= max) takes the deterministic
-  // zero-GLM reconciliation path (resume route → reconcileWrapUpFromDb).
+  // zero-AI reconciliation path (resume route → reconcileWrapUpFromDb).
   if (loopExhausted && !wrapUpGranted) {
     wrapUpGranted = true;
     await guard.checkpoint({
@@ -2202,7 +2203,7 @@ async function leaderLoop(
     meter.addConversation(wrapUpDirective);
     messages.push({ role: "user", content: wrapUpDirective });
     await guard.append({ runId, conversationId: LEADER_CONVERSATION, taskId: null, agent: "atlas", role: "user", kind: "wrap_up", content: wrapUpDirective });
-    const wrapReply = await glmCall(`leader wrap-up (turn ${turnsUsed + 1})`, turnsUsed + 1);
+    const wrapReply = await aiCall(`leader wrap-up (turn ${turnsUsed + 1})`, turnsUsed + 1);
     const wrapParsed = parseAgentTurn(wrapReply);
     if (wrapParsed.narration) {
       await emitEvent({
@@ -2480,9 +2481,9 @@ async function executeTask(params: {
   let adoptedFinalizes = 0;
 
   let callCounter = 0; // repair rounds reuse runTurns — keep labels monotonic
-  const glmCall = async (tag: string): Promise<string> => {
+  const aiCall = async (tag: string): Promise<string> => {
     if (signal.aborted) throw new Error("Run aborted");
-    const { text: reply, usage } = await glmChat({
+    const { text: reply, usage } = await chatCompletion({
       messages,
       tag,
       signal,
@@ -2500,7 +2501,7 @@ async function executeTask(params: {
     for (let turn = 1; turn <= turnBudget; turn++) {
       if (signal.aborted) throw new Error("Run aborted");
       await params.guard.assertHeld();
-      const reply = await glmCall(`${task.key} turn ${turn}`);
+      const reply = await aiCall(`${task.key} turn ${turn}`);
       const parsed = parseAgentTurn(reply);
 
       if (parsed.narration) {
@@ -2533,8 +2534,8 @@ async function executeTask(params: {
 
       for (let i = 0; i < parsed.toolCalls.length; i++) {
         const call = parsed.toolCalls[i];
-        if (i >= budgets.glm.maxActionsPerTurn) {
-          feeds.push(`${i + 1}. [rejected] action budget exceeded (${budgets.glm.maxActionsPerTurn} per turn)`);
+        if (i >= budgets.ai.maxActionsPerTurn) {
+          feeds.push(`${i + 1}. [rejected] action budget exceeded (${budgets.ai.maxActionsPerTurn} per turn)`);
           continue;
         }
         if (call.error || !call.action) {
@@ -2606,7 +2607,7 @@ async function executeTask(params: {
   };
 
   try {
-    await runTurns(budgets.glm.maxTurns);
+    await runTurns(budgets.ai.maxTurns);
 
     // A gate stop means the author decided (reject→paused / cancel) or the
     // wait ended — the handler owns task & run status; never touch them here.
@@ -2618,7 +2619,7 @@ async function executeTask(params: {
       requiresWrite &&
       measuredForTask.chaptersWritten + measuredForTask.chaptersUpdated + adoptedWrites === 0 &&
       !blockedReason &&
-      repairRound < budgets.glm.repairRounds &&
+      repairRound < budgets.ai.repairRounds &&
       !signal.aborted
     ) {
       repairRound += 1;
@@ -2626,7 +2627,7 @@ async function executeTask(params: {
         ...taskRef,
         actor: assignee,
         kind: "error",
-        summary: `Write verification failed — no verified DB write. Repair round ${repairRound}/${budgets.glm.repairRounds}.`,
+        summary: `Write verification failed — no verified DB write. Repair round ${repairRound}/${budgets.ai.repairRounds}.`,
       });
       const verifyFailed =
         "VERIFY FAILED: this task required a chapter write but nothing was committed. " +
@@ -2652,7 +2653,7 @@ async function executeTask(params: {
       requiresFinalize &&
       measuredForTask.chaptersFinalized + adoptedFinalizes === 0 &&
       !blockedReason &&
-      repairRound < budgets.glm.repairRounds &&
+      repairRound < budgets.ai.repairRounds &&
       !signal.aborted
     ) {
       repairRound += 1;
@@ -2660,7 +2661,7 @@ async function executeTask(params: {
         ...taskRef,
         actor: assignee,
         kind: "error",
-        summary: `Finalize verification failed — chapter is still draft, no verified finalize_chapter. Repair round ${repairRound}/${budgets.glm.repairRounds}.`,
+        summary: `Finalize verification failed — chapter is still draft, no verified finalize_chapter. Repair round ${repairRound}/${budgets.ai.repairRounds}.`,
       });
       const finalizeFailed =
         "VERIFY FAILED: this task was expected to certify the chapter but no finalize_chapter was verified — the chapter is still DRAFT. " +
@@ -2692,12 +2693,12 @@ async function executeTask(params: {
     } else if (requiresWrite && measuredForTask.chaptersWritten + measuredForTask.chaptersUpdated + adoptedWrites === 0) {
       await db.agentTask.update({ where: { id: task.id }, data: { status: "failed" } });
       await emitEvent({ ...taskRef, actor: assignee, kind: "task_update", summary: `${task.key} failed — write verification never passed.` });
-      params.issues.push(`${task.key} failed: no verified write after ${budgets.glm.repairRounds} repair round(s)`);
+      params.issues.push(`${task.key} failed: no verified write after ${budgets.ai.repairRounds} repair round(s)`);
       outcome = "failed";
     } else if (requiresFinalize && measuredForTask.chaptersFinalized + adoptedFinalizes === 0) {
       await db.agentTask.update({ where: { id: task.id }, data: { status: "failed" } });
       await emitEvent({ ...taskRef, actor: assignee, kind: "task_update", summary: `${task.key} failed — finalize verification never passed (chapter still draft).` });
-      params.issues.push(`${task.key} failed: no verified finalize_chapter after ${budgets.glm.repairRounds} repair round(s) — chapter left in draft`);
+      params.issues.push(`${task.key} failed: no verified finalize_chapter after ${budgets.ai.repairRounds} repair round(s) — chapter left in draft`);
       outcome = "failed";
     } else {
       await db.agentTask.update({ where: { id: task.id }, data: { status: "done" } });
@@ -2783,7 +2784,7 @@ export async function executeTool(params: ExecuteToolParams): Promise<ToolResult
         : "";
       return {
         ok: true,
-        feed: `read_chapter(${action.index}) → ok ("${chapter.title}", ${chapter.wordCount} words, ${chapter.status})${briefPart}\n${chapter.content.slice(0, budgets.glm.chapterContextChars) || "(empty)"}`,
+        feed: `read_chapter(${action.index}) → ok ("${chapter.title}", ${chapter.wordCount} words, ${chapter.status})${briefPart}\n${chapter.content.slice(0, budgets.ai.chapterContextChars) || "(empty)"}`,
       };
     }
     case "read_outline": {
@@ -2929,7 +2930,7 @@ export async function executeTool(params: ExecuteToolParams): Promise<ToolResult
       if (!chapter) return { ok: false, feed: `settle_chapter(${action.index}) → error: no such chapter` };
       // Phase 1 idempotency probe (settle, STATE-based): a ChapterDigest that
       // is newer than the chapter's last edit means memory already settled
-      // for exactly this content — adopt and skip the sediment GLM pass.
+      // for exactly this content — adopt and skip the sediment AI pass.
       // sedimentChapterCore is itself row-idempotent (digest upsert, fact
       // dedupe, plant dedupe, one-way ledger); the probe only avoids the
       // redundant provider call on re-dispatch.

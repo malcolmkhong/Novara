@@ -113,13 +113,13 @@ export function HallucinationPanel() {
 
   const isGrounded = mode === "grounded";
 
-  const handleAskGlm = async (): Promise<void> => {
+  const handleAsk = async (): Promise<void> => {
     if (!question.trim() || generating) return;
     setGenerating(true);
     setError(null);
     try {
       const data = await postJSON<GenerateResponse>("/api/generate", {
-        mode: "glm-answer",
+        mode: "ai-answer",
         question: question.trim(),
       });
       if (!data.success) {
@@ -128,7 +128,7 @@ export function HallucinationPanel() {
       setText(data.text);
       toast({
         title: "Answer generated",
-        description: "GLM's answer was placed in the response editor.",
+        description: "AI's answer was placed in the response editor.",
       });
     } catch (err) {
       const message =
@@ -181,7 +181,7 @@ export function HallucinationPanel() {
         <CardHeader>
           <CardTitle>Hallucination check</CardTitle>
           <CardDescription>
-            GLM extracts factual claims and verifies them, flagging anything
+            AI extracts factual claims and verifies them, flagging anything
             unsupported, contradicted, or unverifiable.
           </CardDescription>
         </CardHeader>
@@ -204,7 +204,7 @@ export function HallucinationPanel() {
                   <span className="text-sm font-medium">Open-domain check</span>
                 </span>
                 <span className="text-xs leading-relaxed text-muted-foreground">
-                  GLM fact-checks claims from its own knowledge.
+                  AI fact-checks claims from its own knowledge.
                 </span>
               </Label>
               <Label
@@ -224,7 +224,7 @@ export function HallucinationPanel() {
             </RadioGroup>
           </div>
 
-          {/* Question + Ask GLM */}
+          {/* Question + Ask AI */}
           <div className="flex flex-col gap-2">
             <Label htmlFor="hallucination-question">
               Question asked to the AI (optional)
@@ -241,16 +241,16 @@ export function HallucinationPanel() {
                 type="button"
                 variant="outline"
                 className="h-11 shrink-0 sm:h-10"
-                onClick={handleAskGlm}
+                onClick={handleAsk}
                 disabled={!question.trim() || generating || checking}
-                aria-label="Ask GLM to generate an answer for this question"
+                aria-label="Ask AI to generate an answer for this question"
               >
                 {generating ? (
                   <Loader2 className="animate-spin" aria-hidden="true" />
                 ) : (
                   <Bot aria-hidden="true" />
                 )}
-                {generating ? "Asking…" : "Ask GLM"}
+                {generating ? "Asking…" : "Ask AI"}
               </Button>
             </div>
           </div>
@@ -309,7 +309,7 @@ export function HallucinationPanel() {
         {checking ? (
           <p className="flex items-center gap-2 text-sm text-muted-foreground">
             <Loader2 className="size-4 animate-spin" aria-hidden="true" />
-            GLM is fact-checking… this can take up to a minute for long texts
+            AI is fact-checking… this can take up to a minute for long texts
             (shorter text is faster; failed calls retry once automatically).
           </p>
         ) : null}
@@ -324,7 +324,7 @@ export function HallucinationPanel() {
             </div>
             <p className="text-sm font-medium">No hallucination check yet</p>
             <p className="max-w-xs text-xs text-muted-foreground">
-              Paste an AI response (or ask GLM for one) and run a check to see
+              Paste an AI response (or ask AI for one) and run a check to see
               claim-by-claim verification results.
             </p>
           </div>
@@ -364,7 +364,7 @@ export function HallucinationPanel() {
                   </p>
                   <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
                     <FlaskConical className="size-3.5" aria-hidden="true" />
-                    Checked by GLM · {MODE_META[result.mode]}
+                    Checked by AI · {MODE_META[result.mode]}
                   </p>
                 </div>
               </CardContent>

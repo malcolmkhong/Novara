@@ -19,7 +19,7 @@ const postSchema = z.object({
   description: z.string().trim().min(1).max(2000),
   sessionKey: z.string().min(1).max(64),
   // P5-g: optional delegation provenance — runTask reads it off the task
-  // row and attributes its GLM calls directly to the novel (plan §5.1).
+  // row and attributes its AI calls directly to the novel (plan §5.1).
   novelId: z.string().min(1).max(64).optional(),
 });
 

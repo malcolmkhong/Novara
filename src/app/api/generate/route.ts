@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import ZAI from "z-ai-web-dev-sdk";
-import { GLM_TIMEOUT_MS, withTimeout } from "@/lib/ai-heuristics";
-import { classifyGlmFailure, extractRealUsage } from "@/lib/usage/usage-shapes";
+import ZAI from "@/lib/ai/router";
+import { AI_TIMEOUT_MS, withTimeout } from "@/lib/ai-heuristics";
+import { classifyAiFailure, extractRealUsage } from "@/lib/usage/usage-shapes";
 import { recordUsageCall } from "@/lib/usage/usage-store";
 
 export const maxDuration = 120;
@@ -12,7 +12,7 @@ export const maxDuration = 120;
 // ---------------------------------------------------------------------------
 
 const bodySchema = z.object({
-  mode: z.enum(["ai-essay", "ai-fiction", "glm-answer"]),
+  mode: z.enum(["ai-essay", "ai-fiction", "ai-answer"]),
   topic: z.string().max(300).optional(),
   question: z.string().max(2000).optional(),
 });
@@ -26,10 +26,10 @@ const FICTION_SYSTEM_PROMPT =
 const ANSWER_SYSTEM_PROMPT = "You are a helpful, confident assistant.";
 
 // ---------------------------------------------------------------------------
-// GLM plumbing (server-side only)
+// AI plumbing (server-side only)
 // ---------------------------------------------------------------------------
 
-interface GlmMessage {
+interface AiMessage {
   role: "assistant" | "user";
   content: string;
 }
@@ -69,7 +69,7 @@ export async function POST(req: Request) {
         success: false,
         error:
           parsedBody.error.issues[0]?.message ??
-          "Invalid body: provide `mode` ('ai-essay' | 'ai-fiction' | 'glm-answer') plus optional `topic` / `question`.",
+          "Invalid body: provide `mode` ('ai-essay' | 'ai-fiction' | 'ai-answer') plus optional `topic` / `question`.",
       },
       { status: 400 },
     );
@@ -77,7 +77,7 @@ export async function POST(req: Request) {
 
   const { mode, topic, question } = parsedBody.data;
 
-  let messages: GlmMessage[];
+  let messages: AiMessage[];
   if (mode === "ai-essay") {
     messages = [
       { role: "assistant", content: ESSAY_SYSTEM_PROMPT },
@@ -98,10 +98,10 @@ export async function POST(req: Request) {
       },
     ];
   } else {
-    // glm-answer mode is pointless without a question to answer.
+    // ai-answer mode is pointless without a question to answer.
     if (!question || question.trim().length === 0) {
       return NextResponse.json(
-        { success: false, error: "`question` is required for mode 'glm-answer'." },
+        { success: false, error: "`question` is required for mode 'ai-answer'." },
         { status: 400 },
       );
     }
@@ -123,8 +123,8 @@ export async function POST(req: Request) {
         messages,
         thinking: { type: "disabled" },
       }),
-      GLM_TIMEOUT_MS,
-      "[generate] GLM request",
+      AI_TIMEOUT_MS,
+      "[generate] AI request",
     );
     // Persist the per-call row (standalone detector tool — global-only,
     // never culminates in a novel). Measured even when the content check
@@ -133,14 +133,14 @@ export async function POST(req: Request) {
     const text = extractCompletionContent(completion);
     if (text === null || text.trim().length === 0) {
       return NextResponse.json(
-        { success: false, error: "GLM returned an empty response." },
+        { success: false, error: "AI returned an empty response." },
         { status: 502 },
       );
     }
     return NextResponse.json({
       success: true,
       text: text.trim(),
-      model: "GLM",
+      model: "AI",
     });
   } catch (error) {
     if (sent) {
@@ -148,15 +148,15 @@ export async function POST(req: Request) {
         surface: "generate",
         usage: null,
         status: "failed",
-        errorKind: classifyGlmFailure(error),
+        errorKind: classifyAiFailure(error),
       });
     }
-    console.error("[generate] GLM request failed:", error);
+    console.error("[generate] AI request failed:", error);
     return NextResponse.json(
       {
         success: false,
         error:
-          "GLM is busy or took too long to respond. Please try again in a moment.",
+          "AI is busy or took too long to respond. Please try again in a moment.",
       },
       { status: 502 },
     );

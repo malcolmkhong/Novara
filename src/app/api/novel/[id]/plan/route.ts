@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 
 import { db } from "@/lib/db";
-import { glmJson } from "@/lib/novel/glm";
+import { completeJson } from "@/lib/ai/writing";
 import {
   buildPlanMessages,
   parsePlanResponse,
@@ -113,7 +113,7 @@ export async function POST(req: Request, ctx: RouteContext) {
       openForeshadows,
     };
 
-    const parsed = await glmJson<PlanParsed>(buildPlanMessages(planContext), {
+    const parsed = await completeJson<PlanParsed>(buildPlanMessages(planContext), {
       label: "plan",
       parse: parsePlanResponse,
     });
@@ -122,14 +122,14 @@ export async function POST(req: Request, ctx: RouteContext) {
         {
           success: false,
           error:
-            "GLM could not generate the volume plan in time. Please try again.",
+            "AI could not generate the volume plan in time. Please try again.",
         },
         { status: 502 },
       );
     }
 
     // Normalize chapter outlines: guarantee every number in the volume range
-    // exists exactly once, using GLM output where valid.
+    // exists exactly once, using AI output where valid.
     const byNumber = new Map<number, PlanParsed["chapters"][number]>();
     for (const outline of parsed.chapters) {
       if (

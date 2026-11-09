@@ -34,7 +34,7 @@ const MAX_TOOL_CALLS = 3;
 /** Per-action result budget fed back to the model (chars). */
 const RESULT_CAP_READ_NOVEL = 3200;
 const RESULT_CAP_READ_CHAPTER = 4000;
-/** Total tool-results budget for the follow-up GLM call (user role cap is 6000). */
+/** Total tool-results budget for the follow-up AI call (user role cap is 6000). */
 const TOOL_RESULTS_TOTAL_CAP = 5600;
 /** Hard ceiling for chapter content written via update_chapter_content. */
 const MAX_CONTENT_WRITE = 20_000;

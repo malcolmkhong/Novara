@@ -87,7 +87,7 @@ export function NovelPanel() {
               </CardTitle>
               <CardDescription className="max-w-2xl">
                 A long-form serialized-novel pipeline inspired by
-                webnovel-writer: GLM designs the story bible and volume
+                webnovel-writer: AI designs the story bible and volume
                 outline, drafts chapters live against chapter goals and open
                 foreshadowing, then sediments memory (facts, character states,
                 hooks) so chapter 80 still remembers chapter 3.
@@ -132,7 +132,7 @@ export function NovelPanel() {
               <div>
                 <p className="font-medium">Your bookshelf is empty</p>
                 <p className="mt-1 text-sm text-muted-foreground">
-                  Click “New Novel”, give GLM a one-line idea, and it builds the
+                  Click “New Novel”, give AI a one-line idea, and it builds the
                   bible, volumes and chapter pipeline.
                 </p>
               </div>

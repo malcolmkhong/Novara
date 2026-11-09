@@ -184,7 +184,7 @@ export function AiDetectorPanel() {
       }
       setText(data.text);
       toast({
-        title: "Generated with GLM",
+        title: "Generated with AI",
         description:
           textType === "novel"
             ? "A fresh AI-style fiction scene was placed in the editor."
@@ -204,7 +204,7 @@ export function AiDetectorPanel() {
   };
 
   const heuristicMismatch =
-    result !== null && Math.abs(result.aiScore - result.glmScore) >= 25;
+    result !== null && Math.abs(result.aiScore - result.llmScore) >= 25;
 
   return (
     <div className="grid gap-6 lg:grid-cols-2">
@@ -213,7 +213,7 @@ export function AiDetectorPanel() {
         <CardHeader>
           <CardTitle>Text to analyze</CardTitle>
           <CardDescription>
-            Paste any text — GLM scores how likely it is AI-generated, with a
+            Paste any text — AI scores how likely it is AI-generated, with a
             fiction-forensic lens for novels.
           </CardDescription>
         </CardHeader>
@@ -356,7 +356,7 @@ export function AiDetectorPanel() {
                 ) : (
                   <Sparkles aria-hidden="true" />
                 )}
-                {generating ? "Generating…" : "Generate with GLM"}
+                {generating ? "Generating…" : "Generate with AI"}
               </Button>
             </div>
           </div>
@@ -391,7 +391,7 @@ export function AiDetectorPanel() {
         {analyzing ? (
           <p className="flex items-center gap-2 text-sm text-muted-foreground">
             <Loader2 className="size-4 animate-spin" aria-hidden="true" />
-            GLM is analyzing… this can take up to a minute for long texts
+            AI is analyzing… this can take up to a minute for long texts
             (shorter text is faster; failed calls retry once automatically).
           </p>
         ) : null}
@@ -403,7 +403,7 @@ export function AiDetectorPanel() {
             </div>
             <p className="text-sm font-medium">Run an analysis to see results</p>
             <p className="max-w-xs text-xs text-muted-foreground">
-              GLM combines heuristic signals with an LLM judgment to estimate
+              AI combines heuristic signals with an LLM judgment to estimate
               how likely the text is machine-generated — novel mode uses a
               fiction-forensic lens.
             </p>
@@ -423,8 +423,8 @@ export function AiDetectorPanel() {
                 <CardTitle>Verdict</CardTitle>
                 <CardDescription>
                   {result.textType === "novel"
-                    ? "Fiction-forensic judgment from GLM with novel-tuned heuristic support."
-                    : "Overall judgment from GLM with local heuristic support."}
+                    ? "Fiction-forensic judgment from AI with novel-tuned heuristic support."
+                    : "Overall judgment from AI with local heuristic support."}
                 </CardDescription>
               </CardHeader>
               <CardContent className="flex flex-col gap-4 sm:flex-row sm:items-center">
@@ -438,7 +438,7 @@ export function AiDetectorPanel() {
                       {VERDICT_META[result.verdict].label}
                     </Badge>
                     <span className="text-xs text-muted-foreground">
-                      GLM confidence: {Math.round(result.confidence)}%
+                      AI confidence: {Math.round(result.confidence)}%
                     </span>
                   </div>
                   <p className="text-sm leading-relaxed text-muted-foreground">
@@ -450,12 +450,12 @@ export function AiDetectorPanel() {
                 <CardContent className="pt-0">
                   <Alert>
                     <Info aria-hidden="true" />
-                    <AlertTitle>Heuristic &amp; GLM scores diverge</AlertTitle>
+                    <AlertTitle>Heuristic &amp; AI scores diverge</AlertTitle>
                     <AlertDescription>
                       The blended AI score ({Math.round(result.aiScore)}%)
-                      differs notably from GLM&apos;s own assessment (
-                      {Math.round(result.glmScore)}%). Heuristics are a rough
-                      proxy — treat GLM&apos;s judgment as the primary signal.
+                      differs notably from AI&apos;s own assessment (
+                      {Math.round(result.llmScore)}%). Heuristics are a rough
+                      proxy — treat AI&apos;s judgment as the primary signal.
                     </AlertDescription>
                   </Alert>
                 </CardContent>
@@ -523,7 +523,7 @@ export function AiDetectorPanel() {
               <CardHeader>
                 <CardTitle>Sentence-level analysis</CardTitle>
                 <CardDescription>
-                  Per-sentence AI likelihood with GLM notes.
+                  Per-sentence AI likelihood with AI notes.
                 </CardDescription>
               </CardHeader>
               <CardContent>

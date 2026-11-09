@@ -622,7 +622,7 @@ export interface QcEvalReport {
   runAt: string;
   budgets: {
     revisionRounds: number;
-    glmRetries: number;
+    aiRetries: number;
     maxConcurrent: number;
   };
 }

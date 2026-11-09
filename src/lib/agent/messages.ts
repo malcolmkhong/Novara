@@ -18,13 +18,13 @@
 //      claim   = conditional UPDATE (lease free OR heartbeat stale) +
 //                leaseEpoch increment → the epoch is the fencing token;
 //      renew   = CAS on (owner, epoch) touching the heartbeat;
-//      verify  = read check for self-detection after long awaits (glmCall);
+//      verify  = read check for self-detection after long awaits (aiCall);
 //      fenced writes = every stateJson checkpoint and every transcript
 //                append verifies (owner, epoch) in the same transaction /
 //                WHERE clause, so an evicted executor can neither advance
 //                the loop cursor nor append to a conversation it lost.
 //    Timing: renew opportunistically at every checkpoint + a 10s interval;
-//    staleAfter = 240s — deliberately larger than glmChat's worst-case wall
+//    staleAfter = 240s — deliberately larger than chatCompletion's worst-case wall
 //    time (3 attempts × 60s timeout + backoffs ≈ 190s) so a leaseholder
 //    legitimately busy in provider retries is never falsely evicted.
 //
@@ -47,7 +47,7 @@ export const LEADER_CONVERSATION = "leader";
 /** Heartbeat renewed at least this often (plus opportunistic checkpoints). */
 export const LEASE_RENEW_MS = 10_000;
 
-/** Lease is stealable after this much silence (see header: > glm worst case). */
+/** Lease is stealable after this much silence (see header: > ai worst case). */
 export const LEASE_STALE_MS = 240_000;
 
 export type ChatRole = "user" | "assistant";
@@ -109,7 +109,7 @@ export interface RunLoopState {
    * property). Checkpointed BEFORE the wrap-up model call, so no number of
    * crash→resume cycles can mint a second wrap-up turn — a resume that finds
    * this flag set with the turn budget spent takes the deterministic,
-   * zero-GLM reconciliation path instead.
+   * zero-AI reconciliation path instead.
    */
   wrapUpGranted: boolean;
 }

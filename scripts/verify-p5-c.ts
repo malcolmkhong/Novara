@@ -171,7 +171,7 @@ async function main() {
   check(
     "PR pricing version + source pinned: versioned table, dated docs URL",
     PRICING_VERSION === "2026-11-06.1" &&
-      PRICING_SOURCE_URL === "https://docs.z.ai/guides/overview/pricing",
+      PRICING_SOURCE_URL === "(source removed)",
     `v${PRICING_VERSION}`
   );
 

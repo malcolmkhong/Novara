@@ -2,7 +2,7 @@
  * Local statistical heuristics for AI-generated-text detection.
  *
  * This module is intentionally PURE (no server-only imports such as
- * `z-ai-web-dev-sdk`) so that shared types can be safely imported from
+ * `the provider SDK`) so that shared types can be safely imported from
  * client components as well. All functions are deterministic.
  */
 
@@ -122,7 +122,7 @@ function escapeRegExp(value: string): string {
 }
 
 /**
- * Compute deterministic local heuristics that complement the GLM judgment
+ * Compute deterministic local heuristics that complement the AI judgment
  * in the AI-detector route.
  */
 export function computeHeuristics(text: string): HeuristicResult {
@@ -275,22 +275,22 @@ export function extractJson<T>(raw: string): T | null {
 }
 
 // ---------------------------------------------------------------------------
-// GLM budgeting helpers (server-side routes use these to keep latency bounded
+// AI budgeting helpers (server-side routes use these to keep latency bounded
 // so responses finish well before gateway/proxy timeouts).
 // ---------------------------------------------------------------------------
 
 /**
- * Max characters of raw user text forwarded to GLM in a single prompt.
+ * Max characters of raw user text forwarded to AI in a single prompt.
  * Long inputs make the model echo huge JSON payloads (90s+), which trips
  * upstream proxy timeouts. Heuristics still run on the FULL text.
  */
-export const GLM_TEXT_BUDGET = 6000;
+export const AI_TEXT_BUDGET = 6000;
 
-/** Per-attempt GLM call budget in milliseconds. */
-export const GLM_TIMEOUT_MS = 60_000;
+/** Per-attempt AI call budget in milliseconds. */
+export const AI_TIMEOUT_MS = 60_000;
 
-/** Truncate text to the GLM budget, on a whitespace boundary when possible. */
-export function capForGlm(text: string, budget: number = GLM_TEXT_BUDGET): string {
+/** Truncate text to the AI budget, on a whitespace boundary when possible. */
+export function capOutputTokens(text: string, budget: number = AI_TEXT_BUDGET): string {
   if (text.length <= budget) return text;
   const slice = text.slice(0, budget);
   const lastSpace = slice.lastIndexOf(" ");
@@ -304,8 +304,8 @@ export function capForGlm(text: string, budget: number = GLM_TEXT_BUDGET): strin
  */
 export function withTimeout<T>(
   promise: Promise<T>,
-  ms: number = GLM_TIMEOUT_MS,
-  label = "GLM request",
+  ms: number = AI_TIMEOUT_MS,
+  label = "AI request",
 ): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(() => {

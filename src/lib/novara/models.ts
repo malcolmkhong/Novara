@@ -1,26 +1,23 @@
 // ---------------------------------------------------------------------------
-// Novara AI — Model registry (Phase P2).
+// Novara AI — Model selection surface (P2), now a PROJECTION of the provider
+// registry. No model id, price or context window is defined here: see
+// src/lib/ai/providers/registry.ts, the single source of truth.
 //
-// ONE source of truth for every model the team can run on. Adding a model is
-// a DATA change: append one entry below and (when the gateway starts serving
-// it for real) flip `available`. Nothing else in the codebase hardcodes a
-// model id — the runtime, the run API and the composer picker all read this
-// registry.
-//
-// Entry shape:
-//   id             stable registry id, also what AgentRun stores
-//   sdkModel       value passed to the SDK `model` field (undefined = leave
-//                  the field off and let the gateway use its server default)
-//   thinkingLevels ordered low→high; the picker shows exactly these for the
-//                  selected model ("根据所选模型显示可用的思考等级")
-//   toSdkParams    translates a thinking level into SDK request params
-//
-// HONESTY (verified by probe, 2025): this gateway currently accepts every
-// id below but routes them to ONE shared GLM backend (echoes model
-// "glm-4-plus"). Today the only REAL behavioral switch is thinking on/off.
-// The registry still carries each entry's published spec so the panel and
-// picker are correct the moment the gateway differentiates backends.
+// The public shape below is deliberately unchanged so model-picker.tsx,
+// context-usage-panel.tsx, conversation-pane.tsx and the run APIs keep
+// compiling without edits.
 // ---------------------------------------------------------------------------
+
+import {
+  DEFAULT_MODEL_ID,
+  LEGACY_MODEL_ALIASES,
+  isProviderEnabled,
+  listForUi,
+  resolveModel,
+} from "@/lib/ai/providers/registry";
+import type { ModelDef } from "@/lib/ai/providers/types";
+
+export { DEFAULT_MODEL_ID };
 
 export type ThinkingLevel = "off" | "low" | "medium" | "high";
 
@@ -37,102 +34,65 @@ export const THINKING_LEVEL_META: Record<ThinkingLevel, ThinkingLevelMeta> = {
   high: { id: "high", label: "High", hint: "Deep thinking — slowest, most thorough." },
 };
 
-/** SDK request params a resolved (model, level) pair produces. */
+/** Params handed to the SDK-shaped compat wrapper in src/lib/ai/router.ts. */
 export interface SdkModelParams {
   model?: string;
-  thinking?: { type: "enabled" | "disabled" };
+  /** Concrete level forwarded verbatim; legacy object shape still accepted. */
+  thinking?: ThinkingLevel | { type: "enabled" | "disabled" };
 }
 
 export interface ModelDefinition {
   id: string;
   label: string;
   vendor: string;
-  /** Published context window, in tokens (drives the Context Usage panel). */
   contextWindow: number;
   maxOutputTokens: number;
-  /** Ordered low→high thinking levels this model accepts. */
   thinkingLevels: ThinkingLevel[];
-  /** Level used when the author picks the model without touching thinking. */
   defaultThinkingLevel: ThinkingLevel;
-  /** False = shown in the picker as a coming-soon row, not selectable. */
   available: boolean;
-  /** One-line capability note shown in the picker. */
   note: string;
-  /** Level → SDK params (kept per-entry so future gateways can differ). */
   toSdkParams: (level: ThinkingLevel) => SdkModelParams;
 }
 
-/** GLM-style gateway: thinking is a binary toggle today. */
-const glmThinking = (sdkModel?: string) => ({
-  toSdkParams: (level: ThinkingLevel): SdkModelParams => ({
-    ...(sdkModel ? { model: sdkModel } : {}),
-    thinking: { type: level === "off" ? "disabled" : "enabled" },
-  }),
-});
+function project(def: ModelDef): ModelDefinition {
+  // gemini-3.8-flash has no zero-thinking mode: "off"/"none"/"minimal" are
+  // rejected by the gateway. No adapter currently advertises a different set,
+  // so all providers offer the same three levels; branch here if one does.
+  const thinkingLevels: ThinkingLevel[] = ["low", "medium", "high"];
+  return {
+    id: def.id,
+    label: def.label,
+    vendor: def.vendor,
+    contextWindow: def.contextWindow,
+    maxOutputTokens: def.maxOutputTokens,
+    thinkingLevels,
+    defaultThinkingLevel: "low",
+    available: isProviderEnabled(def.provider),
+    note: `${def.tier === "pro" ? "Pro" : "Fast"} · writing ${def.writingScore}/5${
+      def.supportsStreaming ? " · streaming" : ""
+    }`,
+    toSdkParams: (level) => ({
+      model: def.id,
+      thinking: thinkingLevels.includes(level) ? level : "low",
+    }),
+  };
+}
 
-export const MODEL_REGISTRY: ModelDefinition[] = [
-  {
-    id: "glm-4.6",
-    label: "GLM-4.6",
-    vendor: "Z.ai",
-    contextWindow: 200_000,
-    maxOutputTokens: 128_000,
-    thinkingLevels: ["off", "high"],
-    defaultThinkingLevel: "off",
-    available: true,
-    note: "Flagship — deep novel work, 200K context spec.",
-    ...glmThinking("glm-4.6"),
-  },
-  {
-    id: "glm-4.5-air",
-    label: "GLM-4.5 Air",
-    vendor: "Z.ai",
-    contextWindow: 128_000,
-    maxOutputTokens: 96_000,
-    thinkingLevels: ["off", "high"],
-    defaultThinkingLevel: "off",
-    available: true,
-    note: "Lightweight — fast drafting and research turns.",
-    ...glmThinking("glm-4.5-air"),
-  },
-  {
-    id: "glm-4-flash",
-    label: "GLM-4 Flash",
-    vendor: "Z.ai",
-    contextWindow: 128_000,
-    maxOutputTokens: 96_000,
-    thinkingLevels: ["off"],
-    defaultThinkingLevel: "off",
-    available: true,
-    note: "Speed-first — no thinking mode, tight budgets.",
-    ...glmThinking("glm-4-flash"),
-  },
-  {
-    id: "glm-4-long",
-    label: "GLM-4 Long",
-    vendor: "Z.ai",
-    contextWindow: 1_000_000,
-    maxOutputTokens: 32_000,
-    thinkingLevels: ["off", "high"],
-    defaultThinkingLevel: "off",
-    available: true,
-    note: "1M-context spec — whole-novel passes and recap runs.",
-    ...glmThinking("glm-4-long"),
-  },
-];
+/** Ordered by editorial writing score (see registry.listForUi). */
+export const MODEL_REGISTRY: ModelDefinition[] = listForUi().map(project);
 
-export const DEFAULT_MODEL_ID = "glm-4.6";
-
-/** The author-facing (model, thinking level) pair stored per run / per novel. */
 export interface ModelSelection {
   modelId: string;
   thinkingLevel: ThinkingLevel;
 }
 
+/** Tolerant of legacy ids already persisted in AgentRun / UsageCall rows. */
 export function getModelDefinition(modelId: string | undefined | null): ModelDefinition {
+  const raw = modelId ?? DEFAULT_MODEL_ID;
+  const canonical = LEGACY_MODEL_ALIASES[raw] ?? raw;
   return (
-    MODEL_REGISTRY.find((m) => m.id === modelId) ??
-    MODEL_REGISTRY.find((m) => m.id === DEFAULT_MODEL_ID) ??
+    MODEL_REGISTRY.find((model) => model.id === canonical) ??
+    MODEL_REGISTRY.find((model) => model.id === DEFAULT_MODEL_ID) ??
     MODEL_REGISTRY[0]
   );
 }
@@ -149,20 +109,26 @@ export function defaultSelection(): ModelSelection {
  */
 export function resolveModelSelection(
   modelId: string | undefined | null,
-  thinkingLevel: string | undefined | null
+  thinkingLevel: string | undefined | null,
 ): { selection: ModelSelection; sdk: SdkModelParams; contextWindow: number; label: string } {
-  const def = MODEL_REGISTRY.find((m) => m.id === modelId);
-  if (modelId && !def) {
+  let resolved: ModelDef | undefined;
+  try {
+    resolved = resolveModel(modelId);
+  } catch {
+    resolved = undefined;
+  }
+  if (modelId && !resolved) {
     throw new Error(`Unknown model "${modelId}" — not in the registry.`);
   }
-  const entry = def ?? getModelDefinition(DEFAULT_MODEL_ID);
-  if (!entry.available) {
-    throw new Error(`Model ${entry.label} is not available yet.`);
-  }
-  const level = (thinkingLevel ?? entry.defaultThinkingLevel) as ThinkingLevel;
+  const entry = getModelDefinition(resolved?.id ?? DEFAULT_MODEL_ID);
+  if (!entry.available) throw new Error(`Model ${entry.label} is not available yet.`);
+  const rawLevel = (thinkingLevel ?? entry.defaultThinkingLevel) as ThinkingLevel;
+  // Legacy runs and stored preferences still carry "off"; the gateway has no
+  // zero-thinking mode, so normalise to the cheapest supported level.
+  const level: ThinkingLevel = rawLevel === "off" ? "low" : rawLevel;
   if (!entry.thinkingLevels.includes(level)) {
     throw new Error(
-      `Thinking level "${thinkingLevel}" is not available on ${entry.label} (supported: ${entry.thinkingLevels.join(", ")}).`
+      `Thinking level "${thinkingLevel}" is not available on ${entry.label} (supported: ${entry.thinkingLevels.join(", ")}).`,
     );
   }
   return {

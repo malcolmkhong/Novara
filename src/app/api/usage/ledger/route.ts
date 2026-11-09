@@ -3,7 +3,7 @@
 //
 // GET /api/usage/ledger?period=YYYY-MM (optional; default = all-time) → the
 // account-scope snapshot from the PERSISTED UsageCall table: every measured
-// GLM call since the ledger shipped, grouped by surface and by novel
+// AI call since the ledger shipped, grouped by surface and by novel
 // (deleted novels render as "(deleted novel)" — Ruling 1: ledger rows are
 // permanent account history, never cascade-deleted with content).
 //

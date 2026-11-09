@@ -1,16 +1,16 @@
-import ZAI from "z-ai-web-dev-sdk";
+import ZAI from "@/lib/ai/router";
 import { jsonError, parseBody, validationError, withTimeout } from "@/lib/novara/api-helpers";
-import { classifyGlmFailure, extractRealUsage } from "@/lib/usage/usage-shapes";
+import { classifyAiFailure, extractRealUsage } from "@/lib/usage/usage-shapes";
 import { recordUsageCall } from "@/lib/usage/usage-store";
 import { z } from "zod";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 90;
 
-const GLM_TIMEOUT_MS = 60_000;
+const AI_TIMEOUT_MS = 60_000;
 
 // Canonical line formats the wizard parser (wizard-parse.ts) understands.
-// Provided in both languages so GLM follows the example's language.
+// Provided in both languages so AI follows the example's language.
 const CAST_FORMAT_EN = `One character per line, exactly this format:
 Name — role: description
 Example: Mara Voss — protagonist: night clerk of the Ledger; keeps the trade book.`;
@@ -46,7 +46,7 @@ const wizardSchema = z.object({
   sessionId: z.string().trim().min(8).max(100).optional(),
 });
 
-// POST /api/ai/wizard — GLM generation for the "New with the AI team" wizard.
+// POST /api/ai/wizard — AI generation for the "New with the AI team" wizard.
 // One section per call; previously generated sections are passed in as
 // context so cast and outline stay coherent with the premise. Returns the
 // canonical text the wizard renders into its editable textareas — nothing
@@ -141,7 +141,7 @@ export async function POST(req: Request) {
         ],
         thinking: { type: "disabled" },
       }),
-      GLM_TIMEOUT_MS,
+      AI_TIMEOUT_MS,
       "AI wizard"
     );
 
@@ -164,7 +164,7 @@ export async function POST(req: Request) {
         surface: "wizard",
         usage: null,
         status: "failed",
-        errorKind: classifyGlmFailure(error),
+        errorKind: classifyAiFailure(error),
         ...(sessionId ? { correlationId: sessionId } : {}),
       });
     }

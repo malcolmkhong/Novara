@@ -1,7 +1,7 @@
 "use client";
 
 // ---------------------------------------------------------------------------
-// Review tab (Phase 2, live) — GLM structured review + sediment pipeline.
+// Review tab (Phase 2, live) — AI structured review + sediment pipeline.
 //
 //   Run review      → POST /api/chapters/[id]/review (issue list, critical
 //                     is blocking, server-forced)
@@ -202,7 +202,7 @@ export function ReviewPanel({ chapters }: { chapters: ChapterDTO[] }) {
                   {reviewedChapter
                     ? chapterLabel(reviewedChapter)
                     : review.chapterId}{" "}
-                  · GLM review ·{" "}
+                  · AI review ·{" "}
                   {review.issues.length === 0
                     ? "no issues found"
                     : `${review.issues.length} issue${review.issues.length === 1 ? "" : "s"}`}

@@ -11,13 +11,13 @@
 // (category, content) and only ever advances the foreshadow state machine.
 //
 // Output protocol is LINE format, deliberately NOT JSON: chapter text is full
-// of dialogue quotes that GLM copies into JSON strings unescaped; line format
+// of dialogue quotes that AI copies into JSON strings unescaped; line format
 // has no escaping problem at all (Phase 2 lesson, two 502s before the switch).
 // ---------------------------------------------------------------------------
 
 import { db } from "@/lib/db";
 import { getBudgets } from "@/lib/novara/content";
-import { glmChat } from "@/lib/novara/glm";
+import { chatCompletion } from "@/lib/ai/chat";
 
 const MEMORY_CATEGORIES = [
   "world_rule",
@@ -203,10 +203,10 @@ export async function sedimentChapterCore(chapterId: string): Promise<{
         .join("\n")}`
     );
   }
-  parts.push(`CHAPTER ${chapter.index} TEXT:\n${chapter.content.slice(0, budgets.glm.chapterContextChars)}`);
+  parts.push(`CHAPTER ${chapter.index} TEXT:\n${chapter.content.slice(0, budgets.ai.chapterContextChars)}`);
   parts.push(isChinese ? SEDIMENT_SPEC_ZH : SEDIMENT_SPEC_EN);
 
-  const { text: raw } = await glmChat({
+  const { text: raw } = await chatCompletion({
     messages: [
       { role: "assistant", content: system },
       { role: "user", content: parts.join("\n\n") },

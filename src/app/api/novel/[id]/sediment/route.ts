@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 
 import { db } from "@/lib/db";
-import { glmJson } from "@/lib/novel/glm";
+import { completeJson } from "@/lib/ai/writing";
 import {
   buildSedimentMessages,
   parseSedimentResponse,
@@ -90,7 +90,7 @@ export async function POST(req: Request, ctx: RouteContext) {
       orderBy: { plantedAt: "asc" },
     });
 
-    const result = await glmJson<SedimentResult>(
+    const result = await completeJson<SedimentResult>(
       buildSedimentMessages(
         chapterNumber,
         chapter.content,
@@ -103,7 +103,7 @@ export async function POST(req: Request, ctx: RouteContext) {
         {
           success: false,
           error:
-            "GLM could not extract the chapter memory in time. Please try again.",
+            "AI could not extract the chapter memory in time. Please try again.",
         },
         { status: 502 },
       );

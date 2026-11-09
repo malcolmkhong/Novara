@@ -1,16 +1,16 @@
 import { jsonrepair } from "jsonrepair";
-import { glmChat } from "./glm";
+import { chatCompletion } from "@/lib/ai/chat";
 import { parseLooseJson } from "./parse-json";
 import type { UsageCallScope } from "@/lib/usage/usage-store";
 
 /**
- * GLM JSON helper: asks the model for a strict JSON object, then parses and
- * validates it. GLM routinely breaks JSON by embedding unescaped quotes from
+ * AI JSON helper: asks the model for a strict JSON object, then parses and
+ * validates it. AI routinely breaks JSON by embedding unescaped quotes from
  * chapter dialogue inside string values, so the parse chain is:
  *   JSON.parse → jsonrepair (fixes unescaped quotes/trailing commas) →
  *   retry the model call if repair also fails.
  * Network resilience (429/5xx/timeout retries, concurrency cap) lives in
- * glmChat — this layer only retries STRUCTURAL failures (bad JSON / zod).
+ * chatCompletion — this layer only retries STRUCTURAL failures (bad JSON / zod).
  */
 export async function chatJson<T>(opts: {
   system: string;
@@ -32,7 +32,7 @@ export async function chatJson<T>(opts: {
 
   for (let attempt = 0; attempt < attempts; attempt++) {
     try {
-      const { text: raw } = await glmChat({ messages, tag: opts.tag, surface: "review", ledger: opts.ledger });
+      const { text: raw } = await chatCompletion({ messages, tag: opts.tag, surface: "review", ledger: opts.ledger });
       return opts.parse(parseLooseJson(raw));
     } catch (error) {
       lastError = error;
