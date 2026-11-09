@@ -1,0 +1,157 @@
+# ---------------------------------------------------------------------------
+# Novara AI — Cloud Build pipeline v2 (GitHub push → build → deploy to VM)
+# Companion to DEPLOYMENT-GOOGLE.md v2, Step 9.
+#
+# WHY THIS SHAPE (evidence, see DEPLOYMENT-GOOGLE.md §2.2):
+#   Agent runs execute in `after()` AFTER the HTTP response, approval gates can
+#   wait 30 min, SSE streams hold process-local setInterval timers, and the
+#   executor renews a DB lease every few seconds. Cloud Run's default
+#   request-based billing allocates CPU ONLY during request processing, so
+#   post-response code cannot be relied on to finish. Instance-based billing
+#   + min-instances=1 would work but costs ~$44/month (10x the free vCPU
+#   allowance). SQLite also needs a real POSIX filesystem, which Cloud Run's
+#   ephemeral disk / gcsfuse cannot provide safely.
+#   => Build here, ship a tar to Cloud Storage, run on the always-free e2-micro.
+#
+# FREE-TIER NOTE (verified 2026-11-07 against cloud.google.com/build/pricing):
+#   Cloud Build's free build minutes apply to the DEFAULT pool machine
+#   `e2-standard-2`. The v1 pipeline explicitly set `E2_HIGHCPU_8`, which the
+#   pricing page marks "No" (not free) at $0.0156/build-minute. That override
+#   is deliberately ABSENT here. Do not add it back unless default-pool builds
+#   genuinely OOM — and know that it starts billing immediately.
+#
+# TRIGGER: Cloud Build GitHub App on push to `main` (see doc Step 8).
+# ---------------------------------------------------------------------------
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+  # machineType intentionally omitted → default e2-standard-2 (8 GB RAM),
+  # which is the free-tier-eligible default-pool machine.
+
+substitutions:
+  _VM_NAME: novara-vm
+  _VM_ZONE: us-central1-a
+  _BUCKET: novara-artifacts
+  _KEEP_RELEASES: "5"
+  # gcr.io writes are shut down; this maintained Cloud SDK image still
+  # resolves through the compatibility domain and bundles gcloud/gsutil.
+  _GCLOUD_IMAGE: gcr.io/google.com/cloudsdktool/google-cloud-cli:slim
+
+steps:
+  # 1) Install exactly what is locked.
+  - name: oven/bun:1.3
+    id: install
+    entrypoint: bun
+    args: ["install", "--frozen-lockfile"]
+
+  # 2) Prisma client against the committed schema.
+  - name: oven/bun:1.3
+    id: prisma-generate
+    entrypoint: bun
+    args: ["run", "db:generate"]
+
+  # 3) Project lint gate.
+  - name: oven/bun:1.3
+    id: lint
+    entrypoint: bun
+    args: ["run", "lint"]
+
+  # 4) REAL type gate. next.config.ts sets typescript.ignoreBuildErrors:true,
+  #    so `next build` silently swallows TS errors. This step is the only
+  #    thing standing between a type regression and a published artifact.
+  - name: oven/bun:1.3
+    id: typecheck
+    entrypoint: bunx
+    args: ["tsc", "--noEmit"]
+
+  # 5) Zero-GLM integration harnesses (11 scripts). They construct their own
+  #    PrismaClient and call deleteMany, so they MUST run against a throwaway
+  #    database — never the dev/production one. v1 recorded 3 failures caused
+  #    exactly by a polluted local dev DB.
+  - name: oven/bun:1.3
+    id: harness
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        set -euo pipefail
+        export DATABASE_URL="file:/tmp/novara-ci.db"
+        rm -f /tmp/novara-ci.db
+        bunx prisma db push --skip-generate
+        for f in scripts/verify-*.ts; do
+          echo "=== harness: $f ==="
+          bun "$f"
+        done
+        rm -f /tmp/novara-ci.db
+    env:
+      - CI=1
+      - NEXT_TELEMETRY_DISABLED=1
+
+  # 6) Production build. `bun run build` triggers the `postbuild` hook
+  #    (scripts/assemble-standalone.mjs), which verifies server.js, the Prisma
+  #    engine, agent/ content, static assets and RELEASE.json, and STRIPS any
+  #    .env* that next build copied into standalone. Packaging logic lives in
+  #    exactly one file; do not duplicate it here.
+  - name: oven/bun:1.3
+    id: build
+    entrypoint: bun
+    args: ["run", "build"]
+    env:
+      # src/lib/db.ts constructs PrismaClient at module load; next build may
+      # evaluate route modules. A throwaway URL keeps the build hermetic.
+      - DATABASE_URL=file:/tmp/novara-build.db
+      - NEXT_TELEMETRY_DISABLED=1
+      # Consumed by assemble-standalone.mjs for RELEASE.json (/api/health).
+      - COMMIT_SHA=$COMMIT_SHA
+      - BRANCH_NAME=$BRANCH_NAME
+      - BUILD_ID=$BUILD_ID
+
+  # 7) Pack the already-verified standalone tree.
+  - name: oven/bun:1.3
+    id: package
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        set -euo pipefail
+        [[ -f .next/standalone/server.js ]] || {
+          echo "FATAL: .next/standalone/server.js missing — did postbuild run?"; exit 1; }
+        tar -czf /workspace/release-$${COMMIT_SHA:0:12}.tar.gz -C .next/standalone .
+        ls -lh /workspace/release-*.tar.gz
+
+  # 8) Publish: stable "latest" pointer + immutable per-commit copy.
+  - name: ${_GCLOUD_IMAGE}
+    id: upload
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        set -euo pipefail
+        REL=$$(ls /workspace/release-*.tar.gz | head -n1)
+        gcloud storage cp "$$REL" gs://${_BUCKET}/releases/$$(basename "$$REL")
+        gcloud storage cp "$$REL" gs://${_BUCKET}/latest.tar.gz
+        # keep only the last N releases to stay inside the 5 GB free allowance
+        gcloud storage ls -t gs://${_BUCKET}/releases/ | tail -n +$$(( ${_KEEP_RELEASES} + 1 )) \
+          | xargs -r -I{} gcloud storage rm {} || true
+
+  # 9) Deploy: ship THIS build's vm-deploy.sh to the VM and run it there.
+  #    Copying the script each time removes the chicken-and-egg problem of a
+  #    fresh VM with an empty bucket. Uses the Cloud Build service account +
+  #    OS Login, so no SSH private key is stored as a secret.
+  #    IAM required on the Cloud Build SA (see DEPLOYMENT-GOOGLE.md Step 1.3):
+  #      compute.instanceAdmin.v1 / iam.serviceAccountUser
+  #      compute.osAdminLogin     (vm-deploy.sh uses sudo)
+  #      storage.objectAdmin
+  - name: ${_GCLOUD_IMAGE}
+    id: deploy
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        set -euo pipefail
+        gcloud compute scp deploy/vm-deploy.sh \
+          ${_VM_NAME}:/tmp/vm-deploy.sh --zone=${_VM_ZONE} --quiet
+        gcloud compute ssh ${_VM_NAME} --zone=${_VM_ZONE} --quiet \
+          --command="sudo bash /tmp/vm-deploy.sh ${_BUCKET} && rm -f /tmp/vm-deploy.sh"
+
+timeout: 1200s

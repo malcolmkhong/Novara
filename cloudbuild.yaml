@@ -1,0 +1,143 @@
+# ---------------------------------------------------------------------------
+# Novara AI — Cloud Build pipeline (GitHub push → build → deploy to free-tier VM)
+#
+# WHY THIS SHAPE (evidence-based, see DEPLOYMENT-GOOGLE.md §2):
+#   The app is a Next.js standalone server + SQLite + resident background work
+#   (agent runs up to ~12 min, lease heartbeats, SSE streams). That requires an
+#   ALWAYS-ON process and a real POSIX filesystem. Cloud Run cannot provide
+#   either within the free tier:
+#     · Cloud Run disks are EPHEMERAL by design (docs: "Configure an ephemeral
+#       disk"; Next '26 preview disks are "created when an instance starts and
+#       deleted when it stops").
+#     · The only persistent option is a Cloud Storage FUSE mount, and running
+#       SQLite over gcsfuse lacks POSIX locking semantics — a corruption risk we
+#       will not take on the database that IS the product.
+#     · Keeping an instance warm (min-instances=1 + CPU always allocated) costs
+#       ~2,592,000 vCPU-seconds/month against a 240,000 vCPU-second free
+#       allowance — roughly 10x over. That violates the "$0 budget" constraint.
+#   So: BUILD in Cloud Build (ample RAM, free minutes), ship an ARTIFACT to
+#   Cloud Storage (free 5 GB), and RUN it on the always-free e2-micro VM.
+#   No Docker daemon on the VM (1 GB RAM is too tight for Docker + Next.js),
+#   no Artifact Registry storage needed, no per-request billing.
+#
+# TRIGGER: Cloud Build GitHub App on push to `main` (see doc §5).
+# FREE-TIER BUDGET CONSUMED BY THIS PIPELINE:
+#   Cloud Build   2,500 build-minutes/month free  → ~4-6 min per build
+#   Cloud Storage 5 GB free                       → artifact ~40-80 MB, keep last 5
+#   Compute Engine 1 e2-micro always-free         → the VM itself
+#   Egress        1 GB/month free (from N. America, excl. CN/AU)
+# ---------------------------------------------------------------------------
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+  machineType: E2_HIGHCPU_8   # build needs RAM/CPU; this is build-time only and
+                             # is covered by the free build-minutes allowance
+
+substitutions:
+  _VM_NAME: novara-vm
+  _VM_ZONE: us-central1-a          # free e2-micro is US-region only (see doc §7)
+  _BUCKET: novara-artifacts        # created by deploy/vm-setup.sh
+  _KEEP_RELEASES: "5"
+  # gcr.io was shut down (writes blocked 2025-03-18, reads 2025-05-20). The
+  # maintained Cloud SDK image lives on Artifact Registry now. The cloud-builders
+  # gcloud image still resolves through the gcr.io compatibility domain, but its
+  # own README warns it "may not support the most recent versions of gcloud".
+  _GCLOUD_IMAGE: gcr.io/google.com/cloudsdktool/google-cloud-cli:slim
+
+steps:
+  # 1) Install dependencies exactly as locked.
+  - name: oven/bun:1.3
+    id: install
+    entrypoint: bun
+    args: ["install", "--frozen-lockfile"]
+
+  # 2) Generate the Prisma client against the committed schema.
+  - name: oven/bun:1.3
+    id: prisma-generate
+    entrypoint: bun
+    args: ["run", "db:generate"]
+
+  # 3) Type/lint gate. Kept non-fatal-free on purpose: `lint` is the project's
+  #    own bar and has been green across all five phases.
+  - name: oven/bun:1.3
+    id: lint
+    entrypoint: bun
+    args: ["run", "lint"]
+
+  # 4) Production build. next.config.ts already sets output:"standalone".
+  #    `bun run build` runs `next build` and then the `postbuild` hook, which is
+  #    scripts/assemble-standalone.mjs — the SAME assembler used locally, so the
+  #    artifact layout is identical everywhere and is verified (server.js, Prisma
+  #    engine, agent/ content layer, static assets, RELEASE.json) with a hard
+  #    failure if anything is missing. Packaging logic lives in exactly one file;
+  #    it is deliberately NOT duplicated here.
+  - name: oven/bun:1.3
+    id: build
+    entrypoint: bun
+    args: ["run", "build"]
+    env:
+      - NEXT_TELEMETRY_DISABLED=1
+      # Cloud Build substitutions, consumed by assemble-standalone.mjs for
+      # RELEASE.json so /api/health can report which commit is live.
+      - COMMIT_SHA=$COMMIT_SHA
+      - BRANCH_NAME=$BRANCH_NAME
+      - BUILD_ID=$BUILD_ID
+
+  # 5) Tar the assembled artifact. The assembler already produced a complete,
+  #    verified .next/standalone tree; this step only packs it. The artifact is
+  #    ~124 MB uncompressed (measured), which fits the 5 GB free Cloud Storage
+  #    allowance for several retained releases.
+  - name: oven/bun:1.3
+    id: package
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        set -euo pipefail
+        [[ -f .next/standalone/server.js ]] || {
+          echo "FATAL: .next/standalone/server.js missing — did postbuild run?"; exit 1; }
+        tar -czf /workspace/release-$${COMMIT_SHA:0:12}.tar.gz -C .next/standalone .
+        ls -lh /workspace/release-*.tar.gz
+
+  # 6) Publish to Cloud Storage with a stable "latest" pointer plus an
+  #    immutable per-commit copy (that pair is what makes rollback trivial).
+  #    Uses the maintained Cloud SDK image (which bundles gsutil); the old
+  #    gcr.io/cloud-builders/gsutil image is on the shut-down GCR domain.
+  - name: ${_GCLOUD_IMAGE}
+    id: upload
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        set -euo pipefail
+        REL=$$(ls /workspace/release-*.tar.gz | head -n1)
+        gcloud storage cp "$$REL" gs://${_BUCKET}/releases/$$(basename "$$REL")
+        gcloud storage cp "$$REL" gs://${_BUCKET}/latest.tar.gz
+        # keep only the last N releases to stay inside the 5 GB free allowance
+        gcloud storage ls -t gs://${_BUCKET}/releases/ | tail -n +$$(( ${_KEEP_RELEASES} + 1 )) \
+          | xargs -r -I{} gcloud storage rm {} || true
+
+  # 7) Deploy: ship THIS build's vm-deploy.sh to the VM and run it there.
+  #    Copying the script on every deploy (rather than relying on a copy
+  #    pre-installed by vm-setup.sh) removes a chicken-and-egg problem: a fresh
+  #    VM booted via startup-script has an empty artifact bucket, so there is no
+  #    pre-installed vm-deploy.sh to call. Shipping it with the build means the
+  #    pipeline is self-sufficient and the VM always runs the deploy logic that
+  #    matches the artifact it is about to receive.
+  #    Uses the Cloud Build service account + OS Login, so no SSH private key is
+  #    stored as a secret. Requires the SA to hold compute.instanceAdmin.v1 +
+  #    iam.serviceAccountUser, and OS Login enabled — see DEPLOYMENT-GOOGLE.md §5.
+  - name: ${_GCLOUD_IMAGE}
+    id: deploy
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        set -euo pipefail
+        # Push the current deploy script to the VM, then execute it as root.
+        gcloud compute scp deploy/vm-deploy.sh \
+          ${_VM_NAME}:/tmp/vm-deploy.sh --zone=${_VM_ZONE} --quiet
+        gcloud compute ssh ${_VM_NAME} --zone=${_VM_ZONE} --quiet \
+          --command="sudo bash /tmp/vm-deploy.sh ${_BUCKET} && rm -f /tmp/vm-deploy.sh"
+
+timeout: 1200s

@@ -33,15 +33,30 @@ yarn-error.log*
 # env files (can opt-in for committing if needed)
 .env*
 !.env.example
+# SECURITY: .env holds a generated AUTH_SECRET and future API keys. Do not
+# un-ignore it — this repository is public.
+
+# OAuth client secret downloaded from Google Cloud Console (live secret)
+client_secret_*.json
 
 # local data / session artifacts (never commit)
 db/*.db
+# SECURITY FIX (2026-11-07): the live database lives at prisma/db/custom.db, which
+# the "db/*.db" pattern above does NOT match (that pattern only covers a root-level
+# db/ directory). This repository is PUBLIC — an unmatched database file would be
+# committed by the next `git add .`, exposing every novel stored in it.
+prisma/db/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
 tool-results/
 upload/
 *.pid
 
 # vercel
 .vercel
+.firebase/
 
 
 # typescript

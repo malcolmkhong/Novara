@@ -1,0 +1,67 @@
+# ---------------------------------------------------------------------------
+# SECURITY FIX (2026-11-07). This file did not exist, which means `docker build`
+# sent the ENTIRE working tree into the build context — including:
+#   .env                  → DATABASE_URL and any future secrets
+#   .z-ai-config          → the live model-gateway API key
+#   prisma/db/custom.db   → EVERY NOVEL THE USER HAS WRITTEN
+#   node_modules/         → ~800 MB of pointless upload per build
+# `next build` copies .env files into .next/standalone, so the database file and
+# credentials would have been baked into the published image.
+#
+# Rule: the image must contain CODE ONLY. Data and credentials are injected at
+# runtime (volume mount + environment / secret manager).
+# ---------------------------------------------------------------------------
+
+# --- credentials & local config -------------------------------------------
+.env
+.env.*
+!.env.example
+.z-ai-config
+*.pem
+
+# --- LIVE DATABASE: never bake user novels into an image --------------------
+prisma/db/
+db/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# --- dependencies (installed inside the image) ------------------------------
+node_modules
+
+# --- build outputs (produced inside the image) ------------------------------
+.next
+out
+build
+coverage
+
+# --- local artifacts, logs, scratch -----------------------------------------
+*.log
+dev.log
+dev.out.log
+server.log
+*-tmp.ts
+tool-results/
+upload/
+*.pid
+
+# --- version control & editor/agent state -----------------------------------
+.git
+.gitignore
+.github
+.claude
+.vercel
+.DS_Store
+.idea
+.vscode
+
+# --- docs & design notes (not needed at runtime) ----------------------------
+agent-ctx
+*.md
+!README.md
+
+# --- this file & deployment scripts (the VM runs them, the image doesn't) ----
+.dockerignore
+Dockerfile
+deploy/

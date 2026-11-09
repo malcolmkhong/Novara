@@ -1,0 +1,133 @@
+# ---------------------------------------------------------------------------
+# Novara AI — production reverse proxy (Caddy).
+#
+# WHY CADDY: the repo already ships a Caddyfile, and Caddy issues and renews
+# TLS certificates automatically with zero configuration. On a VM that replaces
+# what Cloud Run / Vercel would have terminated for us.
+#
+# HOW THIS DIFFERS FROM THE EXISTING /Caddyfile:
+#   · The repo's Caddyfile listens on :81 and has an `XTransformPort` query
+#     parameter that reverse-proxies to ARBITRARY LOCAL PORTS. That is a
+#     development convenience and on a public host it is an open proxy into the
+#     machine's localhost — any reachable internal port becomes reachable from
+#     the internet. It is deliberately NOT reproduced here.
+#   · This file terminates TLS for a real domain, proxies only to the app, and
+#     applies the rate limiting and security headers a public deployment needs.
+#
+# SETUP:
+#   1. Point your domain's A record at the VM's external IP.
+#   2. sudo cp deploy/Caddyfile.production /etc/caddy/Caddyfile
+#   3. Edit novara.example.com below.
+#   4. sudo systemctl reload caddy
+#   Caddy obtains the certificate on first request; check `journalctl -u caddy`.
+#
+# TESTING WITHOUT A DOMAIN: replace the site block with `:80` and remove the
+# tls line. Do not leave that on a public IP long-term — no TLS, and the app
+# has no authentication of its own yet.
+# ---------------------------------------------------------------------------
+
+novara.example.com {
+	# Certificate is automatic. To use a wildcard or a specific CA:
+	# tls {
+	#     issuer acme { ... }
+	# }
+
+	encode zstd gzip
+
+	# -------------------------------------------------------------------
+	# SECURITY HEADERS. Cheap, and they close off whole classes of attack
+	# against a page that renders user-authored novel content.
+	#   · frame-ancestors 'none' — stops clickjacking of the writer UI
+	#   · nosniff — stops a served .md/.txt being interpreted as script
+	#   · referrer-policy — novel titles are private; don't leak them
+	# -------------------------------------------------------------------
+	header {
+		X-Content-Type-Options    nosniff
+		X-Frame-Options           DENY
+		Referrer-Policy           strict-origin-when-cross-origin
+		Permissions-Policy        "camera=(), microphone=(), geolocation=(), interest-cohort=()"
+		# Next.js inline styles need 'unsafe-inline'; tighten once a nonce/CSP
+		# report-only pass has been done. Do not ship a strict CSP blind — it
+		# will break the editor.
+		Content-Security-Policy   "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; font-src 'self' data:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+		-Server
+	}
+
+	# -------------------------------------------------------------------
+	# RATE LIMITING — the "限制 limit" control, at the edge.
+	#
+	# Two zones, because the cost profiles differ by orders of magnitude:
+	#   · /api/agent/*, /api/team/*, /api/ai/*, /api/generate, /api/detect/*
+	#     trigger MODEL CALLS. An attacker who can hit these freely spends your
+	#     money. These are limited hard.
+	#   · Everything else is cheap.
+	#
+	# `rate_limit` requires the caddy-ratelimit plugin; if you run stock Caddy,
+	# install it with:
+	#   caddy add-package github.com/mholt/caddy-ratelimit
+	# The keys/limits below are deliberately conservative for a single-user or
+	# small-team deployment — raise them once real user counts are known.
+	# -------------------------------------------------------------------
+	rate_limit {
+		# Model-call endpoints: 10 requests per minute per client IP.
+		# An agent run is ONE POST that then streams; 10/min is generous for a
+		# human and fatal for a naive scraper loop.
+		zone model_calls {
+			match {
+				path /api/agent/* /api/team/* /api/ai/* /api/generate /api/detect/*
+			}
+			key    {client_ip}
+			events 10
+			window 1m
+		}
+		# Everything else: 120 requests per minute per IP.
+		zone general {
+			key    {client_ip}
+			events 120
+			window 1m
+		}
+	}
+
+	# -------------------------------------------------------------------
+	# LONG-RUNNING REQUESTS. An agent run was measured at 12m25s, and the SSE
+	# event stream stays open for the duration. Caddy's default write timeout
+	# would cut both off, so raise it above the app's own ceiling.
+	# The app's leader loop caps at 22 turns; 3600s is well past that.
+	# -------------------------------------------------------------------
+	reverse_proxy 127.0.0.1:3000 {
+		transport http {
+			read_timeout    3600s
+			write_timeout   3600s
+			dial_timeout    10s
+			response_header_timeout 3600s
+		}
+
+		# Pass the real client identity through, so the app's rate limiting and
+		# usage attribution see the true IP rather than Caddy's.
+		header_up X-Real-IP        {remote_host}
+		header_up X-Forwarded-For  {remote_host}
+		header_up X-Forwarded-Proto {scheme}
+		header_up Host             {host}
+
+		# SSE: disable buffering or events arrive in bursts instead of streaming.
+		flush_interval -1
+	}
+
+	# -------------------------------------------------------------------
+	# The health endpoint is exempted from rate limiting and CSP noise so
+	# external monitors can poll it freely.
+	# -------------------------------------------------------------------
+	@api_health path /api/health
+	rate_limit_skip @api_health
+
+	log {
+		output file /var/log/caddy/novara-access.log {
+			roll_size     10MiB
+			roll_keep     3
+			roll_keep_for 2160h
+		}
+		# Log format is deliberately minimal: never log request bodies, they can
+		# contain novel prose and pasted content.
+		format json
+	}
+}
