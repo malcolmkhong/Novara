@@ -71,6 +71,9 @@ const createSchema = z.object({
 });
 
 export async function POST(req: Request) {
+  const uid = req.headers.get("x-novara-uid");
+  if (!uid) return NextResponse.json({ success: false, error: "unauthenticated" }, { status: 401 });
+
   let body: unknown;
   try {
     body = await req.json();
@@ -135,6 +138,7 @@ export async function POST(req: Request) {
     const novel = await db.novel.create({
       data: {
         title: input.title && input.title.trim().length > 0 ? input.title.trim() : parsed.title,
+        userId: uid,
         genre: input.genre,
         logline: parsed.logline,
         coreConflict: parsed.coreConflict,

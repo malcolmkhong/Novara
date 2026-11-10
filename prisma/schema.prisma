@@ -36,6 +36,8 @@ model Novel {
   targetWords Int      @default(100000)
   // drafting | completed | archived
   status      String   @default("drafting")
+  userId     String?
+  @@index([userId])
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 

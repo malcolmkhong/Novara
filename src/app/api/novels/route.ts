@@ -20,6 +20,9 @@ export async function GET() {
 // The nested arrays come from the "New with the AI team" wizard; the plain
 // manual form simply omits them.
 export async function POST(req: Request) {
+  const uid = req.headers.get("x-novara-uid");
+  if (!uid) return NextResponse.json({ error: "unauthenticated" }, { status: 401 });
+
   const parsed = await parseBody(req);
   if (!parsed.ok) return parsed.response;
 
@@ -32,6 +35,7 @@ export async function POST(req: Request) {
   const novel = await db.novel.create({
     data: {
       title,
+      userId: uid,
       genre: genre ?? "",
       synopsis: synopsis ?? "",
       targetWords: targetWords ?? 100000,
