@@ -24,7 +24,21 @@ function projectId(): string {
 
 export async function middleware(req: NextRequest) {
   const path = req.nextUrl.pathname;
-  if (PUBLIC_PATHS.has(path)) return NextResponse.next();
+
+  // SECURITY / trust boundary: the Prisma ownership extension (src/lib/db.ts)
+  // trusts x-novara-uid / x-novara-admin. Never let a client supply them.
+  // Build the forwarded header set by DELETING both from the incoming request
+  // FIRST; only the verified values below are ever set. Without these two
+  // deletes, a non-admin could send `x-novara-admin: 1` (we only set it for
+  // admins) and gain an unfiltered client, and a public path could be tricked
+  // with `x-novara-uid`.
+  const headers = new Headers(req.headers);
+  headers.delete("x-novara-uid");
+  headers.delete("x-novara-admin");
+
+  if (PUBLIC_PATHS.has(path)) {
+    return NextResponse.next({ request: { headers } });
+  }
 
   const auth = req.headers.get("authorization") ?? "";
   const match = /^Bearer\s+(.+)$/i.exec(auth.trim());
@@ -53,7 +67,6 @@ export async function middleware(req: NextRequest) {
       .filter(Boolean);
     const isAdmin = adminUids.includes(sub);
 
-    const headers = new Headers(req.headers);
     headers.set("x-novara-uid", sub);
     if (isAdmin) headers.set("x-novara-admin", "1");
     return NextResponse.next({ request: { headers } });

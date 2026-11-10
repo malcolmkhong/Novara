@@ -19,7 +19,9 @@
 // ---------------------------------------------------------------------------
 
 import { NextResponse } from "next/server";
-import { db } from "@/lib/db";
+// Diagnostics must report FACTS: use the unextended client so the count is
+// never shaped by the ownership filter or by any request identity header.
+import { dbRaw } from "@/lib/db";
 
 // Cloud Run / load balancers may cache GET responses; a health probe must never
 // be served from cache.
@@ -58,7 +60,7 @@ export async function GET() {
   // The only real dependency worth probing: can we reach the database?
   let database: { ok: true; novels: number } | { ok: false; error: string };
   try {
-    const novels = await db.novel.count();
+    const novels = await dbRaw.novel.count();
     database = { ok: true, novels };
   } catch (error) {
     database = {

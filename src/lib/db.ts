@@ -23,6 +23,13 @@ const globalForPrisma = globalThis as unknown as { prisma: PrismaClient | undefi
 const base: PrismaClient = globalForPrisma.prisma ?? new PrismaClient({ log: ["query"] });
 if (process.env.NODE_ENV !== "production") globalForPrisma.prisma = base;
 
+/**
+ * UNEXTENDED client. Diagnostics only — /api/health uses it so counts stay
+ * true and cannot be influenced by request headers. Never use it for
+ * user-facing queries: it bypasses the ownership filter below.
+ */
+export const dbRaw: PrismaClient = base;
+
 // ---------------------------------------------------------------------------
 // Model → Novel ownership map (derived from prisma/schema.prisma, 38 models).
 // ---------------------------------------------------------------------------
