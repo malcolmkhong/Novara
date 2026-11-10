@@ -45,6 +45,7 @@ import {
 import { useToast } from "@/hooks/use-toast";
 import type { UseAgentRunResult } from "@/hooks/use-agent-run";
 import { useWriterStore } from "@/hooks/use-writer-store";
+import { authFetch } from "@/lib/firebase/client";
 import { AGENT_BACKEND } from "@/lib/novara/agent-client";
 import {
   type AgentEvent,
@@ -474,7 +475,9 @@ export function ConversationPane({
   const displayedRunId = detail?.run.id ?? null;
   useEffect(() => {
     let alive = true;
-    fetch(`/api/agent/runs?novelId=${encodeURIComponent(novel.id)}`, {
+    // authFetch attaches the Firebase ID token — a raw fetch here would be
+    // rejected by the middleware with 401 and the history would stay empty.
+    authFetch(`/api/agent/runs?novelId=${encodeURIComponent(novel.id)}`, {
       cache: "no-store",
     })
       .then((res) => res.json())

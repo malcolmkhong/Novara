@@ -21,6 +21,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
+import { authFetch } from "@/lib/firebase/client";
 import { exportNovelBackup, importNovelBackup } from "@/lib/novara/api";
 import type {
   ImportReport,
@@ -92,7 +93,9 @@ export function ExportDialog({
   const downloadMarkdown = async () => {
     setMdBusy(true);
     try {
-      const res = await fetch(`/api/novels/${novel.id}/export/markdown`);
+      // authFetch attaches the Firebase ID token — a raw fetch here would be
+      // rejected by the middleware with 401.
+      const res = await authFetch(`/api/novels/${novel.id}/export/markdown`);
       if (!res.ok) throw new Error(`Export failed (${res.status})`);
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
