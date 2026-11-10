@@ -21,9 +21,17 @@ export const geminiAdapter: ProviderAdapter = openAiCompatibleAdapter({
   label: "gemini",
   url: () =>
     `https://aiplatform.googleapis.com/v1/projects/${project()}/locations/${location()}/endpoints/openapi/chat/completions`,
-  headers: async () => ({
-    authorization: `Bearer ${await adcToken()}`,
-    "x-goog-user-project": readEnv("GCP_PROJECT_ID") ?? readEnv("GOOGLE_CLOUD_PROJECT") ?? "novara-514009",
-  }),
+  headers: async () => {
+    const headers: Record<string, string> = {
+      authorization: `Bearer ${await adcToken()}`,
+    };
+    // Service accounts (Cloud Run) must NOT send a quota project; only user
+    // credentials (local dev via gcloud ADC) need one. The env var is the
+    // switch so behaviour is identical locally (it is set in .env) and safe
+    // in production (unset on Cloud Run).
+    const quotaProject = readEnv("GCP_QUOTA_PROJECT");
+    if (quotaProject) headers["x-goog-user-project"] = quotaProject;
+    return headers;
+  },
   body: (req: ChatRequest) => ({ reasoning_effort: reasoningEffort(req.thinking) }),
 });

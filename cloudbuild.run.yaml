@@ -1,0 +1,40 @@
+steps:
+  - id: build
+    name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - --build-arg=NEXT_PUBLIC_AI_PROVIDERS_ENABLED=gemini
+      - --build-arg=DATABASE_URL=postgresql://build:build@localhost:5432/build
+      - -t
+      - asia-southeast1-docker.pkg.dev/novara-514009/novara/app:$SHORT_SHA
+      - -t
+      - asia-southeast1-docker.pkg.dev/novara-514009/novara/app:latest
+      - .
+  - id: push
+    name: gcr.io/cloud-builders/docker
+    args:
+      - push
+      - --all-tags
+      - asia-southeast1-docker.pkg.dev/novara-514009/novara/app
+  - id: deploy
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - novara
+      - --image=asia-southeast1-docker.pkg.dev/novara-514009/novara/app:$SHORT_SHA
+      - --region=asia-southeast1
+      - --platform=managed
+      - --allow-unauthenticated
+      - --port=3000
+      - --service-account=novara-run@novara-514009.iam.gserviceaccount.com
+      - --set-env-vars=GCP_PROJECT_ID=novara-514009,NODE_ENV=production,NEXT_PUBLIC_AI_PROVIDERS_ENABLED=gemini
+      - --set-secrets=DATABASE_URL=DATABASE_URL:latest
+      - --memory=1Gi
+      - --cpu=1
+      - --timeout=300
+      - --concurrency=80
+      - --min-instances=0
+      - --max-instances=3
+timeout: 1800s

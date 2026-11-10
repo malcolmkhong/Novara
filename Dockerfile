@@ -31,6 +31,15 @@ COPY . .
 RUN bun run db:generate
 
 ENV NEXT_TELEMETRY_DISABLED=1
+
+# Build-time placeholders only. The real DATABASE_URL is injected at runtime
+# from Secret Manager and overrides this ENV. NEXT_PUBLIC_* is inlined into
+# the client bundle at build time, so the allowlist must be present here.
+ARG NEXT_PUBLIC_AI_PROVIDERS_ENABLED=gemini
+ENV NEXT_PUBLIC_AI_PROVIDERS_ENABLED=$NEXT_PUBLIC_AI_PROVIDERS_ENABLED
+ARG DATABASE_URL=postgresql://build:build@localhost:5432/build
+ENV DATABASE_URL=$DATABASE_URL
+
 RUN bunx next build
 
 # Assemble the standalone runtime tree explicitly (next build does not copy
