@@ -46,9 +46,16 @@ export async function middleware(req: NextRequest) {
     });
     const sub = typeof payload.sub === "string" ? payload.sub : "";
     if (!sub) throw new Error("missing sub");
-    // exp is checked by jwtVerify; sub presence checked above.
+
+    const adminUids = (process.env.ADMIN_UIDS ?? "")
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    const isAdmin = adminUids.includes(sub);
+
     const headers = new Headers(req.headers);
     headers.set("x-novara-uid", sub);
+    if (isAdmin) headers.set("x-novara-admin", "1");
     return NextResponse.next({ request: { headers } });
   } catch {
     return NextResponse.json({ error: "unauthenticated" }, { status: 401 });
