@@ -12,6 +12,7 @@ import {
 } from "@/lib/novara/api";
 import type { CreateNovelInput } from "@/lib/novara/api";
 import type { ChapterDTO, NovelDetail, NovelSummary } from "@/lib/novara/types";
+import { useWriterStore } from "@/hooks/use-writer-store";
 import { NovelDashboard } from "./novel-dashboard";
 import { WorkbenchShell } from "./workbench-shell";
 import { UsageBalanceBadge } from "./usage-balance-badge";
