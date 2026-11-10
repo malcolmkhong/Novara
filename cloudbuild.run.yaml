@@ -38,3 +38,6 @@ steps:
       - --min-instances=0
       - --max-instances=3
 timeout: 1800s
+
+options:
+  logging: CLOUD_LOGGING_ONLY
