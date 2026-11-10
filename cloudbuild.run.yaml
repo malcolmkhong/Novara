@@ -29,7 +29,7 @@ steps:
       - --allow-unauthenticated
       - --port=3000
       - --service-account=novara-run@novara-514009.iam.gserviceaccount.com
-      - --set-env-vars=GCP_PROJECT_ID=novara-514009,NODE_ENV=production,NEXT_PUBLIC_AI_PROVIDERS_ENABLED=gemini
+      - --set-env-vars=GCP_PROJECT_ID=novara-514009,NODE_ENV=production,NEXT_PUBLIC_AI_PROVIDERS_ENABLED=gemini,GEMINI_WIRE_MODEL_FAST=google/gemini-3.8-flash,GEMINI_WIRE_MODEL_PRO=google/gemini-3.8-flash
       - --set-secrets=DATABASE_URL=DATABASE_URL:latest
       - --memory=1Gi
       - --cpu=1
