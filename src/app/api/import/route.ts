@@ -12,6 +12,9 @@ export const dynamic = "force-dynamic";
 // The response contains an integrity report comparing the imported data
 // against the counts declared in the backup file.
 export async function POST(req: Request) {
+  const uid = req.headers.get("x-novara-uid");
+  if (!uid) return jsonError("unauthenticated", 401);
+
   const parsed = await parseBody(req);
   if (!parsed.ok) return parsed.response;
 
@@ -33,6 +36,7 @@ export async function POST(req: Request) {
   const novel = await db.novel.create({
     data: {
       title: d.novel.title,
+      userId: uid,
       genre: d.novel.genre,
       synopsis: d.novel.synopsis,
       targetWords: d.novel.targetWords,

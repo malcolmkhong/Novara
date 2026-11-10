@@ -22,6 +22,7 @@
  */
 
 import { db } from "@/lib/db";
+import { currentUserId } from "@/lib/prisma/ownership";
 import { extractJson } from "@/lib/ai-heuristics";
 import { chineseWordCount } from "@/lib/novel/server";
 
@@ -491,9 +492,14 @@ async function executeOne(call: NovelToolCall): Promise<NovelToolResult> {
         return fail(call.action, "title, genre and synopsis are required.", p, '{"action":"create_novel","params":{"title":"<t>","genre":"<g>","synopsis":"<s>","targetWords":<n?>}}');
       }
       const targetWords = int(p.targetWords);
+      const uid = await currentUserId();
+      if (!uid) {
+        return fail(call.action, "unauthenticated: create_novel requires a signed-in user.", p, "");
+      }
       const novel = await db.novel.create({
         data: {
           title: title.slice(0, 60),
+          userId: uid,
           genre: genre.slice(0, 24),
           synopsis: synopsis.slice(0, 300),
           ...(targetWords > 0 ? { targetWords: Math.min(targetWords, 5_000_000) } : {}),

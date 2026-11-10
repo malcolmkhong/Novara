@@ -34,13 +34,13 @@ export async function currentUserId(): Promise<string | null> {
 
 /**
  * Build the ownership `where` clause for a Novel-scoped query.
- * Admins get no filter; everyone else is scoped to their own novels once
- * the `userId` column lands on `Novel`.
+ * NOTE: the real enforcement lives in src/lib/db.ts (`$allOperations`), which
+ * applies this to every model. This helper mirrors it for ad-hoc callers.
+ * Admins get no filter; a missing uid fails closed.
  */
 export async function novelOwnershipWhere(): Promise<Record<string, unknown>> {
   if (await isAdminRequest()) return {};
   const uid = await currentUserId();
-  if (!uid) return {};
-  // Scaffold: once Novel.userId exists, return { novel: { userId: uid } }.
-  return {};
+  if (!uid) return { id: { in: [] } };
+  return { userId: uid };
 }
