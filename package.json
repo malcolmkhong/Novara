@@ -14,7 +14,10 @@
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
     "db:migrate:deploy": "prisma migrate deploy",
+    "db:migrate:new": "bun scripts/db-migrate-new.mjs",
     "db:migrate:status": "prisma migrate status",
+    "db:check:ownership": "bun scripts/check-ownership.ts",
+    "db:prove:ownership": "bun scripts/prove-ownership-isolation.ts",
     "db:reset": "prisma migrate reset"
   },
   "dependencies": {

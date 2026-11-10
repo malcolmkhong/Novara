@@ -928,8 +928,11 @@ model UsageInvoice {
   sinceAtSave    String?
   pricingVersion String
   createdAt      DateTime @default(now())
+  // Owner of this reconciliation figure (nullable: existing rows backfilled).
+  userId         String?
 
   @@index([createdAt])
+  @@index([userId])
 }
 
 // ---------------------------------------------------------------------------
@@ -1060,7 +1063,10 @@ model TeamTurnLog {
   correctionsFired String?
   durationMs Int      @default(0)
   createdAt  DateTime @default(now())
+  // Owner of this telemetry row (nullable: existing rows backfilled).
+  userId     String?
 
   @@index([createdAt])
   @@index([agentKey, outcome])
+  @@index([userId])
 }
