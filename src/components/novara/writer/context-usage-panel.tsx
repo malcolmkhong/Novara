@@ -45,6 +45,7 @@ import {
 } from "@/components/ui/popover";
 import type { AgentEvent, ContextUsage } from "@/lib/novara/agent-types";
 import { latestContextUsage } from "@/lib/novara/agent-types";
+import { authFetch } from "@/lib/firebase/client";
 import { getModelDefinition, formatTokenCount } from "@/lib/novara/models";
 import type {
   AccountUsageSnapshot,
@@ -173,7 +174,7 @@ export function ContextUsageButton({
   useEffect(() => {
     if (live || !open || estimateState.key === estimateKey) return;
     let alive = true;
-    fetch(
+    authFetch(
       `/api/agent/context-estimate?novelId=${encodeURIComponent(novelId)}&modelId=${encodeURIComponent(modelId)}&thinkingLevel=${encodeURIComponent(thinkingLevel)}`,
       { cache: "no-store" }
     )
@@ -194,7 +195,7 @@ export function ContextUsageButton({
   useEffect(() => {
     if (!open) return;
     let alive = true;
-    fetch("/api/usage/ledger", { cache: "no-store" })
+    authFetch("/api/usage/ledger", { cache: "no-store" })
       .then((res) => res.json())
       .then((body: AccountUsageSnapshot) => {
         if (alive) setGlobalState(body);

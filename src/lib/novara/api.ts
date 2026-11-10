@@ -27,8 +27,10 @@ import type {
 } from "./types";
 import type { ChapterReview, NovelMemoryView } from "./agent-types";
 
+import { authFetch } from "@/lib/firebase/client";
+
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(url, {
+  const res = await authFetch(url, {
     ...init,
     headers: {
       "Content-Type": "application/json",

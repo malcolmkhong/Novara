@@ -11,9 +11,7 @@ import {
   listNovels,
 } from "@/lib/novara/api";
 import type { CreateNovelInput } from "@/lib/novara/api";
-import { getGuestSession } from "@/lib/novara/session";
 import type { ChapterDTO, NovelDetail, NovelSummary } from "@/lib/novara/types";
-import { useWriterStore } from "@/hooks/use-writer-store";
 import { NovelDashboard } from "./novel-dashboard";
 import { WorkbenchShell } from "./workbench-shell";
 import { UsageBalanceBadge } from "./usage-balance-badge";
@@ -24,10 +22,8 @@ export function WriterApp({ onExit }: { onExit: () => void }) {
   const [loading, setLoading] = useState(true);
   const [detail, setDetail] = useState<NovelDetail | null>(null);
   const [opening, setOpening] = useState(false);
-  const [guestAt, setGuestAt] = useState<string | null>(null);
 
   useEffect(() => {
-    setGuestAt(getGuestSession()?.enteredAt ?? null);
     // P1 — restore persisted writer UI prefs (per-novel composer run mode)
     // after mount. The store uses skipHydration, so this is the single
     // hydration-safe point where localStorage state re-enters the app.
@@ -157,7 +153,7 @@ export function WriterApp({ onExit }: { onExit: () => void }) {
             {/* P5-b — the central "Usage & balance" view lives AT the
                 account-like anchor (Guest session badge; proposal §5). The
                 badge visual is unchanged; it now opens the account view. */}
-            <UsageBalanceBadge guestAt={guestAt} />
+            <UsageBalanceBadge />
           </span>
         </div>
       </header>

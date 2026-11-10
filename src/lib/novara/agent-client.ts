@@ -15,6 +15,7 @@ import type {
   AgentRunDetail,
   AgentRunMode,
 } from "./agent-types";
+import { authFetch } from "@/lib/firebase/client";
 import type { MockStartOptions } from "./agent-schemas";
 import { mockAgentRuntime } from "./mock-agent";
 
@@ -77,7 +78,7 @@ const mockGateway: AgentGateway = {
 // ---------------------------------------------------------------------------
 
 async function jsonFetch<T>(url: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(url, { cache: "no-store", ...init });
+  const res = await authFetch(url, { cache: "no-store", ...init });
   const body: unknown = await res.json().catch(() => ({}));
   if (!res.ok) {
     const message =

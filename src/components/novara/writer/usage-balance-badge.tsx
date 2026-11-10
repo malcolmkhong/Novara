@@ -76,6 +76,7 @@ import {
   formatEstimateUsdCompact,
   formatPastedUsd,
 } from "@/lib/usage/pricing";
+import { authFetch } from "@/lib/firebase/client";
 import { formatTokenCount } from "@/lib/novara/models";
 
 /** Friendly labels for the app-wide ledger surfaces (P4 / T5). */
@@ -105,7 +106,7 @@ function surfaceLabel(surface: string): string {
 const BALANCE_NOTE =
   "Unavailable — this build's gateway enforces call-count rate limits, not token or currency billing, and exposes no billing API at our boundary. Nothing is charged in this preview build.";
 
-export function UsageBalanceBadge({ guestAt }: { guestAt: string | null }) {
+export function UsageBalanceBadge({ guestAt = null }: { guestAt?: string | null }) {
   const [open, setOpen] = useState(false);
   const [snapshot, setSnapshot] = useState<AccountUsageSnapshot | null>(null);
   const [loadFailed, setLoadFailed] = useState(false);
@@ -133,7 +134,7 @@ export function UsageBalanceBadge({ guestAt }: { guestAt: string | null }) {
   useEffect(() => {
     if (!open) return;
     let alive = true;
-    fetch("/api/usage/ledger", { cache: "no-store" })
+    authFetch("/api/usage/ledger", { cache: "no-store" })
       .then((res) => {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         return res.json() as Promise<AccountUsageSnapshot>;
@@ -147,7 +148,7 @@ export function UsageBalanceBadge({ guestAt }: { guestAt: string | null }) {
           setLoadFailed(true);
         }
       });
-    fetch("/api/usage/invoice", { cache: "no-store" })
+    authFetch("/api/usage/invoice", { cache: "no-store" })
       .then((res) => {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         return res.json() as Promise<InvoiceSnapshot>;
@@ -189,7 +190,7 @@ export function UsageBalanceBadge({ guestAt }: { guestAt: string | null }) {
     }
     setSaving(true);
     try {
-      const res = await fetch("/api/usage/invoice", {
+      const res = await authFetch("/api/usage/invoice", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ actualUsd: amount, periodLabel: period }),
@@ -209,7 +210,7 @@ export function UsageBalanceBadge({ guestAt }: { guestAt: string | null }) {
       );
       setPeriodLabel("");
       setActualInput("");
-      const refreshed = await fetch("/api/usage/invoice", { cache: "no-store" });
+      const refreshed = await authFetch("/api/usage/invoice", { cache: "no-store" });
       if (refreshed.ok) setInvoices((await refreshed.json()) as InvoiceSnapshot);
     } catch {
       setFormError("Recording failed — the figure was NOT stored. Nothing is shown rather than a stale number.");
@@ -245,12 +246,7 @@ export function UsageBalanceBadge({ guestAt }: { guestAt: string | null }) {
         <button
           type="button"
           aria-label="Guest session — usage and balance"
-          title={
-            (guestAt
-              ? `Guest session started ${new Date(guestAt).toLocaleString()} — accounts and authentication arrive later. `
-              : "Guest session — accounts and authentication arrive later. ") +
-            "Click for usage and balance."
-          }
+           title={"Usage and balance. Click for details."}
           className="cursor-pointer rounded-full outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
           <Badge
