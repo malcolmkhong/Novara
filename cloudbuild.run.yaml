@@ -6,7 +6,7 @@ steps:
       - --build-arg=NEXT_PUBLIC_AI_PROVIDERS_ENABLED=gemini
       - --build-arg=DATABASE_URL=postgresql://build:build@localhost:5432/build
       - -t
-      - asia-southeast1-docker.pkg.dev/novara-514009/novara/app:$SHORT_SHA
+      - asia-southeast1-docker.pkg.dev/novara-514009/novara/app:${BUILD_ID}
       - -t
       - asia-southeast1-docker.pkg.dev/novara-514009/novara/app:latest
       - .
@@ -23,7 +23,7 @@ steps:
       - run
       - deploy
       - novara
-      - --image=asia-southeast1-docker.pkg.dev/novara-514009/novara/app:$SHORT_SHA
+      - --image=asia-southeast1-docker.pkg.dev/novara-514009/novara/app:${BUILD_ID}
       - --region=asia-southeast1
       - --platform=managed
       - --allow-unauthenticated
