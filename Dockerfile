@@ -84,4 +84,4 @@ EXPOSE 3000
 # The container only serves; schema push/migrate is an explicit ops step
 # (see deploy/vm-deploy.sh) so a bad migration can never ride along silently
 # with a deploy.
-CMD ["bun", ".next/standalone/server.js"]
+CMD ["bun", "server.js"]
