@@ -22,12 +22,10 @@ type AuthState = "loading" | "signed-out" | "signed-in";
 export function NovaraApp() {
   const { route, navigate } = useHashRoute();
   const [authState, setAuthState] = useState<AuthState>("loading");
-  const [user, setUser] = useState<User | null>(null);
   const [signingIn, setSigningIn] = useState(false);
 
   useEffect(() => {
     const unsub = onAuthStateChanged(getFirebaseAuth(), (u) => {
-      setUser(u);
       setAuthState(u ? "signed-in" : "signed-out");
     });
     return () => unsub();
@@ -47,6 +45,25 @@ export function NovaraApp() {
     navigate("writer");
   }, [authState, navigate]);
 
+  // Public branch: marketing pages render for everyone, no auth check.
+  if (route !== "writer") {
+    return (
+      <div className="flex min-h-screen flex-col">
+        <Navbar route={route} onEnterWriter={() => void enterWriter()} />
+        <main className="flex-1">
+          {route === "home" && <HomePage onEnterWriter={() => void enterWriter()} />}
+          {route === "product" && <ProductPage onEnterWriter={() => void enterWriter()} />}
+          {route === "plans" && <PlansPage onEnterWriter={() => void enterWriter()} />}
+          {route === "about" && <AboutPage onEnterWriter={() => void enterWriter()} />}
+          {route === "terms" && <LegalPage kind="terms" />}
+          {route === "privacy" && <LegalPage kind="privacy" />}
+        </main>
+        <Footer onEnterWriter={() => void enterWriter()} />
+      </div>
+    );
+  }
+
+  // Protected branch: writer route requires sign-in.
   if (authState === "loading") {
     return (
       <div className="flex min-h-screen items-center justify-center">
@@ -72,22 +89,5 @@ export function NovaraApp() {
     );
   }
 
-  if (route === "writer") {
-    return <WriterApp onExit={() => navigate("home")} />;
-  }
-
-  return (
-    <div className="flex min-h-screen flex-col">
-      <Navbar route={route} onEnterWriter={() => void enterWriter()} />
-      <main className="flex-1">
-        {route === "home" && <HomePage onEnterWriter={() => void enterWriter()} />}
-        {route === "product" && <ProductPage onEnterWriter={() => void enterWriter()} />}
-        {route === "plans" && <PlansPage onEnterWriter={() => void enterWriter()} />}
-        {route === "about" && <AboutPage onEnterWriter={() => void enterWriter()} />}
-        {route === "terms" && <LegalPage kind="terms" />}
-        {route === "privacy" && <LegalPage kind="privacy" />}
-      </main>
-      <Footer onEnterWriter={() => void enterWriter()} />
-    </div>
-  );
+  return <WriterApp onExit={() => navigate("home")} />;
 }
