@@ -10,6 +10,7 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { createRemoteJWKSet, jwtVerify } from "jose";
+import { isAdminUid } from "@/lib/auth/admin";
 
 const PUBLIC_PATHS = new Set<string>(["/api/health"]);
 
@@ -61,11 +62,9 @@ export async function middleware(req: NextRequest) {
     const sub = typeof payload.sub === "string" ? payload.sub : "";
     if (!sub) throw new Error("missing sub");
 
-    const adminUids = (process.env.ADMIN_UIDS ?? "")
-      .split(",")
-      .map((s) => s.trim())
-      .filter(Boolean);
-    const isAdmin = adminUids.includes(sub);
+    // The admin allowlist lives in ONE place (src/lib/auth/admin.ts) — the
+    // credit ledger uses the same rule, so there is no second copy to drift.
+    const isAdmin = isAdminUid(sub);
 
     headers.set("x-novara-uid", sub);
     if (isAdmin) headers.set("x-novara-admin", "1");

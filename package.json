@@ -18,6 +18,7 @@
     "db:migrate:status": "prisma migrate status",
     "db:check:ownership": "bun scripts/check-ownership.ts",
     "db:prove:ownership": "bun scripts/prove-ownership-isolation.ts",
+    "db:prove:credits": "bun scripts/prove-credits.ts",
     "verify:auth": "bun scripts/verify-auth-fetch.mjs",
     "db:reset": "prisma migrate reset"
   },

@@ -23,12 +23,19 @@ const postSchema = z.object({
   novelId: z.string().min(1).max(64).optional(),
 });
 
-/** GET /api/team/tasks — latest tasks with logs; re-kicks orphaned pending work. */
+/**
+ * GET /api/team/tasks — latest tasks with logs.
+ *
+ * READ-ONLY BY CONTRACT (Step 54 / abuse vector 4a): a GET must never spend
+ * money. The orphan-heal used to run here, so every poll of this endpoint
+ * could kick up to 5 PAID background task runs. It now lives on the POST
+ * path — the endpoint that already starts paid work — so a poll can only
+ * ever read.
+ */
 export async function GET(req: Request) {
   const sessionKey = new URL(req.url).searchParams.get("sessionKey");
   try {
     await ensureSeed();
-    healOrphanTasks();
     const tasks = await db.teamTask.findMany({
       where: sessionKey ? { sessionKey } : undefined,
       orderBy: { createdAt: "desc" },
@@ -101,6 +108,14 @@ export async function POST(req: Request) {
     });
 
     after(() => runTask(task.id));
+
+    // The orphan-heal (Step 54 / abuse vector 4a) lives HERE, not on the GET
+    // path: a GET must never spend money. POST already starts paid work
+    // (`after(() => runTask(...))`), so the recovery of stuck pending tasks
+    // belongs to the endpoint that owns spending. The heal stays scoped to
+    // the caller's own tasks by the ownership extension
+    // (TeamTask.novelId -> { novelId: { in: owned } }).
+    healOrphanTasks();
 
     return NextResponse.json({ success: true, task: toTaskDto(task) });
   } catch (error) {

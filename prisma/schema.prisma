@@ -948,6 +948,46 @@ model UsageInvoice {
 }
 
 // ---------------------------------------------------------------------------
+// Credit ledger (Step 54) — the credit system's own two tables.
+//
+// CreditAccount is the CURRENT state (exactly one row per user);
+// CreditLedger is the append-only history (every grant, spend, refund and
+// adjustment, positive or negative).
+//
+// Both carry a `userId` scalar, so the ownership extension (src/lib/db.ts)
+// covers them automatically — rule 1 (`userId -> { userId: uid }`): reads are
+// filtered to the caller's own rows and creates are stamped with the
+// caller's uid. Nothing in the credit module bypasses that.
+//
+// src/lib/credits/ledger.ts is the ONLY writer of CreditAccount.
+// ---------------------------------------------------------------------------
+
+model CreditAccount {
+  userId         String   @id
+  balance        Int      @default(0)
+  // "YYYY-MM-DD" (UTC) — the last day the free allowance was granted.
+  allowanceDate  String
+  // What the last daily grant was worth (the configured allowance).
+  allowanceGiven Int      @default(0)
+  updatedAt      DateTime @updatedAt
+}
+
+model CreditLedger {
+  id        String   @id @default(cuid())
+  userId    String
+  // Negative = spend, positive = grant.
+  delta     Int
+  // daily_grant | spend | admin_grant | admin_usage | adjustment
+  kind      String
+  refId     String?
+  note      String?
+  createdAt DateTime @default(now())
+
+  @@index([userId, createdAt])
+  @@index([createdAt])
+}
+
+// ---------------------------------------------------------------------------
 // AI Team — restored per P5-g plan (agent-ctx/p5g-team1-repair-plan.md §3/§9).
 // Deleted in f32b9df (Novara pivot); originals: b8aa210 (five models) +
 // 7725023 (TeamTurnLog), verbatim from f32b9df^. The ONLY deltas from the
