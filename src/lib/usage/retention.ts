@@ -91,6 +91,7 @@ export async function purgeExpiredUsageCalls(
       completionTokens: true,
       totalTokens: true,
       createdAt: true,
+      userId: true,
     },
   });
   if (expired.length === 0) return { swept: 0, deleted: 0, buckets: 0 };
@@ -128,6 +129,10 @@ export async function purgeExpiredUsageCalls(
     promptTokens: number;
     completionTokens: number;
     totalTokens: number;
+    // ATTRIBUTION (Step 53): the owners of the detail rows in this bucket.
+    // One owner -> the bucket gets it; several or none -> the bucket stays
+    // unattributed. Never invented, never merged.
+    userIds: Set<string>;
   }
   const buckets = new Map<string, Bucket>();
   for (const row of expired) {
@@ -144,6 +149,7 @@ export async function purgeExpiredUsageCalls(
       promptTokens: 0,
       completionTokens: 0,
       totalTokens: 0,
+      userIds: new Set<string>(),
     };
     bucket.ids.push(row.id);
     bucket.calls += 1;
@@ -151,6 +157,7 @@ export async function purgeExpiredUsageCalls(
     bucket.promptTokens += row.promptTokens;
     bucket.completionTokens += row.completionTokens;
     bucket.totalTokens += row.totalTokens;
+    if (row.userId) bucket.userIds.add(row.userId);
     buckets.set(key, bucket);
   }
 
@@ -189,6 +196,9 @@ export async function purgeExpiredUsageCalls(
         totalTokens: bucket.totalTokens,
         estimatedUsd: contributionUsd,
         pricingVersion: PRICING_VERSION,
+        // ATTRIBUTION (Step 53): one owner for the whole bucket -> that
+        // owner; several owners (or none) -> unattributed, never guessed.
+        userId: bucket.userIds.size === 1 ? [...bucket.userIds][0] : null,
       },
       update: {
         calls: { increment: bucket.calls },

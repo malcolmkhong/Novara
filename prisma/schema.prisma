@@ -812,6 +812,12 @@ model UsageCall {
   // Request/session correlation id for retro-tagging (studio-init request id,
   // wizard client session id); resolves via UsageProvenance at novel creation.
   correlationId    String?
+  // ATTRIBUTION (Step 53): the caller who paid for this call. Nullable on
+  // purpose — a row written outside a request scope (background job, script)
+  // has no owner to name, and inventing one would be a lie. Null rows are
+  // reported, never guessed. Stamped by the ownership extension on create
+  // (src/lib/db.ts stamps `userId` for every model that carries the column).
+  userId           String?
   createdAt        DateTime @default(now())
 
   @@index([surface, createdAt])
@@ -819,6 +825,7 @@ model UsageCall {
   @@index([runId])
   @@index([correlationId])
   @@index([createdAt])
+  @@index([userId])
 }
 
 // ---------------------------------------------------------------------------
@@ -886,12 +893,17 @@ model UsageDaily {
   totalTokens      Int
   estimatedUsd     Float?
   pricingVersion   String
+  // ATTRIBUTION (Step 53): the owner of the rolled-up bucket — the same
+  // caller as the UsageCall detail rows it was summed from. Nullable: a
+  // bucket whose rows had no attributable owner stays unattributed.
+  userId           String?
   rolledAt         DateTime @default(now())
   updatedAt        DateTime @updatedAt
 
   @@unique([day, surface, novelKey, modelId])
   @@index([day])
   @@index([novelKey, day])
+  @@index([userId])
 }
 
 // ---------------------------------------------------------------------------

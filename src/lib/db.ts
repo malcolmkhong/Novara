@@ -162,6 +162,21 @@ export async function withUser<T>(
   return storage.run(store, async () => await fn());
 }
 
+/**
+ * The uid of the CURRENT background-job scope (AsyncLocalStorage), if any.
+ *
+ * Used by the usage ledger to attribute a row to the user who paid for it
+ * without inventing one: a script/background job that ran inside
+ * `withUser(uid, …)` has a real identity here; a request-scoped call does
+ * not (it reads `x-novara-uid` from the middleware headers instead).
+ * Returns null when there is no scope — callers must then leave the field
+ * empty and say so, never guess an owner.
+ */
+export function currentScopeUserId(): string | null {
+  const uid = storage.getStore()?.uid?.trim();
+  return uid ? uid : null;
+}
+
 async function identityFrom(uid: string, isAdmin: boolean): Promise<Identity> {
   if (isAdmin) return { uid, isAdmin: true, novelIds: null };
   if (!uid) return { uid: "", isAdmin: false, novelIds: [] };

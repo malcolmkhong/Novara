@@ -36,7 +36,8 @@
 // model call (mirrors emitUsageEvent's discipline in the agent runtime).
 // ---------------------------------------------------------------------------
 
-import { db } from "@/lib/db";
+import { db, currentScopeUserId } from "@/lib/db";
+import { headers } from "next/headers";
 import {
   DAILY_SUMMARY_NOTE,
   type AccountUsageSnapshot,
@@ -97,6 +98,11 @@ export interface UsageCallScope {
   conversationId?: string;
   novelId?: string;
   correlationId?: string;
+  /**
+   * The user this call is charged to, when the CALLER already knows it
+   * (the ledger's own resolution below is the fallback).
+   */
+  userId?: string | null;
 }
 
 export type UsageCallStatus = "measured" | "failed";
@@ -117,6 +123,47 @@ export interface UsageCallEntry extends UsageCallScope {
 }
 
 /**
+ * ATTRIBUTION (Step 53) — resolve the uid of the caller who paid for this
+ * call, in the order the identity actually exists:
+ *
+ *   1. an explicit `userId` the caller already knows (UsageCallScope),
+ *   2. the background-job scope — `withUser(uid, …)` → AsyncLocalStorage
+ *      (scripts and jobs that ran under an explicit identity),
+ *   3. the request scope — `x-novara-uid`, set by src/middleware.ts after it
+ *      verified the caller's Firebase token.
+ *
+ * When NONE of them exists (a call made outside every request scope — a
+ * detached background job, a script with no identity) the row is written
+ * UNATTRIBUTED (`userId = null`) and the surface is reported once. We never
+ * invent an owner.
+ */
+async function resolveUserId(entry: UsageCallEntry): Promise<string | null> {
+  if (entry.userId && entry.userId.trim()) return entry.userId.trim();
+  const scoped = currentScopeUserId();
+  if (scoped) return scoped;
+  try {
+    const h = await headers();
+    const uid = h.get("x-novara-uid");
+    return uid && uid.trim() ? uid.trim() : null;
+  } catch {
+    // No request scope (script / detached job) — there is no identity to name.
+    return null;
+  }
+}
+
+/** Surfaces already reported as unattributed — once per process, not per row. */
+const unattributedSurfaces = new Set<string>();
+
+function reportUnattributed(surface: string): void {
+  if (unattributedSurfaces.has(surface)) return;
+  unattributedSurfaces.add(surface);
+  console.warn(
+    `[usage-ledger] surface "${surface}" has NO user identity in scope — its rows are written ` +
+      "UNATTRIBUTED (userId = null) and are not visible to any user until an owner is known.",
+  );
+}
+
+/**
  * Persist one ledger row: a MEASURED call (tokens = billed truth) or a
  * FAILED attempt (zero tokens = unknown cost, errorKind = why). One row per
  * HTTP attempt — retry loops call this once per attempt. Fire-and-forget.
@@ -124,8 +171,12 @@ export interface UsageCallEntry extends UsageCallScope {
 export function recordUsageCall(entry: UsageCallEntry): void {
   const failed = entry.status === "failed";
   if (!failed && !entry.usage) return; // measured-only rule (F4) stays intact
-  void db.usageCall
-    .create({
+  void (async () => {
+    // Attribution is resolved BEFORE the write: the row must know who paid
+    // for it, not guess it afterwards.
+    const userId = await resolveUserId(entry);
+    if (!userId) reportUnattributed(entry.surface);
+    await db.usageCall.create({
       data: {
         surface: entry.surface,
         modelId: entry.modelId ?? GATEWAY_DEFAULT_MODEL_ID,
@@ -139,14 +190,15 @@ export function recordUsageCall(entry: UsageCallEntry): void {
         conversationId: entry.conversationId ?? null,
         novelId: entry.novelId ?? null,
         correlationId: entry.correlationId ?? null,
+        userId,
       },
-    })
-    .catch((error: unknown) => {
-      console.warn(
-        "[usage-ledger] persist failed (call not lost from the panel, missing from account ledger):",
-        error instanceof Error ? error.message : error
-      );
     });
+  })().catch((error: unknown) => {
+    console.warn(
+      "[usage-ledger] persist failed (call not lost from the panel, missing from account ledger):",
+      error instanceof Error ? error.message : error
+    );
+  });
 }
 
 /**
