@@ -1,17 +1,21 @@
 // ---------------------------------------------------------------------------
 // Novara AI — the central "Usage & balance" view (Phase 5 / P5-b, extended
-// P5-c). EXTRACTED from usage-balance-badge.tsx (Step 62): the five sections
-// are unchanged — same behaviour, same copy — but they now live INSIDE the
-// settings dialog (Settings -> Credits & usage) instead of behind a badge
-// trigger in the writer header.
+// P5-c). EXTRACTED from usage-balance-badge.tsx (Step 62), restructured in
+// Step 64.
+//
+// Step 64 changes (render-only, no server work):
+//   · the orange "Balance: unavailable" box is GONE from the render — the
+//     credits pane above now shows the REAL balance (BALANCE_NOTE stays on
+//     disk, exported, unrendered);
+//   · the "guest session" sub-label is not rendered (the prop is kept);
+//   · the nested scroll regions are gone — the pane scrolls, the panel does
+//     not (one scroll container per pane);
+//   · the invoice reconciliation form moved OUT of this component into
+//     <InvoiceReconciliation />, which the settings dialog mounts inside the
+//     collapsed "Developer tools" disclosure.
 //
 // The sections, all from GET /api/usage/ledger (Ruling 2: the ONE source of
 // truth — the in-memory process ledger was deleted outright in P5-b):
-//
-//   BALANCE — unavailable-not-fabricated (proposal §5.2): the gateway's
-//   headers are call-COUNT quotas (limit-daily / user-10min windows), not
-//   token or currency billing, and there is no billing API at our boundary.
-//   The view says so instead of inventing a number.
 //
 //   ACCOUNT USAGE — Σ calls / tokens across all surfaces, the per-surface,
 //   per-model (P5-c) and per-novel splits, where deleted novels render as
@@ -28,12 +32,6 @@
 //   from the pricing formatters, which permanently carry their labels
 //   (harness-pinned).
 //
-//   INVOICE RECONCILIATION (P5-c §6.3) — a paste-slot for the account
-//   holder's provider-console figure (USER-INPUT DEPENDENCY: no code can
-//   discharge it). The pasted text is stored verbatim next to our ESTIMATE
-//   captured at save time; the delta shown is display math on two labeled
-//   figures, NOT a defect claim (our ESTIMATE covers only persisted rows).
-//
 //   DISCONTINUITY — rendered from the persisted `since`: "Tracking began
 //   <date>" plus the explicit statement that earlier calls were not
 //   recorded. Nothing pretends history it does not have (Ruling 2: no
@@ -49,7 +47,7 @@
 // ---------------------------------------------------------------------------
 
 import { useEffect, useState } from "react";
-import { Loader2, Wallet } from "lucide-react";
+import { Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -88,28 +86,30 @@ function surfaceLabel(surface: string): string {
 }
 
 /**
- * §5.2 verdict, verbatim from the P3 meter investigation: the gateway's
- * rate-limit headers carry CALL-COUNT quotas (limit-daily 300, user-10min 30,
- * two undocumented daily counters), there is no billing API, and balance can
- * only ever be inferred from observed consumption calls. Stated, not faked.
+ * §5.2 verdict, verbatim from the P3 meter investigation. Step 64: the
+ * balance is NOT rendered any more (the credits pane shows the real one), so
+ * this copy is kept on disk for the record and is no longer shown.
  */
-const BALANCE_NOTE =
+export const BALANCE_NOTE =
   "Unavailable — this build's gateway enforces call-count rate limits, not token or currency billing, and exposes no billing API at our boundary. Nothing is charged in this preview build.";
 
-export function UsagePanel({ guestAt = null }: { guestAt?: string | null }) {
-  const [snapshot, setSnapshot] = useState<AccountUsageSnapshot | null>(null);
-  const [loadFailed, setLoadFailed] = useState(false);
-  // P5-c invoice reconciliation state (paste-slot + recorded entries).
-  const [invoices, setInvoices] = useState<InvoiceSnapshot | null>(null);
-  const [invoiceFailed, setInvoiceFailed] = useState(false);
-  const [periodLabel, setPeriodLabel] = useState("");
-  const [actualInput, setActualInput] = useState("");
-  const [saving, setSaving] = useState(false);
-  const [formError, setFormError] = useState<string | null>(null);
-  const [lastSaved, setLastSaved] = useState<string | null>(null);
+/** The guest sub-label: kept on disk, not rendered (Step 64). */
+export const GUEST_SESSION_LABEL = "guest session";
 
-  // Fetched when the panel mounts — the ledger moves while the app runs.
+export function UsagePanel({
+  guestAt = null,
+  snapshot: provided,
+}: {
+  guestAt?: string | null;
+  /** A snapshot the caller already fetched (the credits pane does). */
+  snapshot?: AccountUsageSnapshot | null;
+}) {
+  const [own, setOwn] = useState<AccountUsageSnapshot | null>(null);
+  const [loadFailed, setLoadFailed] = useState(false);
+
+  // Fetched when the panel mounts — unless the caller already has it.
   useEffect(() => {
+    if (provided !== undefined) return;
     let alive = true;
     authFetch("/api/usage/ledger", { cache: "no-store" })
       .then((res) => {
@@ -117,32 +117,21 @@ export function UsagePanel({ guestAt = null }: { guestAt?: string | null }) {
         return res.json() as Promise<AccountUsageSnapshot>;
       })
       .then((body) => {
-        if (alive) setSnapshot(body);
+        if (alive) setOwn(body);
       })
       .catch(() => {
         if (alive) {
-          setSnapshot(null);
+          setOwn(null);
           setLoadFailed(true);
-        }
-      });
-    authFetch("/api/usage/invoice", { cache: "no-store" })
-      .then((res) => {
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return res.json() as Promise<InvoiceSnapshot>;
-      })
-      .then((body) => {
-        if (alive) setInvoices(body);
-      })
-      .catch(() => {
-        if (alive) {
-          setInvoices(null);
-          setInvoiceFailed(true);
         }
       });
     return () => {
       alive = false;
     };
-  }, []);
+  }, [provided]);
+
+  const snapshot = provided !== undefined ? provided : own;
+  const failed = provided !== undefined ? !provided : loadFailed;
 
   const began = snapshot?.since
     ? new Date(snapshot.since).toLocaleDateString(undefined, {
@@ -151,50 +140,6 @@ export function UsagePanel({ guestAt = null }: { guestAt?: string | null }) {
         day: "numeric",
       })
     : null;
-
-  const saveFigure = async () => {
-    setFormError(null);
-    setLastSaved(null);
-    const period = periodLabel.trim();
-    const amount = actualInput.trim();
-    if (!period) {
-      setFormError("Name the period the figure covers (e.g. the console's billing month).");
-      return;
-    }
-    if (!amount) {
-      setFormError("Paste the console figure for that period.");
-      return;
-    }
-    setSaving(true);
-    try {
-      const res = await authFetch("/api/usage/invoice", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ actualUsd: amount, periodLabel: period }),
-      });
-      const body = (await res.json()) as { error?: string; deltaUsd?: number };
-      if (!res.ok) {
-        setFormError(body.error ?? `Recording failed (HTTP ${res.status}).`);
-        return;
-      }
-      // Optimistic prepend from the POST response, then refresh in full —
-      // the ESTIMATE side moves while the app runs, so the stored entry is
-      // re-fetched for truth.
-      setLastSaved(
-        `Recorded for ${period}: ${formatPastedUsd(amount)} · ${
-          typeof body.deltaUsd === "number" ? formatDeltaUsd(body.deltaUsd) : ""
-        }`
-      );
-      setPeriodLabel("");
-      setActualInput("");
-      const refreshed = await authFetch("/api/usage/invoice", { cache: "no-store" });
-      if (refreshed.ok) setInvoices((await refreshed.json()) as InvoiceSnapshot);
-    } catch {
-      setFormError("Recording failed — the figure was NOT stored. Nothing is shown rather than a stale number.");
-    } finally {
-      setSaving(false);
-    }
-  };
 
   const modelLabel = (m: LedgerModelUsage): string =>
     m.modelId === "gateway-default" ? "gateway default (no model field)" : m.modelId;
@@ -221,21 +166,11 @@ export function UsagePanel({ guestAt = null }: { guestAt?: string | null }) {
     <div>
       <div className="flex items-baseline justify-between gap-2">
         <p className="text-xs font-semibold">Usage &amp; balance</p>
-        <p className="text-[10px] text-muted-foreground">
-          {guestAt
-            ? `guest since ${new Date(guestAt).toLocaleDateString()}`
-            : "guest session"}
-        </p>
-      </div>
-
-      {/* Balance — unavailable-not-fabricated (§5.2) */}
-      <div className="mt-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-2.5 py-2">
-        <p className="text-[11px] font-medium text-amber-700 dark:text-amber-400">
-          Balance: unavailable
-        </p>
-        <p className="mt-0.5 text-[10px] leading-4 text-amber-700/80 dark:text-amber-400/80">
-          {BALANCE_NOTE}
-        </p>
+        {guestAt ? (
+          <p className="text-[10px] text-muted-foreground">
+            {`guest since ${new Date(guestAt).toLocaleDateString()}`}
+          </p>
+        ) : null}
       </div>
 
       {/* Account usage — the persisted ledger, every surface (Ruling 2) */}
@@ -246,7 +181,7 @@ export function UsagePanel({ guestAt = null }: { guestAt?: string | null }) {
             persisted ledger · all surfaces
           </p>
         </div>
-        {loadFailed ? (
+        {failed ? (
           <p className="mt-1 text-[10px] leading-4 text-destructive">
             Usage ledger could not be loaded — nothing is shown rather than
             showing stale numbers.
@@ -292,7 +227,7 @@ export function UsagePanel({ guestAt = null }: { guestAt?: string | null }) {
               </span>
             </p>
 
-            <div className="mt-2 max-h-40 overflow-y-auto pr-1 nice-scroll">
+            <div className="mt-2 pr-1">
               <p className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
                 By surface
               </p>
@@ -397,7 +332,7 @@ export function UsagePanel({ guestAt = null }: { guestAt?: string | null }) {
                     Transaction history · last {snapshot.history.windowDays} days
                   </p>
                   {snapshot.history.rows.length > 0 && (
-                    <ul className="mt-1 max-h-36 space-y-0.5 overflow-y-auto pr-1 nice-scroll">
+                    <ul className="mt-1 space-y-0.5">
                       {snapshot.history.rows.map((row) => (
                         <li
                           key={row.id}
@@ -433,7 +368,7 @@ export function UsagePanel({ guestAt = null }: { guestAt?: string | null }) {
                       <p className="mt-2 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
                         Older days · {snapshot.history.summaryNote}
                       </p>
-                      <ul className="mt-1 max-h-36 space-y-0.5 overflow-y-auto pr-1 nice-scroll">
+                      <ul className="mt-1 space-y-0.5">
                         {snapshot.history.summaries.map((s) => (
                           <li
                             key={`${s.day}|${s.surface}|${s.novelKey}|${s.modelId}`}
@@ -459,113 +394,6 @@ export function UsagePanel({ guestAt = null }: { guestAt?: string | null }) {
         )}
       </div>
 
-      {/* P5-c §6.3 — invoice reconciliation paste-slot (user-input
-          dependency: the actual number can only come from the account
-          holder's provider console; no billing API exists here). */}
-      <div className="mt-3 border-t pt-2">
-        <p className="text-xs font-semibold">Invoice reconciliation</p>
-        <p className="mt-0.5 text-[10px] leading-4 text-muted-foreground">
-          Paste the provider console&apos;s spend figure for a period — it is
-          stored verbatim against our ESTIMATE for the same tracked rows.
-          The delta is display math on two labeled figures, not a defect
-          claim: our ESTIMATE covers only persisted rows since tracking
-          began and is an upper bound.
-        </p>
-        {invoiceFailed ? (
-          <p className="mt-1 text-[10px] leading-4 text-destructive">
-            Reconciliation history could not be loaded — nothing is shown
-            rather than stale figures.
-          </p>
-        ) : (
-          <>
-            <div className="mt-1.5 flex flex-col gap-1.5">
-              <Input
-                value={periodLabel}
-                onChange={(event) => setPeriodLabel(event.target.value)}
-                placeholder="period, e.g. 2026-11 (console's billing month)"
-                aria-label="Period the pasted figure covers"
-                className="h-7 text-[11px]"
-                maxLength={64}
-              />
-              <Input
-                value={actualInput}
-                onChange={(event) => setActualInput(event.target.value)}
-                placeholder="console spend figure, e.g. 12.34"
-                aria-label="Actual spend figure from the provider console"
-                inputMode="decimal"
-                className="h-7 text-[11px]"
-                maxLength={16}
-              />
-              <Button
-                type="button"
-                size="sm"
-                className="h-7 text-[11px]"
-                disabled={saving}
-                onClick={saveFigure}
-              >
-                {saving && (
-                  <Loader2 className="mr-1 h-3 w-3 animate-spin" aria-hidden="true" />
-                )}
-                Record figure
-              </Button>
-            </div>
-            {formError && (
-              <p className="mt-1 text-[10px] leading-4 text-destructive">{formError}</p>
-            )}
-            {lastSaved && !formError && (
-              <p className="mt-1 text-[10px] leading-4 text-emerald-700 dark:text-emerald-400">
-                {lastSaved}
-              </p>
-            )}
-
-            {invoices && invoices.entries.length > 0 && (
-              <div className="mt-2 max-h-40 overflow-y-auto pr-1 nice-scroll">
-                <p className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-                  Recorded comparisons ({invoices.totalEntries})
-                </p>
-                <ul className="mt-1 space-y-1.5">
-                  {invoices.entries.map((entry) => {
-                    const actual = Number(entry.actualUsd);
-                    const estimate = Number(entry.estimatedUsd);
-                    const delta =
-                      Number.isFinite(actual) && Number.isFinite(estimate)
-                        ? actual - estimate
-                        : null;
-                    return (
-                      <li
-                        key={entry.id}
-                        className="rounded-md border px-2 py-1.5 text-[10px] leading-4"
-                      >
-                        <p className="font-medium">{entry.periodLabel}</p>
-                        <p className="mt-0.5 font-mono">
-                          {formatPastedUsd(entry.actualUsd)}
-                        </p>
-                        <p className="font-mono text-muted-foreground">
-                          our side:{" "}
-                          {formatEstimateUsd(
-                            Number.isFinite(estimate) ? estimate : 0
-                          )}
-                        </p>
-                        {delta !== null && (
-                          <p className="font-mono text-muted-foreground">
-                            {formatDeltaUsd(delta)}
-                          </p>
-                        )}
-                        <p className="mt-0.5 text-[9px] text-muted-foreground/80">
-                          at save: {entry.trackedRows} tracked rows · prices{" "}
-                          {entry.pricingVersion}
-                          {entry.note ? ` · ${entry.note}` : ""}
-                        </p>
-                      </li>
-                    );
-                  })}
-                </ul>
-              </div>
-            )}
-          </>
-        )}
-      </div>
-
       {/* Discontinuity + retention + statement export — from the persisted
           snapshot, verbatim (P5-f: the CSV statement is the pre-expiry
           escape hatch — all retained details + all daily summaries,
@@ -587,6 +415,195 @@ export function UsagePanel({ guestAt = null }: { guestAt?: string | null }) {
             Export statement (CSV)
           </a>
         </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * P5-c §6.3 — the invoice reconciliation paste-slot (a user-input
+ * dependency: the actual number can only come from the account holder's
+ * provider console; no billing API exists here).
+ *
+ * Step 64: moved out of <UsagePanel /> into the settings dialog's collapsed
+ * "Developer tools" disclosure — the form itself is unchanged.
+ */
+export function InvoiceReconciliation() {
+  const [invoices, setInvoices] = useState<InvoiceSnapshot | null>(null);
+  const [invoiceFailed, setInvoiceFailed] = useState(false);
+  const [periodLabel, setPeriodLabel] = useState("");
+  const [actualInput, setActualInput] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
+  const [lastSaved, setLastSaved] = useState<string | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    authFetch("/api/usage/invoice", { cache: "no-store" })
+      .then((res) => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res.json() as Promise<InvoiceSnapshot>;
+      })
+      .then((body) => {
+        if (alive) setInvoices(body);
+      })
+      .catch(() => {
+        if (alive) {
+          setInvoices(null);
+          setInvoiceFailed(true);
+        }
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  const saveFigure = async () => {
+    setFormError(null);
+    setLastSaved(null);
+    const period = periodLabel.trim();
+    const amount = actualInput.trim();
+    if (!period) {
+      setFormError("Name the period the figure covers (e.g. the console's billing month).");
+      return;
+    }
+    if (!amount) {
+      setFormError("Paste the console figure for that period.");
+      return;
+    }
+    setSaving(true);
+    try {
+      const res = await authFetch("/api/usage/invoice", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ actualUsd: amount, periodLabel: period }),
+      });
+      const body = (await res.json()) as { error?: string; deltaUsd?: number };
+      if (!res.ok) {
+        setFormError(body.error ?? `Recording failed (HTTP ${res.status}).`);
+        return;
+      }
+      // Optimistic prepend from the POST response, then refresh in full —
+      // the ESTIMATE side moves while the app runs, so the stored entry is
+      // re-fetched for truth.
+      setLastSaved(
+        `Recorded for ${period}: ${formatPastedUsd(amount)} · ${
+          typeof body.deltaUsd === "number" ? formatDeltaUsd(body.deltaUsd) : ""
+        }`
+      );
+      setPeriodLabel("");
+      setActualInput("");
+      const refreshed = await authFetch("/api/usage/invoice", { cache: "no-store" });
+      if (refreshed.ok) setInvoices((await refreshed.json()) as InvoiceSnapshot);
+    } catch {
+      setFormError("Recording failed — the figure was NOT stored. Nothing is shown rather than a stale number.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div>
+      <p className="text-xs font-semibold">Invoice reconciliation</p>
+      <p className="mt-0.5 text-[10px] leading-4 text-muted-foreground">
+        Paste the provider console&apos;s spend figure for a period — it is
+        stored verbatim against our ESTIMATE for the same tracked rows. The
+        delta is display math on two labeled figures, not a defect claim: our
+        ESTIMATE covers only persisted rows since tracking began and is an
+        upper bound.
+      </p>
+      {invoiceFailed ? (
+        <p className="mt-1 text-[10px] leading-4 text-destructive">
+          Reconciliation history could not be loaded — nothing is shown
+          rather than stale figures.
+        </p>
+      ) : (
+        <>
+          <div className="mt-1.5 flex flex-col gap-1.5">
+            <Input
+              value={periodLabel}
+              onChange={(event) => setPeriodLabel(event.target.value)}
+              placeholder="period, e.g. 2026-11 (console's billing month)"
+              aria-label="Period the pasted figure covers"
+              className="h-7 text-[11px]"
+              maxLength={64}
+            />
+            <Input
+              value={actualInput}
+              onChange={(event) => setActualInput(event.target.value)}
+              placeholder="console spend figure, e.g. 12.34"
+              aria-label="Actual spend figure from the provider console"
+              inputMode="decimal"
+              className="h-7 text-[11px]"
+              maxLength={16}
+            />
+            <Button
+              type="button"
+              size="sm"
+              className="h-7 text-[11px]"
+              disabled={saving}
+              onClick={saveFigure}
+            >
+              {saving && (
+                <Loader2 className="mr-1 h-3 w-3 animate-spin" aria-hidden="true" />
+              )}
+              Record figure
+            </Button>
+          </div>
+          {formError && (
+            <p className="mt-1 text-[10px] leading-4 text-destructive">{formError}</p>
+          )}
+          {lastSaved && !formError && (
+            <p className="mt-1 text-[10px] leading-4 text-emerald-700 dark:text-emerald-400">
+              {lastSaved}
+            </p>
+          )}
+
+          {invoices && invoices.entries.length > 0 && (
+            <div className="mt-2 pr-1">
+              <p className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                Recorded comparisons ({invoices.totalEntries})
+              </p>
+              <ul className="mt-1 space-y-1.5">
+                {invoices.entries.map((entry) => {
+                  const actual = Number(entry.actualUsd);
+                  const estimate = Number(entry.estimatedUsd);
+                  const delta =
+                    Number.isFinite(actual) && Number.isFinite(estimate)
+                      ? actual - estimate
+                      : null;
+                  return (
+                    <li
+                      key={entry.id}
+                      className="rounded-md border px-2 py-1.5 text-[10px] leading-4"
+                    >
+                      <p className="font-medium">{entry.periodLabel}</p>
+                      <p className="mt-0.5 font-mono">
+                        {formatPastedUsd(entry.actualUsd)}
+                      </p>
+                      <p className="font-mono text-muted-foreground">
+                        our side:{" "}
+                        {formatEstimateUsd(
+                          Number.isFinite(estimate) ? estimate : 0
+                        )}
+                      </p>
+                      {delta !== null && (
+                        <p className="font-mono text-muted-foreground">
+                          {formatDeltaUsd(delta)}
+                        </p>
+                      )}
+                      <p className="mt-0.5 text-[9px] text-muted-foreground/80">
+                        at save: {entry.trackedRows} tracked rows · prices{" "}
+                        {entry.pricingVersion}
+                        {entry.note ? ` · ${entry.note}` : ""}
+                      </p>
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+          )}
+        </>
       )}
     </div>
   );

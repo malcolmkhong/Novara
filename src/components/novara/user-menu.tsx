@@ -1,7 +1,7 @@
 "use client";
 
 // ---------------------------------------------------------------------------
-// Novara AI — the user menu (Step 62).
+// Novara AI — the user menu (Step 62, final shape in Step 64).
 //
 // A bottom-left popover: the avatar trigger, an identity header row and the
 // account rows. It is mounted twice — at the bottom of the workbench's asset
@@ -10,10 +10,13 @@
 // The balance label comes from useCredits() (GET /api/usage/credits): "53 / 60"
 // for a normal account, "Unlimited" for an admin, "—" while it loads or if it
 // failed (the settings pane surfaces the real error).
+//
+// Step 64: the disabled "Admin console - coming soon" row is GONE — if a
+// control does not work, it is not on screen.
 // ---------------------------------------------------------------------------
 
-import { useEffect, useRef, useState } from "react";
-import { HelpCircle, LogOut, Settings, Shield, Wallet } from "lucide-react";
+import { useRef, useState } from "react";
+import { HelpCircle, LogOut, Settings, Wallet } from "lucide-react";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -152,13 +155,6 @@ export function UserMenu({ className }: { className?: string }) {
               navigate("about");
             }}
           />
-          {credits?.admin ? (
-            <MenuRow
-              icon={<Shield className="h-3.5 w-3.5" aria-hidden="true" />}
-              label="Admin console - coming soon"
-              disabled
-            />
-          ) : null}
           <Separator className="my-1" />
           <MenuRow
             icon={<LogOut className="h-3.5 w-3.5" aria-hidden="true" />}
@@ -174,8 +170,13 @@ export function UserMenu({ className }: { className?: string }) {
         pane={pane}
         onPaneChange={setPane}
         onClosed={() => {
-          // The dialog is portaled — put the focus back where it came from.
-          window.setTimeout(() => triggerRef.current?.focus(), 0);
+          // The dialog is portaled and Radix's own focus restore points at the
+          // (now unmounted) menu row — so we hand the focus back ourselves,
+          // after the dialog has finished closing.
+          const restore = () => triggerRef.current?.focus();
+          window.setTimeout(restore, 0);
+          window.requestAnimationFrame(restore);
+          window.setTimeout(restore, 120);
         }}
       />
     </>

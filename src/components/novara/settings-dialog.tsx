@@ -1,22 +1,28 @@
 "use client";
 
 // ---------------------------------------------------------------------------
-// Novara AI — the settings modal (Step 62, round 1).
+// Novara AI — the settings modal (Step 62; geometry + panes fixed in Step 64).
 //
-// Four panes, four columns of truth:
+// FIXED GEOMETRY (Step 64): the dialog is always
+//   width  min(720px, 92vw)   height min(640px, 85vh)
+// — switching panes NEVER resizes it. The left nav is a fixed 180px column;
+// the right pane is the only scroll container.
 //
+// Four panes:
 //   Account        who is signed in (read-only) · sign out
-//   General        the editor font size · the interface language
-//   Credits & usage  the credit gauge + the (moved) usage panel
+//   Appearance     the editor font size
+//   Credits & usage  the credit gauge, today's usage, the moved usage panel
+//                    (behind "More details") and the developer tools (behind
+//                    "Developer tools")
 //   About          the build: version, deployed commit, the legal links
 //
-// Left nav on ≥ sm, a horizontal chip strip below it. The pane scrolls.
 // Radix gives the focus trap, the Escape close, the backdrop close and the
 // focus restore; the trigger (the user menu) puts the focus back when the
 // dialog closes.
 // ---------------------------------------------------------------------------
 
 import { useEffect, useState } from "react";
+import { ChevronRight } from "lucide-react";
 import { authFetch, getFirebaseAuth, signOutUser } from "@/lib/firebase/client";
 import { useCredits } from "@/hooks/use-credits";
 import { useHashRoute } from "@/hooks/use-hash-route";
@@ -38,16 +44,29 @@ import {
 } from "@/components/ui/dialog";
 import { Progress } from "@/components/ui/progress";
 import { Separator } from "@/components/ui/separator";
-import { UsagePanel } from "@/components/novara/writer/usage-panel";
+import { InvoiceReconciliation, UsagePanel } from "@/components/novara/writer/usage-panel";
+import type { AccountUsageSnapshot } from "@/lib/usage/usage-shapes";
 import { cn } from "@/lib/utils";
 
-export type SettingsPane = "account" | "general" | "credits" | "about";
+export type SettingsPane = "account" | "appearance" | "credits" | "about";
 
 const PANES: { id: SettingsPane; label: string }[] = [
   { id: "account", label: "Account" },
-  { id: "general", label: "General" },
+  { id: "appearance", label: "Appearance" },
   { id: "credits", label: "Credits & usage" },
   { id: "about", label: "About" },
+];
+
+/**
+ * Today's usage, grouped into plain words. The numbers are CALLS (what the
+ * persisted ledger counts exactly) — no money is shown here; the money lives
+ * in the "More details" disclosure, where it is labeled as an estimate.
+ */
+const TODAY_GROUPS: { label: string; surfaces: string[] }[] = [
+  { label: "Writing chapters", surfaces: ["draft", "studio"] },
+  { label: "Running the team", surfaces: ["agent", "ai-team"] },
+  { label: "Reviews and checks", surfaces: ["review", "sediment", "qc"] },
+  { label: "Detectors and questions", surfaces: ["detect", "generate", "wizard"] },
 ];
 
 /** One "label left · control right" row. */
@@ -83,6 +102,40 @@ function SectionTitle({ children }: { children: React.ReactNode }) {
   );
 }
 
+/** A collapsed disclosure row (the content is NOT mounted until opened). */
+function Disclosure({
+  label,
+  open,
+  onToggle,
+  children,
+}: {
+  label: string;
+  open: boolean;
+  onToggle: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <div>
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-expanded={open}
+        className="flex w-full items-center gap-1.5 py-2 text-left text-sm outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+      >
+        <ChevronRight
+          className={cn(
+            "h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform",
+            open && "rotate-90",
+          )}
+          aria-hidden="true"
+        />
+        {label}
+      </button>
+      {open ? <div className="pb-3">{children}</div> : null}
+    </div>
+  );
+}
+
 export function SettingsDialog({
   open,
   onOpenChange,
@@ -103,6 +156,9 @@ export function SettingsDialog({
   const { credits, error } = useCredits();
   const [fontScale, setFontScale] = useState<FontScaleId>(() => readFontScale());
   const [commit, setCommit] = useState<string | null>(null);
+  const [snapshot, setSnapshot] = useState<AccountUsageSnapshot | null>(null);
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const [devOpen, setDevOpen] = useState(false);
 
   // The deployed commit comes from the public health route.
   useEffect(() => {
@@ -124,7 +180,23 @@ export function SettingsDialog({
     };
   }, [open]);
 
-  const email = getFirebaseAuth().currentUser?.email ?? null;
+  // The credits pane needs the ledger for today's rows (the usage panel gets
+  // the same snapshot when "More details" is opened).
+  useEffect(() => {
+    if (!open || pane !== "credits") return;
+    let alive = true;
+    authFetch("/api/usage/ledger", { cache: "no-store" })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((body) => {
+        if (alive) setSnapshot(body as AccountUsageSnapshot | null);
+      })
+      .catch(() => {
+        if (alive) setSnapshot(null);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [open, pane]);
 
   const handleSignOut = async () => {
     await signOutUser();
@@ -132,6 +204,8 @@ export function SettingsDialog({
     onClosed?.();
     navigate("home");
   };
+
+  const email = getFirebaseAuth().currentUser?.email ?? null;
 
   const balance = credits?.balance ?? null;
   const allowance = credits?.allowance ?? 0;
@@ -143,6 +217,14 @@ export function SettingsDialog({
       })
     : null;
 
+  const todayRows = TODAY_GROUPS.map((group) => {
+    const calls = group.surfaces.reduce((sum, surface) => {
+      const row = snapshot?.surfaces.find((s) => s.surface === surface);
+      return sum + (row?.calls ?? 0);
+    }, 0);
+    return { label: group.label, calls };
+  }).filter((row) => row.calls > 0);
+
   return (
     <Dialog
       open={open}
@@ -151,19 +233,32 @@ export function SettingsDialog({
         if (!next) onClosed?.();
       }}
     >
-      <DialogContent className="max-w-[calc(100%-2rem)] gap-0 p-0 sm:max-w-2xl">
-        <DialogHeader className="border-b px-4 py-3 sm:px-6">
+      {/* FIXED GEOMETRY: the frame never resizes with the pane.
+          w = min(720px, 92vw), h = min(640px, 85vh) at every width. */}
+      <DialogContent
+        className="flex flex-col w-[min(720px,92vw)] h-[min(640px,85vh)] max-w-none sm:max-w-none gap-0 overflow-hidden p-0"
+        onCloseAutoFocus={(event) => {
+          // Radix would restore the focus to the element that was focused
+          // before the dialog opened — the menu row that opened it, which is
+          // unmounted by now, so the focus would fall to the body. Hand it
+          // back to the trigger instead.
+          event.preventDefault();
+          onClosed?.();
+        }}
+      >
+        <DialogHeader className="shrink-0 border-b px-4 py-3 sm:px-6">
           <DialogTitle className="text-base">Settings</DialogTitle>
           <DialogDescription className="text-[11px]">
-            Your account, the workspace and what this build is.
+            Your account, your credits and your preferences.
           </DialogDescription>
         </DialogHeader>
 
-        <div className="flex max-h-[70vh] flex-col overflow-hidden sm:flex-row">
-          {/* Left nav — a column on ≥ sm, a scrolling chip strip below it. */}
+        <div className="flex min-h-0 flex-1 flex-col sm:flex-row">
+          {/* Left nav — a fixed 180px column on ≥ sm, a scrolling chip strip
+              below it. It never takes its width from the content. */}
           <nav
             aria-label="Settings sections"
-            className="flex shrink-0 gap-1 overflow-x-auto border-b p-2 sm:w-48 sm:flex-col sm:overflow-visible sm:border-b-0 sm:border-r sm:p-3"
+            className="flex shrink-0 gap-1 overflow-x-auto border-b p-2 sm:w-[180px] sm:flex-col sm:overflow-visible sm:border-b-0 sm:border-r sm:p-3"
           >
             {PANES.map((entry) => {
               const active = pane === entry.id;
@@ -186,8 +281,8 @@ export function SettingsDialog({
             })}
           </nav>
 
-          {/* The pane */}
-          <div className="min-w-0 flex-1 overflow-y-auto px-4 py-4 sm:px-6 sm:py-5">
+          {/* The pane — the ONLY scroll container. */}
+          <div className="min-h-0 min-w-0 flex-1 overflow-y-auto px-4 py-4 sm:px-6 sm:py-5">
             {pane === "account" && (
               <>
                 <SectionTitle>Account</SectionTitle>
@@ -209,18 +304,12 @@ export function SettingsDialog({
                     Sign out
                   </Button>
                 </Row>
-                <Separator />
-                <Row label="Delete account" hint="Not available in this build.">
-                  <Button variant="outline" size="sm" disabled>
-                    Delete account - coming soon
-                  </Button>
-                </Row>
               </>
             )}
 
-            {pane === "general" && (
+            {pane === "appearance" && (
               <>
-                <SectionTitle>General</SectionTitle>
+                <SectionTitle>Appearance</SectionTitle>
                 <Separator className="mt-2" />
                 <Row label="Editor font size">
                   <div
@@ -252,17 +341,12 @@ export function SettingsDialog({
                     })}
                   </div>
                 </Row>
-                <Separator />
-                <Row label="Interface language" hint="More languages are planned.">
-                  <Button variant="outline" size="sm" disabled>
-                    English
-                  </Button>
-                </Row>
               </>
             )}
 
             {pane === "credits" && (
               <>
+                {/* HERO */}
                 <SectionTitle>Credits &amp; usage</SectionTitle>
                 <Separator className="mt-2" />
                 <div className="py-3">
@@ -272,13 +356,16 @@ export function SettingsDialog({
                       rather than a stale number.
                     </p>
                   ) : credits?.unlimited ? (
-                    <p className="text-sm">
-                      Unlimited - {usedToday} credits used today
-                    </p>
+                    <>
+                      <p className="text-sm">Unlimited</p>
+                      <p className="mt-0.5 text-[11px] text-muted-foreground">
+                        {usedToday} credits used today
+                      </p>
+                    </>
                   ) : (
                     <>
                       <p className="text-sm">
-                        {balance ?? "—"} / {allowance} credits today
+                        {balance ?? "—"} / {allowance} credits left today
                       </p>
                       <Progress
                         className="mt-2 h-1.5"
@@ -297,14 +384,58 @@ export function SettingsDialog({
                     </>
                   )}
                 </div>
+
+                {/* TODAY — plain words, no money */}
                 <Separator />
                 <div className="py-3">
-                  <UsagePanel />
+                  <div className="flex items-baseline justify-between gap-2">
+                    <p className="text-xs font-semibold">Today</p>
+                    <p className="text-[10px] text-muted-foreground">calls</p>
+                  </div>
+                  {todayRows.length === 0 ? (
+                    <p className="mt-1 text-[11px] text-muted-foreground">
+                      No AI calls recorded today.
+                    </p>
+                  ) : (
+                    <ul className="mt-1 space-y-1">
+                      {todayRows.map((row) => (
+                        <li
+                          key={row.label}
+                          className="flex items-center justify-between gap-2 text-sm"
+                        >
+                          <span className="min-w-0 truncate text-muted-foreground">
+                            {row.label}
+                          </span>
+                          <span className="font-mono text-xs">{row.calls}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
                 </div>
+
+                {/* MORE DETAILS — the usage sections */}
+                <Separator />
+                <Disclosure
+                  label="More details"
+                  open={detailsOpen}
+                  onToggle={() => setDetailsOpen((v) => !v)}
+                >
+                  <UsagePanel snapshot={snapshot} />
+                </Disclosure>
                 <Separator />
                 <p className="py-3 text-[11px] text-muted-foreground">
-                  Usage details kept 90 days
+                  Usage details are kept for 90 days.
                 </p>
+
+                {/* DEVELOPER TOOLS — the invoice form, unchanged, collapsed */}
+                <Separator />
+                <Disclosure
+                  label="Developer tools"
+                  open={devOpen}
+                  onToggle={() => setDevOpen((v) => !v)}
+                >
+                  <InvoiceReconciliation />
+                </Disclosure>
               </>
             )}
 
@@ -341,7 +472,7 @@ export function SettingsDialog({
                   </div>
                 </Row>
                 <Separator />
-                <Row label="Build" hint="Preview build — features are still being built.">
+                <Row label="Build">
                   <Badge variant="outline" className="text-[11px]">
                     Preview build
                   </Badge>
