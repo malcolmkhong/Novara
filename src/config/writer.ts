@@ -115,6 +115,12 @@ export const REVIEW_SEVERITY_META: Record<
 /** Center pane view: conversational flow or the Todos board. */
 export type CenterView = "chat" | "board";
 
+/**
+ * STEP 65 — the rail's mode per novel: "write" lists this novel's agent
+ * runs, "book" shows the asset tree. Two modes instead of eight peers.
+ */
+export type RailMode = "write" | "book";
+
 /** Right pane artifact views. */
 export type ArtifactTabId =
   // workspace + plan zones

@@ -15,7 +15,7 @@
 // control does not work, it is not on screen.
 // ---------------------------------------------------------------------------
 
-import { useRef, useState } from "react";
+import { forwardRef, useImperativeHandle, useRef, useState } from "react";
 import { HelpCircle, LogOut, Settings, Wallet } from "lucide-react";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
@@ -59,13 +59,38 @@ function MenuRow({ icon, label, right, disabled, onClick }: MenuRowProps) {
   );
 }
 
-export function UserMenu({ className }: { className?: string }) {
+/**
+ * STEP 65 — the imperative handle other surfaces use to open the settings
+ * dialog. The workbench rail's gear button calls this, so the gear and the
+ * "Settings" menu row run the SAME action on the SAME dialog instance.
+ */
+export interface UserMenuHandle {
+  openSettings: (pane?: SettingsPane) => void;
+}
+
+export const UserMenu = forwardRef<UserMenuHandle, { className?: string }>(
+  function UserMenu({ className }, ref) {
   const { navigate } = useHashRoute();
   const { credits } = useCredits();
   const [open, setOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [pane, setPane] = useState<SettingsPane>("account");
   const triggerRef = useRef<HTMLButtonElement | null>(null);
+
+  // The author of the workbench rail (Step 62) keeps the user menu at the
+  // bottom-left, upward popover. The rail's gear button (Step 65) reaches the
+  // same dialog through this handle — one dialog instance, one action.
+  useImperativeHandle(
+    ref,
+    () => ({
+      openSettings: (target: SettingsPane = "account") => {
+        setPane(target);
+        setSettingsOpen(true);
+        setOpen(false);
+      },
+    }),
+    []
+  );
 
   // The writer only renders after the Firebase auth resolved, so the user is
   // available synchronously here (no state, no effect).
@@ -181,4 +206,5 @@ export function UserMenu({ className }: { className?: string }) {
       />
     </>
   );
-}
+  }
+);

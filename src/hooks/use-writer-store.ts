@@ -13,13 +13,15 @@
 // one piece of durable UI state — it survives reloads via localStorage. The
 // store uses skipHydration and is rehydrated manually from the client root
 // (writer-app) after mount, so the first client render always matches SSR.
+// STEP 65 adds two more durable per-novel slices: the model selection and the
+// rail mode (Write | Book).
 // ---------------------------------------------------------------------------
 
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 import type { AgentRunMode, PinnedRef } from "@/lib/novara/agent-types";
 import type { ModelSelection } from "@/lib/novara/models";
-import type { ArtifactTabId, CenterView } from "@/config/writer";
+import type { ArtifactTabId, CenterView, RailMode } from "@/config/writer";
 
 interface WriterState {
   /** Center pane view per novel id (chat flow vs Todos board). */
@@ -62,6 +64,12 @@ interface WriterState {
    * model picker restores across reloads, scoped to the novel.
    */
   lastModelByNovel: Record<string, ModelSelection>;
+  /**
+   * STEP 65 — the rail's mode per novel id: "write" (this novel's agent
+   * runs) or "book" (the asset tree). Persisted so the rail keeps the
+   * author's choice across reloads and novel switches. Default: "book".
+   */
+  railModeByNovel: Record<string, RailMode>;
   setCenterView: (novelId: string, view: CenterView) => void;
   setArtifactTab: (novelId: string, tab: ArtifactTabId) => void;
   selectChapter: (novelId: string, chapterId: string | null) => void;
@@ -78,6 +86,9 @@ interface WriterState {
   setLedgerKind: (novelId: string, kind: string | null) => void;
   setLastMode: (novelId: string, mode: AgentRunMode) => void;
   setLastModel: (novelId: string, selection: ModelSelection) => void;
+  /** STEP 65 — switch the rail between the run list ("write") and the asset
+   * tree ("book") for one novel. */
+  setRailMode: (novelId: string, mode: RailMode) => void;
 }
 
 export const useWriterStore = create<WriterState>()(
@@ -96,6 +107,7 @@ export const useWriterStore = create<WriterState>()(
   ledgerKindByNovel: {},
   lastModeByNovel: {},
   lastModelByNovel: {},
+  railModeByNovel: {},
   setCenterView: (novelId, view) =>
     set((s) => ({ centerViewByNovel: { ...s.centerViewByNovel, [novelId]: view } })),
   setArtifactTab: (novelId, tab) =>
@@ -151,16 +163,22 @@ export const useWriterStore = create<WriterState>()(
     set((s) => ({
       lastModelByNovel: { ...s.lastModelByNovel, [novelId]: selection },
     })),
+  setRailMode: (novelId, mode) =>
+    set((s) => ({
+      railModeByNovel: { ...s.railModeByNovel, [novelId]: mode },
+    })),
     }),
     {
       name: "novara-writer-ui",
       version: 1,
       storage: createJSONStorage(() => localStorage),
-      // Durable UI state: the per-novel run-mode AND model preferences.
+      // Durable UI state: the per-novel run-mode AND model preferences, plus
+      // the per-novel rail mode (STEP 65: Write | Book).
       // Every other slice is intentionally session-scoped.
       partialize: (s) => ({
         lastModeByNovel: s.lastModeByNovel,
         lastModelByNovel: s.lastModelByNovel,
+        railModeByNovel: s.railModeByNovel,
       }),
       // Rehydrated manually from the client root after mount — keeps the
       // first client render identical to SSR (no hydration mismatch).

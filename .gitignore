@@ -39,6 +39,10 @@ yarn-error.log*
 # OAuth client secret downloaded from Google Cloud Console (live secret)
 client_secret_*.json
 
+# Firebase service-account keys (Admin SDK — full project access, live secret)
+novara-*.json
+*firebase-adminsdk*.json
+
 # local data / session artifacts (never commit)
 db/*.db
 # SECURITY FIX (2026-11-07): the live database lives at prisma/db/custom.db, which

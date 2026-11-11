@@ -32,34 +32,48 @@
 // expand/collapse state.
 // ---------------------------------------------------------------------------
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Brain,
   ChevronRight,
   FileSearch,
-  FolderTree,
   Globe2,
   Hand,
   Lightbulb,
   ListTree,
   Loader2,
   Lock,
+  MoreHorizontal,
   NotebookPen,
   PenLine,
   Pencil,
   Plus,
   ScrollText,
   Search,
+  Settings,
   Trash2,
   Upload,
   X,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
-import type { AgentTask, AgentTaskStatus } from "@/lib/novara/agent-types";
-import type { ArtifactTabId } from "@/config/writer";
+import type {
+  AgentRun,
+  AgentRunStatus,
+  AgentTask,
+  AgentTaskStatus,
+} from "@/lib/novara/agent-types";
+import type { ArtifactTabId, RailMode } from "@/config/writer";
+import { RUN_STATUS_META } from "@/config/writer";
+import { listNovelRuns } from "@/lib/novara/api";
 import type {
   ChapterDTO,
   ChapterPackDTO,
@@ -76,9 +90,37 @@ import { cn } from "@/lib/utils";
 import { useWriterStore } from "@/hooks/use-writer-store";
 
 // ---------------------------------------------------------------------------
-// Badge binding: live tasks → tree node keys
+// STEP 65 — the rail's Write mode (the run list)
 // ---------------------------------------------------------------------------
 
+/** How many runs the rail asks for. The server clamps to 1..50. */
+const RUN_LIST_LIMIT = 50;
+
+/** Stable empty list — keeps the run rows' referential identity stable. */
+const EMPTY_RUNS: AgentRun[] = [];
+
+/**
+ * Relative time for a run row ("now", "2m ago", "3h ago", "4d ago", "2w ago").
+ * 11px, muted, right-aligned — the grammar's timestamp treatment.
+ */
+function relativeTime(iso: string): string {
+  const then = new Date(iso).getTime();
+  if (!Number.isFinite(then)) return "";
+  const diff = Date.now() - then;
+  if (diff < 0) return "now";
+  const minutes = Math.floor(diff / 60_000);
+  if (minutes < 1) return "now";
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  if (days < 7) return `${days}d ago`;
+  return `${Math.floor(days / 7)}w ago`;
+}
+
+// ---------------------------------------------------------------------------
+// Badge binding: live tasks → tree node keys
+// ---------------------------------------------------------------------------
 interface NodeBadge {
   taskKey: string;
   status: Extract<AgentTaskStatus, "in_progress" | "needs_approval">;
@@ -287,6 +329,21 @@ interface AssetTreeProps {
   onDelete: () => void;
   /** Adding chapter in flight (button spinner). */
   addingChapter?: boolean;
+  /**
+   * STEP 65 — the rail's Write mode. Clicking a run row loads it through the
+   * SAME path the conversation pane's history switcher uses (viewRun), so no
+   * second loader exists.
+   */
+  onOpenRun: (runId: string) => void;
+  /** The run currently shown in the centre column — highlighted in the list. */
+  currentRunId?: string | null;
+  /**
+   * STEP 65 — the run's status. A change re-fetches the rail's run list, so
+   * a run that finishes shows up without a manual reload.
+   */
+  runStatus?: AgentRunStatus | null;
+  /** STEP 65 — the rail's gear button opens the settings dialog. */
+  onOpenSettings: () => void;
 }
 
 export function AssetTree({
@@ -312,6 +369,10 @@ export function AssetTree({
   onExport,
   onDelete,
   addingChapter = false,
+  onOpenRun,
+  currentRunId = null,
+  runStatus = null,
+  onOpenSettings,
 }: AssetTreeProps) {
   const { novel } = detail;
   const badges = buildTreeBadges(
@@ -322,6 +383,47 @@ export function AssetTree({
   // the target tab's category/kind before opening it.
   const setMemoryFocus = useWriterStore((s) => s.setMemoryFocus);
   const setLedgerKind = useWriterStore((s) => s.setLedgerKind);
+
+  // STEP 65 — the rail has TWO modes instead of eight peers: "write" (this
+  // novel's agent runs) and "book" (the asset tree). The choice is per novel
+  // and persisted in the writer store; the default on first load is "book".
+  const mode = useWriterStore((s) => s.railModeByNovel[novel.id] ?? "book");
+  const setRailMode = useWriterStore((s) => s.setRailMode);
+
+  // The rail's run list (Write mode). ONE shared client function with the
+  // conversation pane's history switcher — the server clamps the page size.
+  // The list is stored WITH the novel it belongs to, so switching novels
+  // shows "loading" instead of the previous novel's runs.
+  const [runsState, setRunsState] = useState<{
+    novelId: string;
+    runs: AgentRun[];
+  } | null>(null);
+  const runs = runsState?.novelId === novel.id ? runsState.runs : EMPTY_RUNS;
+  const runsLoading = mode === "write" && runsState?.novelId !== novel.id;
+
+  useEffect(() => {
+    if (mode !== "write") return;
+    let alive = true;
+    listNovelRuns(novel.id, RUN_LIST_LIMIT)
+      .then((body) => {
+        if (alive) {
+          setRunsState({
+            novelId: novel.id,
+            runs: Array.isArray(body.runs) ? body.runs : [],
+          });
+        }
+      })
+      .catch(() => {
+        if (alive) setRunsState({ novelId: novel.id, runs: [] });
+      });
+    return () => {
+      alive = false;
+    };
+  }, [novel.id, mode, runStatus]);
+
+  // STEP 65 — groups whose computed count is 0 collapse behind ONE
+  // "Show empty (N)" row at the bottom of Book mode.
+  const [showEmpty, setShowEmpty] = useState(false);
 
   // Collapse state (file-explorer style). The 草稿区 workspace starts open —
   // the primary asset; the rest start collapsed. The state persists per novel
@@ -394,6 +496,19 @@ export function AssetTree({
   const finalChapters = detail.chapters.filter((ch) => ch.status === "final");
   const canonLabel = (ch: ChapterDTO) =>
     `${String(ch.index).padStart(4, "0")}-${ch.title}`;
+
+  // STEP 65 — the groups whose OWN displayed count is 0 collapse behind ONE
+  // "Show empty (N)" row at the bottom of Book mode. These are the SAME
+  // computed values the groups already render (no new counters, nothing
+  // stored): 世界书 = entries + characters, 大纲 = beats, 定稿 = finals.
+  const emptyGroups = {
+    world: detail.worldEntries.length + detail.characters.length === 0,
+    outline: detail.outlineBeats.length === 0,
+    canon: finalChapters.length === 0,
+  };
+  const emptyGroupCount = Object.values(emptyGroups).filter(Boolean).length;
+  const hideEmptyGroup = (key: keyof typeof emptyGroups) =>
+    emptyGroups[key] && !showEmpty;
 
   // Search filtering — file rows match by label; matching a zone/group name
   // (世界书/未分组/故事骨架/…) surfaces that zone's whole contents. Ledger and
@@ -483,6 +598,12 @@ export function AssetTree({
       )
     : finalChapters;
 
+  // STEP 65 — the Write mode's run list, filtered by the same search line.
+  // The order is the server's (newest first); the search only narrows it.
+  const visibleRuns = searching
+    ? runs.filter((run) => matchesQuery(run.goal))
+    : runs;
+
   // Single document rows (作品契约/章摘要/构想/审核) — matched by their
   // Chinese label or an English alias.
   const contractMatch = matchesQuery("作品契约") || matchesQuery("contract");
@@ -567,7 +688,7 @@ export function AssetTree({
   const chapterTrailing = (ch: ChapterDTO) => (
     <>
       {ch.wordCount > 0 && (
-        <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground">
+        <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
           {formatWordCount(ch.wordCount)}
         </span>
       )}
@@ -624,7 +745,7 @@ export function AssetTree({
             label={`稿${v.draftNo}`}
             onClick={() => onOpenChapter(ch.id)}
             trailing={
-              <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground">
+              <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
                 {formatWordCount(v.wordCount)}
                 {v.createdBy === "agent" ? " AI" : ""}
               </span>
@@ -642,7 +763,7 @@ export function AssetTree({
       selected={selectedPackKey === `${kind}:${pack.chapterIndex}`}
       onClick={() => onOpenPack(kind, pack.chapterIndex)}
       trailing={
-        <span className="shrink-0 text-[10px] text-muted-foreground">
+        <span className="shrink-0 text-[11px] text-muted-foreground">
           第{pack.chapterIndex}章
         </span>
       }
@@ -680,13 +801,45 @@ export function AssetTree({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      {/* Novel header */}
-      <div className="border-b p-4">
-        <div className="flex items-start justify-between gap-2">
-          <h2 className="min-w-0 font-display text-base font-bold leading-tight">
+      {/* TOP BLOCK — the novel's identity. The three actions that used to sit
+          here as full-width buttons moved into ONE overflow menu on the title
+          row (same handlers, same confirmations). */}
+      <div className="border-b px-3 pb-2 pt-3">
+        <div className="flex items-center gap-1.5">
+          <h2 className="min-w-0 flex-1 truncate font-display text-sm font-semibold leading-tight">
             {novel.title}
           </h2>
           {novelBadges && <BadgeIcons badges={novelBadges} />}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-7 w-7 shrink-0 p-0"
+                aria-label="Novel actions"
+                title="Novel actions"
+              >
+                <MoreHorizontal className="h-4 w-4" aria-hidden="true" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-40">
+              <DropdownMenuItem onSelect={onEditDetails}>
+                <Pencil className="h-3.5 w-3.5" aria-hidden="true" />
+                Details
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={onExport}>
+                <Upload className="h-3.5 w-3.5 rotate-180" aria-hidden="true" />
+                Export
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onSelect={onDelete}
+                className="text-destructive focus:text-destructive"
+              >
+                <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+                Delete
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
         <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
           {novel.genre && <Badge variant="outline">{novel.genre}</Badge>}
@@ -694,50 +847,52 @@ export function AssetTree({
             {novel.status}
           </Badge>
         </div>
-        <p className="mt-2 text-xs text-muted-foreground">
+        <p className="mt-1.5 text-[11px] text-muted-foreground">
           {formatWordCount(totalWords)} / {formatWordCount(novel.targetWords)} words
         </p>
-        <Progress value={pct} className="mt-1.5 h-1" aria-label={`${pct}% of target length`} />
-        <div className="mt-3 flex items-center gap-1">
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-7 px-2 text-xs"
-            onClick={onEditDetails}
-          >
-            <Pencil className="h-3.5 w-3.5" aria-hidden="true" />
-            Details
-          </Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-7 px-2 text-xs"
-            onClick={onExport}
-          >
-            <Upload className="h-3.5 w-3.5 rotate-180" aria-hidden="true" />
-            Export
-          </Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-7 px-2 text-xs text-destructive hover:text-destructive"
-            onClick={onDelete}
-          >
-            <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
-            Delete
-          </Button>
+        <Progress value={pct} className="mt-1 h-1" aria-label={`${pct}% of target length`} />
+      </div>
+
+      {/* SEGMENTED MODE CONTROL — Write (this novel's runs) | Book (the tree).
+          50/50 split, 32px tall, 4px inset, 13px labels. */}
+      <div className="px-2 py-2">
+        <div
+          role="group"
+          aria-label="Rail mode"
+          className="grid h-8 grid-cols-2 gap-1 rounded-md bg-muted/50 p-1"
+        >
+          {(
+            [
+              { id: "write" as const, label: "Write" },
+              { id: "book" as const, label: "Book" },
+            ] as const
+          ).map(({ id, label }) => (
+            <button
+              key={id}
+              type="button"
+              onClick={() => setRailMode(novel.id, id)}
+              aria-pressed={mode === id}
+              className={cn(
+                "rounded-sm text-[13px] transition-colors",
+                mode === id
+                  ? "bg-background font-medium text-foreground shadow-sm"
+                  : "text-muted-foreground hover:text-foreground"
+              )}
+            >
+              {label}
+            </button>
+          ))}
         </div>
       </div>
 
-      {/* Tree */}
-      <nav
-        aria-label="Novel assets"
-        className="nice-scroll min-h-0 flex-1 overflow-y-auto p-2"
-      >
-        {/* Search — filters the tree below while the query is active. */}
-        <div className="relative mb-2">
+      {/* ONE SEARCH LINE — [magnifier | Search] + [gear] + [+]. 32px tall,
+          borderless, on the rail's header line (the grammar's "tiny icons on
+          the section-header line"). In Book mode it filters the tree; in
+          Write mode it filters the run list. */}
+      <div className="flex h-8 shrink-0 items-center gap-1 px-2 pb-2">
+        <div className="relative flex min-w-0 flex-1 items-center">
           <Search
-            className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground"
+            className="pointer-events-none absolute left-1 h-3.5 w-3.5 text-muted-foreground"
             aria-hidden="true"
           />
           <Input
@@ -745,27 +900,90 @@ export function AssetTree({
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             aria-label="Search assets"
-            placeholder="Search files…"
-            className="h-8 bg-background pl-8 pr-8"
+            placeholder="Search"
+            className="h-8 border-0 bg-transparent pl-6 pr-6 text-[13px] shadow-none focus-visible:ring-0"
           />
           {query.length > 0 && (
             <button
               type="button"
               onClick={() => setQuery("")}
               aria-label="Clear search"
-              className="absolute right-1 top-1/2 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded text-muted-foreground transition-colors hover:text-foreground"
+              className="absolute right-0 flex h-6 w-6 items-center justify-center rounded text-muted-foreground transition-colors hover:text-foreground"
             >
               <X className="h-3.5 w-3.5" aria-hidden="true" />
             </button>
           )}
         </div>
+        {/* Gear — the settings dialog (the same action as the user-menu row). */}
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-7 w-7 shrink-0 p-0"
+          onClick={onOpenSettings}
+          aria-label="Settings"
+          title="Settings"
+        >
+          <Settings className="h-4 w-4" aria-hidden="true" />
+        </Button>
+        {/* "+" — the tree's existing asset-creation action: add a chapter
+            (the same handler as the 草稿 group's "+", same spinner). */}
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-7 w-7 shrink-0 p-0"
+          onClick={() => void onAddChapter()}
+          disabled={addingChapter}
+          aria-label="Add chapter"
+          title="Add chapter"
+        >
+          {addingChapter ? (
+            <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+          ) : (
+            <Plus className="h-4 w-4" aria-hidden="true" />
+          )}
+        </Button>
+      </div>
 
+      {/* The scroll area — the asset tree (Book) or the run list (Write). */}
+      <nav
+        aria-label={mode === "book" ? "Novel assets" : "Novel runs"}
+        className="nice-scroll min-h-0 flex-1 overflow-y-auto px-2 pb-2"
+      >
+        {mode === "write" ? (
+          <ul className="space-y-0.5">
+            {runsLoading && runs.length === 0 ? (
+              <li className="px-2 py-1.5 text-[13px] text-muted-foreground">
+                Loading runs…
+              </li>
+            ) : runs.length === 0 ? (
+              <li className="px-2 py-1.5 text-[13px] text-muted-foreground">
+                No runs yet for this novel.
+              </li>
+            ) : (
+              visibleRuns.map((run) => (
+                <TreeFile
+                  key={run.id}
+                  label={run.goal}
+                  selected={run.id === currentRunId}
+                  onClick={() => onOpenRun(run.id)}
+                  trailing={
+                    <span className="flex shrink-0 items-center gap-1.5 text-[11px] text-muted-foreground">
+                      <span>{RUN_STATUS_META[run.status]?.label ?? run.status}</span>
+                      <span className="tabular-nums">{relativeTime(run.createdAt)}</span>
+                    </span>
+                  }
+                />
+              ))
+            )}
+          </ul>
+        ) : (
+          <>
         <ul className="space-y-0.5">
           {/* While searching, matching groups render force-expanded with no
               toggle, so the `expanded` map is never mutated by a search. */}
 
           {/* 世界书 — dynamic world groups + 未分组 + character files */}
-          {(!searching || visibleWorld.length > 0 || visibleCharacters.length > 0) && (
+          {(!hideEmptyGroup("world") && (!searching || visibleWorld.length > 0 || visibleCharacters.length > 0)) && (
             <TreeGroup
               icon={<Globe2 className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />}
               label="世界书"
@@ -828,7 +1046,7 @@ export function AssetTree({
                         badges={badges.get(`character:${c.id}`)}
                         trailing={
                           c.role ? (
-                            <span className="max-w-24 shrink-0 truncate text-[10px] text-muted-foreground">
+                            <span className="max-w-24 shrink-0 truncate text-[11px] text-muted-foreground">
                               {c.role}
                             </span>
                           ) : undefined
@@ -854,10 +1072,10 @@ export function AssetTree({
           )}
 
           {/* 大纲 — story skeleton + volume plans + chapter digests */}
-          {(!searching ||
+          {(!hideEmptyGroup("outline") && (!searching ||
             visibleUnsortedBeats.length > 0 ||
             visibleVolumes.length > 0 ||
-            digestMatch) && (
+            digestMatch)) && (
             <TreeGroup
               icon={<ListTree className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />}
               label="大纲"
@@ -926,8 +1144,10 @@ export function AssetTree({
             </TreeGroup>
           )}
 
-          {/* 定稿 — zero-padded final chapter files (hidden while empty) */}
-          {finalChapters.length > 0 &&
+          {/* 定稿 — zero-padded final chapter files (hidden while empty; an
+              empty group lives behind the "Show empty (N)" row) */}
+          {!hideEmptyGroup("canon") &&
+            finalChapters.length > 0 &&
             (!searching || visibleFinals.length > 0) && (
               <TreeGroup
                 icon={<Lock className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />}
@@ -1010,7 +1230,7 @@ export function AssetTree({
                     onOpenArtifactTab("ledger");
                   }}
                   trailing={
-                    <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground">
+                    <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
                       {row.count}
                     </span>
                   }
@@ -1080,6 +1300,32 @@ export function AssetTree({
               />
             )}
           </TreeGroup>
+
+          {/* STEP 65 — the groups whose computed count is 0 collapse behind
+              ONE row at the bottom of Book mode. The counts are the SAME
+              computed values (no new counters). */}
+          {emptyGroupCount > 0 && (
+            <li>
+              <button
+                type="button"
+                onClick={() => setShowEmpty((v) => !v)}
+                aria-expanded={showEmpty}
+                className="flex h-[30px] w-full items-center gap-1.5 rounded-md px-2 text-left text-[13px] text-muted-foreground transition-colors hover:bg-accent/50"
+              >
+                <ChevronRight
+                  className={cn(
+                    "h-3.5 w-3.5 shrink-0 transition-transform",
+                    showEmpty && "rotate-90"
+                  )}
+                  aria-hidden="true"
+                />
+                <span className="min-w-0 flex-1 truncate">Show empty</span>
+                <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
+                  {emptyGroupCount}
+                </span>
+              </button>
+            </li>
+          )}
         </ul>
 
         {searching && !anyMatch && (
@@ -1087,11 +1333,8 @@ export function AssetTree({
             No files match your search.
           </p>
         )}
-
-        <p className="mt-4 flex items-center gap-1.5 px-2 text-[11px] text-muted-foreground">
-          <FolderTree className="h-3 w-3 shrink-0" aria-hidden="true" />
-          Spinning icons show where the team is working right now.
-        </p>
+          </>
+        )}
       </nav>
     </div>
   );
@@ -1129,8 +1372,8 @@ function TreeGroup({
     <li>
       <div
         className={cn(
-          "flex min-h-10 items-center gap-1 rounded-md pr-1 transition-colors",
-          "hover:bg-accent/60"
+          "flex h-[30px] items-center gap-1.5 rounded-md px-2 transition-colors",
+          "hover:bg-accent/50"
         )}
       >
         {expandable ? (
@@ -1139,29 +1382,31 @@ function TreeGroup({
             onClick={onToggle}
             aria-expanded={expanded}
             aria-label={`${label} — expand or collapse`}
-            className="flex h-8 w-7 shrink-0 items-center justify-center rounded text-muted-foreground hover:text-foreground"
+            className="flex h-[30px] w-4 shrink-0 items-center justify-center rounded text-muted-foreground hover:text-foreground"
           >
             <ChevronRight
-              className={cn("h-5 w-5 transition-transform", expanded && "rotate-90")}
+              className={cn("h-3.5 w-3.5 transition-transform", expanded && "rotate-90")}
               aria-hidden="true"
             />
           </button>
         ) : (
-          <span className="h-8 w-7 shrink-0" aria-hidden="true" />
+          <span className="h-[30px] w-4 shrink-0" aria-hidden="true" />
         )}
         <button
           type="button"
           onClick={expandable ? onToggle : undefined}
           aria-expanded={expandable ? expanded : undefined}
-          className="flex min-w-0 flex-1 items-center gap-2 py-1.5 text-left"
+          className="flex h-[30px] min-w-0 flex-1 items-center gap-1.5 text-left"
         >
           {icon}
-          <span className="min-w-0 flex-1 truncate text-sm font-medium">
+          <span className="min-w-0 flex-1 truncate text-[13px] font-medium">
             {label}
-            {typeof count === "number" && (
-              <span className="ml-1.5 text-xs text-muted-foreground">({count})</span>
-            )}
           </span>
+          {typeof count === "number" && (
+            <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
+              {count}
+            </span>
+          )}
           <BadgeIcons badges={badges} />
         </button>
         {action}
@@ -1198,8 +1443,8 @@ function TreeSubGroup({
     <li>
       <div
         className={cn(
-          "flex min-h-10 items-center gap-1 rounded-md pr-1 transition-colors",
-          "hover:bg-accent/60"
+          "flex h-[30px] items-center gap-1.5 rounded-md px-2 transition-colors",
+          "hover:bg-accent/50"
         )}
       >
         {expandable ? (
@@ -1208,7 +1453,7 @@ function TreeSubGroup({
             onClick={onToggle}
             aria-expanded={expanded}
             aria-label={`${label} — expand or collapse`}
-            className="flex h-8 w-6 shrink-0 items-center justify-center rounded text-muted-foreground hover:text-foreground"
+            className="flex h-[30px] w-4 shrink-0 items-center justify-center rounded text-muted-foreground hover:text-foreground"
           >
             <ChevronRight
               className={cn("h-3.5 w-3.5 transition-transform", expanded && "rotate-90")}
@@ -1216,20 +1461,22 @@ function TreeSubGroup({
             />
           </button>
         ) : (
-          <span className="h-8 w-6 shrink-0" aria-hidden="true" />
+          <span className="h-[30px] w-4 shrink-0" aria-hidden="true" />
         )}
         <button
           type="button"
           onClick={expandable ? onToggle : undefined}
           aria-expanded={expandable ? expanded : undefined}
-          className="flex min-w-0 flex-1 items-center gap-2 py-1.5 text-left"
+          className="flex h-[30px] min-w-0 flex-1 items-center gap-1.5 text-left"
         >
-          <span className="min-w-0 flex-1 truncate text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+          <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-muted-foreground">
             {label}
-            {typeof count === "number" && (
-              <span className="ml-1.5">({count})</span>
-            )}
           </span>
+          {typeof count === "number" && (
+            <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
+              {count}
+            </span>
+          )}
           <BadgeIcons badges={badges} />
         </button>
         {action}
@@ -1262,14 +1509,14 @@ function TreeDocRow({
         type="button"
         onClick={onClick}
         className={cn(
-          "flex min-h-10 w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors",
-          "hover:bg-accent/60"
+          "flex h-[30px] w-full items-center gap-1.5 rounded-md px-2 text-left transition-colors",
+          "hover:bg-accent/50"
         )}
       >
         {icon}
-        <span className="min-w-0 flex-1 truncate text-sm">{label}</span>
+        <span className="min-w-0 flex-1 truncate text-[13px]">{label}</span>
         {subtitle && (
-          <span className="shrink-0 text-[10px] text-muted-foreground">{subtitle}</span>
+          <span className="shrink-0 text-[11px] text-muted-foreground">{subtitle}</span>
         )}
       </button>
     </li>
@@ -1310,19 +1557,19 @@ function TreeFile({
         onClick={onClick}
         aria-current={selected ? "true" : undefined}
         className={cn(
-          "flex min-h-10 w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors",
-          selected ? "bg-accent" : "hover:bg-accent/60"
+          "flex h-[30px] w-full items-center gap-1.5 rounded-md px-2 text-left transition-colors",
+          selected ? "bg-accent" : "hover:bg-accent/50"
         )}
       >
         {icon}
         {prefix && (
-          <span className="shrink-0 font-mono text-[10px] text-muted-foreground">
+          <span className="shrink-0 font-mono text-[11px] text-muted-foreground">
             {prefix}
           </span>
         )}
         <span
           className={cn(
-            "min-w-0 flex-1 truncate text-sm",
+            "min-w-0 flex-1 truncate text-[13px]",
             muted && "text-muted-foreground"
           )}
         >
@@ -1365,8 +1612,8 @@ function TreeVolumeNode({
     <li>
       <div
         className={cn(
-          "flex min-h-10 items-center gap-1 rounded-md pr-1 transition-colors",
-          selected ? "bg-accent" : "hover:bg-accent/60"
+          "flex h-[30px] items-center gap-1.5 rounded-md px-2 transition-colors",
+          selected ? "bg-accent" : "hover:bg-accent/50"
         )}
       >
         {expandable ? (
@@ -1375,7 +1622,7 @@ function TreeVolumeNode({
             onClick={onToggle}
             aria-expanded={expanded}
             aria-label={`${volume.title} — expand or collapse beats`}
-            className="flex h-8 w-6 shrink-0 items-center justify-center rounded text-muted-foreground hover:text-foreground"
+            className="flex h-[30px] w-4 shrink-0 items-center justify-center rounded text-muted-foreground hover:text-foreground"
           >
             <ChevronRight
               className={cn("h-3.5 w-3.5 transition-transform", expanded && "rotate-90")}
@@ -1383,22 +1630,24 @@ function TreeVolumeNode({
             />
           </button>
         ) : (
-          <span className="h-8 w-6 shrink-0" aria-hidden="true" />
+          <span className="h-[30px] w-4 shrink-0" aria-hidden="true" />
         )}
         <button
           type="button"
           onClick={onOpen}
           aria-current={selected ? "true" : undefined}
-          className="flex min-w-0 flex-1 items-center gap-2 py-1.5 text-left"
+          className="flex h-[30px] min-w-0 flex-1 items-center gap-1.5 text-left"
         >
           {icon}
-          <span className="shrink-0 font-mono text-[10px] text-muted-foreground">
+          <span className="shrink-0 font-mono text-[11px] text-muted-foreground">
             V{String(volume.index).padStart(2, "0")}
           </span>
-          <span className="min-w-0 flex-1 truncate text-xs font-medium">
+          <span className="min-w-0 flex-1 truncate text-[13px] font-medium">
             {volume.title}
           </span>
-          <span className="shrink-0 text-[10px] text-muted-foreground">({count})</span>
+          <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
+            {count}
+          </span>
         </button>
       </div>
       {expanded && children != null && <ul className="ml-3 border-l pl-2">{children}</ul>}
@@ -1442,8 +1691,8 @@ function TreeChapterNode({
     <li>
       <div
         className={cn(
-          "flex min-h-10 items-center gap-1 rounded-md pr-1 transition-colors",
-          selected ? "bg-accent" : "hover:bg-accent/60"
+          "flex h-[30px] items-center gap-1.5 rounded-md px-2 transition-colors",
+          selected ? "bg-accent" : "hover:bg-accent/50"
         )}
       >
         {expandable ? (
@@ -1452,7 +1701,7 @@ function TreeChapterNode({
             onClick={onToggle}
             aria-expanded={expanded}
             aria-label={`${label} — expand or collapse draft versions`}
-            className="flex h-8 w-6 shrink-0 items-center justify-center rounded text-muted-foreground hover:text-foreground"
+            className="flex h-[30px] w-4 shrink-0 items-center justify-center rounded text-muted-foreground hover:text-foreground"
           >
             <ChevronRight
               className={cn("h-3.5 w-3.5 transition-transform", expanded && "rotate-90")}
@@ -1460,19 +1709,21 @@ function TreeChapterNode({
             />
           </button>
         ) : (
-          <span className="h-8 w-6 shrink-0" aria-hidden="true" />
+          <span className="h-[30px] w-4 shrink-0" aria-hidden="true" />
         )}
         <button
           type="button"
           onClick={onOpen}
           aria-current={selected ? "true" : undefined}
-          className="flex min-w-0 flex-1 items-center gap-2 py-1.5 text-left"
+          className="flex h-[30px] min-w-0 flex-1 items-center gap-1.5 text-left"
         >
-          <span className="shrink-0 font-mono text-[10px] text-muted-foreground">
+          <span className="shrink-0 font-mono text-[11px] text-muted-foreground">
             {String(index).padStart(2, "0")}
           </span>
-          <span className="min-w-0 flex-1 truncate text-sm">{label}</span>
-          <span className="shrink-0 text-[10px] text-muted-foreground">({count})</span>
+          <span className="min-w-0 flex-1 truncate text-[13px]">{label}</span>
+          <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
+            {count}
+          </span>
           {trailing}
           <BadgeIcons badges={badges} />
         </button>
@@ -1490,7 +1741,7 @@ function TreeChapterNode({
 function TreeEmptyRow() {
   return (
     <li
-      className="px-2 py-1.5 text-xs text-muted-foreground"
+      className="px-2 py-1.5 text-[13px] text-muted-foreground"
       aria-label="empty"
     >
       empty

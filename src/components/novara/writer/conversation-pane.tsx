@@ -45,7 +45,7 @@ import {
 import { useToast } from "@/hooks/use-toast";
 import type { UseAgentRunResult } from "@/hooks/use-agent-run";
 import { useWriterStore } from "@/hooks/use-writer-store";
-import { authFetch } from "@/lib/firebase/client";
+import { listNovelRuns } from "@/lib/novara/api";
 import { AGENT_BACKEND } from "@/lib/novara/agent-client";
 import {
   type AgentEvent,
@@ -475,12 +475,11 @@ export function ConversationPane({
   const displayedRunId = detail?.run.id ?? null;
   useEffect(() => {
     let alive = true;
-    // authFetch attaches the Firebase ID token — a raw fetch here would be
-    // rejected by the middleware with 401 and the history would stay empty.
-    authFetch(`/api/agent/runs?novelId=${encodeURIComponent(novel.id)}`, {
-      cache: "no-store",
-    })
-      .then((res) => res.json())
+    // listNovelRuns attaches the Firebase ID token — a raw fetch here would
+    // be rejected by the middleware with 401 and the history would stay empty.
+    // STEP 65: the shared api.ts function is the single source for this list
+    // (the rail's Write mode reads the same endpoint through it).
+    listNovelRuns(novel.id)
       .then((body: { runs?: AgentRun[] }) => {
         if (alive && Array.isArray(body.runs)) setHistory(body.runs);
       })

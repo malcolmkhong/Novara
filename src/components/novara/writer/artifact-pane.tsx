@@ -467,7 +467,10 @@ export function ArtifactPane({
           </TabsContent>
 
           <TabsContent value="ledger" className="mt-0">
-            <LedgerPanel novelId={novelId} />
+            {/* STEP 65 — onRefresh is the shell's refresh(): the ledger panel
+                calls it after a successful write so the RAIL's 账本 counts
+                (computed from the NovelDetail snapshot) stop going stale. */}
+            <LedgerPanel novelId={novelId} onRefresh={handlers.onRefresh} />
           </TabsContent>
 
           <TabsContent value="review" className="mt-0">

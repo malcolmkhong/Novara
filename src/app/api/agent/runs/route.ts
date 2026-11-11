@@ -2,6 +2,7 @@
 // Novara AI — Agent run collection endpoints (Phase 3, contract §4.1).
 //
 // GET  /api/agent/runs?novelId=…            → recent runs (summaries)
+// GET  /api/agent/runs?novelId=…&limit=…    → same list, page size 1..50 (default 20)
 // GET  /api/agent/runs?novelId=…&active=1   → active run DETAIL or null
 // GET  /api/agent/runs?novelId=…&latest=1   → latest run DETAIL (any status)
 // POST /api/agent/runs {novelId, goal, mode} → create + kick the executor
@@ -44,7 +45,20 @@ export async function GET(req: Request) {
     return Response.json({ detail });
   }
 
-  const runs = await listRuns(novelId);
+  // STEP 65 — optional page size for the rail's Write list. The ONLY change
+  // to this route: `limit` is clamped to 1..50 and defaults to 20 (the
+  // runtime's own default). The query itself is untouched — the ownership
+  // filter is applied by the db.ts $allOperations extension (rule 2:
+  // AgentRun.novelId in the caller's owned novel ids), so nothing here may
+  // add, remove or reorder a where clause.
+  const rawLimit = url.searchParams.get("limit");
+  const parsedLimit =
+    rawLimit === null ? 20 : Number.parseInt(rawLimit, 10);
+  const limit = Number.isFinite(parsedLimit)
+    ? Math.min(50, Math.max(1, parsedLimit))
+    : 20;
+
+  const runs = await listRuns(novelId, limit);
   return Response.json({ runs });
 }
 

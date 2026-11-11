@@ -25,7 +25,7 @@ import type {
   WorldEntryDTO,
   WorldGroupDTO,
 } from "./types";
-import type { ChapterReview, NovelMemoryView } from "./agent-types";
+import type { AgentRun, ChapterReview, NovelMemoryView } from "./agent-types";
 
 import { authFetch, parseCreditError } from "@/lib/firebase/client";
 
@@ -635,4 +635,32 @@ export interface QcEvalReport {
 
 export function runQcEvals(): Promise<QcEvalReport> {
   return request("/api/agent/qc/evals");
+}
+
+// ---------------------------------------------------------------------------
+// Agent runs (STEP 65) — this novel's runs, newest first.
+//
+// ONE shared client function for the run list: the rail's Write mode AND the
+// conversation pane's history switcher both read it, so there is a single
+// source. The server clamps `limit` to 1..50 and defaults to 20.
+//
+// The endpoint is already multi-user protected server-side: the db.ts
+// $allOperations extension filters AgentRun by `novelId in the caller's owned
+// novel ids` (rule 2). Nothing here may pass a novelId around the filter —
+// the novelId IS the filter key.
+// ---------------------------------------------------------------------------
+
+export const RUNS_PAGE_DEFAULT = 20;
+export const RUNS_PAGE_MAX = 50;
+
+export function listNovelRuns(
+  novelId: string,
+  limit: number = RUNS_PAGE_DEFAULT
+): Promise<{ runs: AgentRun[] }> {
+  return request(
+    `/api/agent/runs?novelId=${encodeURIComponent(novelId)}&limit=${limit}`,
+    // The run list must never be served from the browser cache — it is live
+    // state that changes while the author works.
+    { cache: "no-store" }
+  );
 }

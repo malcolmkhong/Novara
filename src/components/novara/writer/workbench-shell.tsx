@@ -82,7 +82,7 @@ import type { ArtifactTabId } from "@/config/writer";
 import { cn } from "@/lib/utils";
 import { ArtifactPane } from "./artifact-pane";
 import { AssetTree } from "./asset-tree";
-import { UserMenu } from "@/components/novara/user-menu";
+import { UserMenu, type UserMenuHandle } from "@/components/novara/user-menu";
 import { ConversationPane } from "./conversation-pane";
 import { ExportDialog } from "./import-export";
 import { buildPinOptions } from "./prompt-box";
@@ -147,6 +147,11 @@ export function WorkbenchShell({
 
   const [mobileView, setMobileView] = useState<MobileView>("chat");
   const [previewOpen, setPreviewOpen] = useState(false);
+
+  // STEP 65 — the rail's gear button opens the SAME settings dialog the
+  // user-menu row opens, through the user menu's imperative handle. One
+  // dialog instance, one action.
+  const userMenuRef = useRef<UserMenuHandle | null>(null);
 
   const [exportOpen, setExportOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
@@ -494,7 +499,7 @@ export function WorkbenchShell({
       <aside
         aria-label="Asset tree"
         className={cn(
-          "min-h-0 shrink-0 flex-col border-r bg-card/40 lg:flex lg:w-[300px]",
+          "min-h-0 shrink-0 flex-col border-r bg-card/40 lg:flex lg:w-[256px]",
           mobileView === "assets" ? "flex w-full" : "hidden"
         )}
       >
@@ -521,11 +526,17 @@ export function WorkbenchShell({
           onExport={() => setExportOpen(true)}
           onDelete={() => setDeleteOpen(true)}
           addingChapter={addingChapter}
+          // STEP 65 — the rail's Write mode loads a run through the SAME
+          // viewRun path the centre column's history switcher uses.
+          onOpenRun={(runId) => void run.viewRun(runId)}
+          currentRunId={runId}
+          runStatus={runStatus ?? null}
+          onOpenSettings={() => userMenuRef.current?.openSettings("account")}
         />
         {/* Step 62 — the user menu is pinned to the BOTTOM of the rail
             (a sticky footer above the mobile switcher). */}
         <div className="mt-auto shrink-0 border-t p-2">
-          <UserMenu />
+          <UserMenu ref={userMenuRef} />
         </div>
       </aside>
 

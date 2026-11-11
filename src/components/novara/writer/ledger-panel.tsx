@@ -144,7 +144,18 @@ const LEDGER_TABS: { value: LedgerTab; label: string }[] = [
 // LedgerPanel
 // ---------------------------------------------------------------------------
 
-export function LedgerPanel({ novelId }: { novelId: string }) {
+export function LedgerPanel({
+  novelId,
+  onRefresh,
+}: {
+  novelId: string;
+  /**
+   * STEP 65 — the shell's refresh(). Called after a successful write so the
+   * rail's 账本 sub-counts (computed from the NovelDetail snapshot) pick the
+   * new rows up instead of staying stale until an unrelated refresh.
+   */
+  onRefresh?: () => Promise<void>;
+}) {
   const [ledger, setLedger] = useState<Awaited<ReturnType<typeof getLedger>> | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -216,6 +227,9 @@ export function LedgerPanel({ novelId }: { novelId: string }) {
       try {
         await fn();
         await load();
+        // STEP 65 — the rail's 账本 counts come from the NovelDetail
+        // snapshot; without this the count stayed stale after a write.
+        await onRefresh?.();
         return true;
       } catch (e) {
         const msg = e instanceof Error ? e.message : "Unknown error";
@@ -230,7 +244,7 @@ export function LedgerPanel({ novelId }: { novelId: string }) {
         setBusy(false);
       }
     },
-    [load, toast]
+    [load, onRefresh, toast]
   );
 
   /**
