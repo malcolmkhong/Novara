@@ -102,10 +102,51 @@ export async function authFetch(input: RequestInfo | URL, init?: RequestInit): P
   } catch {
     fresh = null;
   }
-  if (!fresh) throw new AuthError("Session expired");
+  if (!fresh) {
+    notifyAuthFailure();
+    throw new AuthError("Session expired");
+  }
   const retryHeaders = new Headers(init?.headers);
   retryHeaders.set("Authorization", `Bearer ${fresh}`);
-  return fetch(input, { ...init, headers: retryHeaders });
+  const retried = await fetch(input, { ...init, headers: retryHeaders });
+  // The server still says 401 after a fresh token: this is not a transient
+  // expiry, so say so out loud instead of letting the panel go quietly empty.
+  if (retried.status === 401) notifyAuthFailure();
+  return retried;
+}
+
+// ---------------------------------------------------------------------------
+// Auth-failure notification
+// ---------------------------------------------------------------------------
+
+type AuthFailureListener = () => void;
+const authFailureListeners = new Set<AuthFailureListener>();
+
+/**
+ * Subscribe to "the server rejected our credentials".
+ *
+ * `authFetch` RETURNS a 401 response when the token could not be refreshed
+ * (it does not throw), so any caller that swallows failures — most of the
+ * best-effort panels do — sees nothing at all: the panel just empties. That
+ * is precisely how the two client-side auth bugs stayed invisible for so
+ * long. This is the ONE place that turns that silence into a visible signal,
+ * for every call site, present and future.
+ */
+export function onAuthFailure(listener: AuthFailureListener): () => void {
+  authFailureListeners.add(listener);
+  return () => {
+    authFailureListeners.delete(listener);
+  };
+}
+
+function notifyAuthFailure(): void {
+  for (const listener of authFailureListeners) {
+    try {
+      listener();
+    } catch {
+      // a broken listener must never break the request it was watching
+    }
+  }
 }
 
 export type { User, UserCredential };

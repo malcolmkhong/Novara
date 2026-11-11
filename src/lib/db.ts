@@ -15,7 +15,7 @@ import { Prisma, PrismaClient } from "@prisma/client";
 import { headers } from "next/headers";
 import { AsyncLocalStorage } from "node:async_hooks";
 
-type Store = { uid: string; isAdmin: boolean };
+type Store = { uid: string; isAdmin: boolean; identity: Identity };
 type Identity = { uid: string; isAdmin: boolean; novelIds: string[] | null };
 
 const globalForPrisma = globalThis as unknown as { prisma: PrismaClient | undefined };
@@ -145,13 +145,21 @@ const storage = new AsyncLocalStorage<Store>();
  * alive for the whole chain — a synchronous callback that merely returns a
  * promise restores the previous (empty) store before the query runs, and the
  * query then goes out UNFILTERED.
+ *
+ * The identity is resolved EAGERLY, before the callback runs. Two reasons:
+ * resolving it lazily would fire a query from inside an open transaction (a
+ * second connection while a transaction is open can exhaust the pool and
+ * time the transaction out — measured as Prisma P2028, "Transaction already
+ * closed"), and the owned novel list must not change mid-scope.
  */
 export async function withUser<T>(
   uid: string,
   isAdmin: boolean,
   fn: () => T | Promise<T>,
 ): Promise<T> {
-  return storage.run({ uid, isAdmin }, async () => await fn());
+  const identity = await identityFrom(uid, isAdmin);
+  const store: Store = { uid, isAdmin, identity };
+  return storage.run(store, async () => await fn());
 }
 
 async function identityFrom(uid: string, isAdmin: boolean): Promise<Identity> {
@@ -164,7 +172,7 @@ async function identityFrom(uid: string, isAdmin: boolean): Promise<Identity> {
 async function readIdentity(): Promise<Identity> {
   // 1. Explicit background-job identity (AsyncLocalStorage).
   const store = storage.getStore();
-  if (store) return identityFrom(store.uid, store.isAdmin);
+  if (store) return store.identity;
 
   // 2. Real request: read the headers injected by middleware.
   let h: { get(name: string): string | null } | null = null;
@@ -235,56 +243,96 @@ const READ_AND_WRITE = new Set([
 ]);
 
 // ---------------------------------------------------------------------------
+// Ownership application — ONE rule, every query path
+// ---------------------------------------------------------------------------
+
+/**
+ * Apply the ownership rule to a single operation.
+ *
+ * This is the single implementation of the rule, used by the query extension
+ * below. Prisma applies a client's query extensions to the interactive
+ * transaction client as well, so the same code path covers
+ * `db.$transaction(async (tx) => …)`.
+ */
+async function applyOwnership(
+  model: string,
+  operation: string,
+  args: AnyArgs,
+  run: (a: AnyArgs) => unknown,
+): Promise<unknown> {
+  const ident = await readIdentity();
+
+  // Admins and dev/script (no request scope) pass through untouched.
+  if (ident.isAdmin || ident.novelIds === null) return run(args);
+
+  const { uid, novelIds: ids } = ident;
+  const isCreate = operation === "create" || operation === "createMany";
+  const isUpsert = operation === "upsert";
+
+  // Fail closed: never create a row without an identity in production.
+  if ((isCreate || isUpsert) && !uid) {
+    throw new Error("unauthenticated: create requires a request identity");
+  }
+
+  // (A) Stamp the owner on models that carry a `userId` scalar.
+  //     Creates take no `where`, so they are stamped and returned as-is.
+  let next = args;
+  if ((isCreate || isUpsert) && USER_ID_MODELS.has(model)) {
+    next = stampUserId(args, uid);
+  }
+
+  if (isCreate) {
+    // Children: the novelId relation is set by the caller. See
+    // ORPHAN_CREATE_MODELS — these are reported, not silently trusted.
+    return run(next);
+  }
+
+  if (!READ_AND_WRITE.has(operation)) return run(next);
+
+  // (B) Ownership filter, by the rule order documented above.
+  const own = ownershipFor(model, uid, ids ?? []);
+  if (own.kind === "unknown") {
+    // Rule 5 — fail closed. A model with no ownership rule must never be
+    // queried unfiltered; that is exactly how the two STEP 47 leaks
+    // happened (a model with no owner column fell through to pass-through).
+    throw new Error(
+      `ownership: model "${model}" has no ownership rule — refusing to run unfiltered. ` +
+        `Give it a userId/novelId column, an entry in INDIRECT_PATHS, or list it in UNFILTERED_MODELS.`,
+    );
+  }
+  if (own.kind === "unfiltered") return run(next); // UNFILTERED_MODELS — reported explicitly
+  return run(mergeWhere(next, own.filter));
+}
+
+// ---------------------------------------------------------------------------
 // Extended client
 // ---------------------------------------------------------------------------
 
+/**
+ * The ownership-scoped client.
+ *
+ * ONE rule, applied to every query:
+ *   · direct `db.*` calls            — via the query extension below
+ *   · `db.$transaction([...])`       — the array form builds its promises on
+ *                                      this extended client, so they are filtered
+ *   · `db.$transaction(async tx =>…)` — Prisma DOES carry a client's query
+ *                                      extensions into the interactive
+ *                                      transaction client. Verified on this
+ *                                      project, not assumed: with an identity
+ *                                      in scope, `tx.novel.findMany()` returns
+ *                                      only the caller's novels, exactly like
+ *                                      `db.novel.findMany()`. scripts/
+ *                                      prove-ownership-isolation.ts asserts
+ *                                      all three shapes on every run.
+ *
+ * (An earlier revision of this file wrapped the transaction client in a
+ * Proxy to force the filter. That was unnecessary — Prisma already inherits
+ * the extension — and it also applied the filter twice.)
+ */
 export const db = base.$extends({
   query: {
     async $allOperations({ model, operation, args, query }) {
-      const ident = await readIdentity();
-
-      // Admins and dev/script (no request scope) pass through untouched.
-      if (ident.isAdmin || ident.novelIds === null) return query(args);
-
-      const { uid, novelIds: ids } = ident;
-      const a = args as AnyArgs;
-      const name = model ?? "";
-      const isCreate = operation === "create" || operation === "createMany";
-      const isUpsert = operation === "upsert";
-
-      // Fail closed: never create a row without an identity in production.
-      if ((isCreate || isUpsert) && !uid) {
-        throw new Error("unauthenticated: create requires a request identity");
-      }
-
-      // (A) Stamp the owner on models that carry a `userId` scalar.
-      //     Creates take no `where`, so they are stamped and returned as-is.
-      let next = a;
-      if ((isCreate || isUpsert) && USER_ID_MODELS.has(name)) {
-        next = stampUserId(a, uid);
-      }
-
-      if (isCreate) {
-        // Children: the novelId relation is set by the caller. See
-        // ORPHAN_CREATE_MODELS — these are reported, not silently trusted.
-        return query(next);
-      }
-
-      if (!READ_AND_WRITE.has(operation)) return query(next);
-
-      // (B) Ownership filter, by the rule order documented above.
-      const own = ownershipFor(name, uid, ids ?? []);
-      if (own.kind === "unknown") {
-        // Rule 5 — fail closed. A model with no ownership rule must never be
-        // queried unfiltered; that is exactly how the two STEP 47 leaks
-        // happened (a model with no owner column fell through to pass-through).
-        throw new Error(
-          `ownership: model "${name}" has no ownership rule — refusing to run unfiltered. ` +
-            `Give it a userId/novelId column, an entry in INDIRECT_PATHS, or list it in UNFILTERED_MODELS.`,
-        );
-      }
-      if (own.kind === "unfiltered") return query(next); // UNFILTERED_MODELS — reported explicitly
-      return query(mergeWhere(next, own.filter));
+      return applyOwnership(model ?? "", operation, (args ?? {}) as AnyArgs, (a) => query(a));
     },
   },
 });

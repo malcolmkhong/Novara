@@ -139,6 +139,7 @@ export const liveAgentGateway: AgentGateway = {
   subscribe(runId, cb) {
     let closed = false;
     let pollTimer: ReturnType<typeof setInterval> | null = null;
+    let streamAbort: AbortController | null = null;
 
     const startPolling = () => {
       if (pollTimer || closed) return;
@@ -152,32 +153,64 @@ export const liveAgentGateway: AgentGateway = {
       }, FALLBACK_POLL_MS);
     };
 
-    try {
-      const source = new EventSource(`/api/agent/runs/${runId}/events`);
-      source.onmessage = (event) => {
-        try {
-          cb(JSON.parse(event.data) as AgentRunDetail);
-        } catch {
-          // ignore malformed frames; the next snapshot resyncs
+    // SSE over fetch() instead of EventSource: EventSource cannot send an
+    // Authorization header, so the stream was rejected with 401 and the
+    // client silently degraded to 2s polling. The wire format is the same
+    // text/event-stream the route already writes ("data: {json}\n\n" frames,
+    // ": hb <ts>\n\n" heartbeats), so the server is unchanged.
+    const startStream = async () => {
+      const controller = new AbortController();
+      streamAbort = controller;
+      try {
+        const res = await authFetch(`/api/agent/runs/${runId}/events`, {
+          cache: "no-store",
+          signal: controller.signal,
+          headers: { Accept: "text/event-stream" },
+        });
+        if (!res.ok || !res.body) {
+          startPolling();
+          return;
         }
-      };
-      source.onerror = () => {
-        source.close();
-        startPolling(); // 降级轮询
-      };
-      return () => {
-        closed = true;
-        source.close();
-        if (pollTimer) clearInterval(pollTimer);
-      };
-    } catch {
-      // EventSource unavailable — poll from the start.
-      startPolling();
-      return () => {
-        closed = true;
-        if (pollTimer) clearInterval(pollTimer);
-      };
-    }
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done || closed) break;
+          buffer += decoder.decode(value, { stream: true });
+          let split = buffer.indexOf("\n\n");
+          while (split !== -1) {
+            const frame = buffer.slice(0, split);
+            buffer = buffer.slice(split + 2);
+            // Only "data:" frames carry a payload; ": hb …" is a heartbeat.
+            if (frame.startsWith("data:")) {
+              const payload = frame.slice(5).trim();
+              if (payload) {
+                try {
+                  cb(JSON.parse(payload) as AgentRunDetail);
+                } catch {
+                  // ignore malformed frames; the next snapshot resyncs
+                }
+              }
+            }
+            split = buffer.indexOf("\n\n");
+          }
+        }
+        // The server closes the stream on a terminal status; fall back to
+        // polling exactly like the old EventSource error path did.
+        if (!closed) startPolling();
+      } catch {
+        if (!closed) startPolling();
+      }
+    };
+
+    void startStream();
+
+    return () => {
+      closed = true;
+      streamAbort?.abort();
+      if (pollTimer) clearInterval(pollTimer);
+    };
   },
 
   async approve(runId, taskId) {

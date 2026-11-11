@@ -10,8 +10,10 @@ import { PlansPage } from "./marketing/plans";
 import { AboutPage } from "./marketing/about";
 import { LegalPage } from "./marketing/legal";
 import { WriterApp } from "./writer/writer-app";
+import { useToast } from "@/hooks/use-toast";
 import {
   getFirebaseAuth,
+  onAuthFailure,
   signInWithGoogle,
   type User,
 } from "@/lib/firebase/client";
@@ -23,6 +25,7 @@ export function NovaraApp() {
   const { route, navigate } = useHashRoute();
   const [authState, setAuthState] = useState<AuthState>("loading");
   const [signingIn, setSigningIn] = useState(false);
+  const { toast } = useToast();
 
   useEffect(() => {
     const unsub = onAuthStateChanged(getFirebaseAuth(), (u) => {
@@ -30,6 +33,20 @@ export function NovaraApp() {
     });
     return () => unsub();
   }, []);
+
+  // One visible signal when the server rejects our credentials. Without it a
+  // failed request just empties the panel that made it, and the user is left
+  // staring at an empty box with no idea why.
+  useEffect(
+    () =>
+      onAuthFailure(() => {
+        toast({
+          title: "Session expired",
+          description: "Sign in again to continue.",
+        });
+      }),
+    [toast],
+  );
 
   const enterWriter = useCallback(async () => {
     if (authState !== "signed-in") {
