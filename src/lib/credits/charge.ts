@@ -59,14 +59,14 @@ export const CREDITS_USD_PER_CREDIT = 0.001;
  * _DRAFT, _REVIEW, _SEDIMENT, _AGENT_TURN, _TEAM_TURN.
  */
 const SURFACE_RESERVES: Record<string, number> = {
-  generate: 5,
-  detect: 5,
+  generate: 2,
+  detect: 2,
+  draft: 15,
   wizard: 40,
-  draft: 25,
-  review: 30,
-  sediment: 25,
-  "agent-turn": 100,
-  "team-turn": 100,
+  review: 20,
+  sediment: 20,
+  "agent-turn": 300,
+  "team-turn": 300,
 };
 
 /** The hold for a surface. Unknown surfaces get the LARGEST hold — never a
@@ -167,6 +167,11 @@ export interface ChargeHold {
  *
  * Order: admin (unlimited, never blocked) → global kill switch → lazy
  * daily grant → the reservation itself (ONE conditional write).
+ *
+ * D13 — NEVER REFUSE A FUNDED USER. The hold is capped by what the user
+ * actually has: `hold = min(reserve, balance)`. A user with ONE credit and
+ * a 2-credit reserve is served with a 1-credit hold, and the settlement
+ * settles against the real cost. Only a ZERO balance is refused (402).
  */
 export async function beginCharge(
   uid: string,
@@ -183,27 +188,43 @@ export async function beginCharge(
     return { ok: false, hold: 0, reason: "kill-switch" };
   }
 
-  const hold = reserveCredits(surface);
-  if (hold <= 0) {
-    return { ok: true, hold: 0 };
-  }
+  const reserve = reserveCredits(surface);
 
   // Lazy reset: the allowance is granted on the first credit operation of
   // the day — there is no cron.
   await ensureDailyGrant(uid);
+
+  const account = await accountState(uid);
+  const balance = account?.balance ?? 0;
+
+  // Only an EMPTY balance is refused. A funded user is always served.
+  if (balance <= 0) {
+    return {
+      ok: false,
+      hold: 0,
+      reason: "insufficient",
+      need: reserve,
+      balance: 0,
+      resetAt: nextResetAt(),
+    };
+  }
+
+  const hold = Math.min(reserve, balance);
+  if (hold <= 0) return { ok: true, hold: 0, balance };
 
   const reserved = await holdCredits(uid, hold, {
     ...meta,
     note: meta.note ?? `hold for ${surface}`,
   });
   if (!reserved.ok) {
-    const account = await accountState(uid);
+    // Lost a race with a concurrent charge — the balance moved under us.
+    const acc = await accountState(uid);
     return {
       ok: false,
       hold: 0,
       reason: "insufficient",
-      need: hold,
-      balance: account?.balance ?? null,
+      need: reserve,
+      balance: acc?.balance ?? null,
       resetAt: nextResetAt(),
     };
   }

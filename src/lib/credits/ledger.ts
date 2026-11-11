@@ -50,19 +50,35 @@ type CreditTx = Omit<
  * Run a credit transaction with the identity ALREADY resolved.
  *
  * The warm-up is not an optimisation. DATABASE_URL carries
- * `connection_limit=1` (the Neon pooler) and an interactive transaction HOLDS
- * that one connection, while the ownership extension's identity lookup uses
- * the base client — so a cold identity inside a transaction deadlocks until
- * the transaction times out ("Unable to start a transaction in the given
- * time"). Resolving the identity first fills the per-request cache.
+ * `connection_limit=3` (the Neon pooler) and an interactive transaction takes
+ * a connection out of the pool, while the ownership extension's identity
+ * lookup uses the base client — so a cold identity inside a transaction can
+ * wait on the pool. Resolving the identity first fills the per-request cache.
+ *
+ * The retry: two transactions can race to create the SAME account row (the
+ * loser gets P2002) or hit a write conflict (P2034). Both roll the whole
+ * transaction back and both are safe to retry — the operation is idempotent:
+ * the grant only happens when the conditional update actually changes a row,
+ * so the retry's "loser" sees today's date and grants nothing.
  *
  * maxWait/timeout are raised because several credit transactions queue
- * behind the single pooled connection (ten parallel calls take a couple of
+ * behind the pooled connections (ten parallel calls take a couple of
  * transactions each).
  */
 async function creditTransaction<T>(fn: (tx: CreditTx) => Promise<T>): Promise<T> {
   await warmIdentity();
-  return await db.$transaction(fn, { maxWait: 20_000, timeout: 20_000 });
+  let lastError: unknown = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      return await db.$transaction(fn, { maxWait: 20_000, timeout: 20_000 });
+    } catch (error) {
+      lastError = error;
+      const code = (error as { code?: string } | null)?.code;
+      if (code !== "P2002" && code !== "P2034") throw error;
+      await new Promise((resolve) => setTimeout(resolve, 25 * (attempt + 1)));
+    }
+  }
+  throw lastError;
 }
 
 /** The configured daily free allowance, in credits. Read lazily (testable). */
@@ -307,18 +323,22 @@ export async function refund(
 }
 
 /**
- * The world's spend today (credits), across ALL users.
+ * The world's NET spend today (credits), across ALL users.
  *
- * D10 (Step 55): admin usage does NOT count. `admin_usage` rows are
- * excluded, so an admin's own spending can never trip the kill switch for
- * everybody else. Admins are unlimited by product decision, and the cap is a
- * guard for the shared world spend.
+ * D11: NET, not "sum of the negative deltas". The spend rows (-hold, -spend)
+ * and the refund rows (+adjustment) are summed WITH their sign, so a call
+ * that was fully refunded returns the total to its pre-call value. Before
+ * D11 a refunded call still counted its hold against the world cap.
+ *
+ * Also excluded (D10 + the grant rule):
+ *   · `admin_usage` — an admin's spend is not the world's spend; it must
+ *     never trip the kill switch for everybody else,
+ *   · `daily_grant` — a grant is not spend.
  *
  * This is the ONE unscoped read in this module, and it is deliberate: the
- * metric is global by definition ("sum of negative deltas for today across
- * all users"). The ownership-scoped client CANNOT express it — it would
- * return the CALLER's spend, and the kill switch would silently become a
- * per-user cap instead of the global one the PM specified.
+ * metric is global by definition. The ownership-scoped client CANNOT express
+ * it — it would return the CALLER's spend, and the kill switch would
+ * silently become a per-user cap instead of the global one the PM specified.
  *
  * It reads an aggregate number only: no user id, no note, no row content.
  */
@@ -328,8 +348,8 @@ export async function globalSpendToday(): Promise<number> {
   const agg = await dbRaw.creditLedger.aggregate({
     where: {
       createdAt: { gte: start },
-      delta: { lt: 0 },
-      kind: { not: "admin_usage" },
+      // NET of the spend and refund rows of ordinary users.
+      kind: { in: ["spend", "adjustment"] },
     },
     _sum: { delta: true },
   });

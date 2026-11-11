@@ -2,7 +2,8 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import ZAI from "@/lib/ai/router";
 import { classifyAiFailure, extractRealUsage } from "@/lib/usage/usage-shapes";
-import { recordUsageCall } from "@/lib/usage/usage-store";
+import { recordUsageCall, GATEWAY_DEFAULT_MODEL_ID } from "@/lib/usage/usage-store";
+import { beginCharge, callerUid, creditsFromUsage, settleCharge } from "@/lib/credits/charge";
 import {
   capOutputTokens,
   clamp,
@@ -110,10 +111,24 @@ function extractCompletionContent(completion: unknown): string | null {
 }
 
 /**
+ * What the calls of this request actually cost (Step 55/56 — the spend gate).
+ * Every provider call that MEASURED tokens is charged; a failed call
+ * measures nothing and costs nothing.
+ */
+export interface MeasuredSpend {
+  credits: number;
+  calls: number;
+  note: string | null;
+}
+
+/**
  * One AI request. Returns the reply text, or null on ANY failure
  * (transport error, empty content, unexpected shape). Never throws.
  */
-async function requestText(messages: AiMessage[]): Promise<string | null> {
+async function requestText(
+  messages: AiMessage[],
+  measured: MeasuredSpend,
+): Promise<string | null> {
   // Policy F (P5-b): ZAI.create() failing below is a PRE-SEND failure — no
   // row (F3). A sent attempt that produces no completion payload records one
   // zero-token failed row (F1); a completion without usage records nothing (F4).
@@ -126,7 +141,20 @@ async function requestText(messages: AiMessage[]): Promise<string | null> {
       thinking: { type: "disabled" },
     });
     // Persist the per-call row (standalone detector — global-only).
-    recordUsageCall({ surface: "detect", usage: extractRealUsage(completion) });
+    const usage = extractRealUsage(completion);
+    recordUsageCall({ surface: "detect", usage });
+    if (usage) {
+      // The measured cost of THIS call. The request carried no model field,
+      // so the price comes from the default model's row (priced-by-fallback).
+      const charged = creditsFromUsage(
+        GATEWAY_DEFAULT_MODEL_ID,
+        usage.promptTokens,
+        usage.completionTokens,
+      );
+      measured.credits += charged.credits;
+      measured.calls += 1;
+      measured.note = charged.note ?? measured.note;
+    }
     return extractCompletionContent(completion);
   } catch (error) {
     if (sent) {
@@ -246,10 +274,49 @@ export async function POST(req: Request) {
       ? capOutputTokens(source)
       : undefined;
 
+  // ---- SPEND GATE (Step 55/56) ------------------------------------------
+  // The credits are reserved BEFORE the provider is called, so an
+  // unaffordable request never reaches the model and never costs money.
+  const uid = callerUid(req);
+  if (!uid) {
+    return NextResponse.json({ error: "unauthenticated" }, { status: 401 });
+  }
+  const charge = await beginCharge(uid, "detect", {
+    refId: "detect/hallucination",
+    note: "detect/hallucination",
+  });
+  if (!charge.ok) {
+    if (charge.reason === "kill-switch") {
+      return NextResponse.json({ error: "globally_paused" }, { status: 429 });
+    }
+    return NextResponse.json(
+      {
+        error: "insufficient_credits",
+        need: charge.need ?? 0,
+        balance: charge.balance ?? 0,
+        resetAt: charge.resetAt ?? null,
+      },
+      { status: 402 },
+    );
+  }
+  const measured: MeasuredSpend = { credits: 0, calls: 0, note: null };
+  const settle = async () => {
+    try {
+      await settleCharge(uid, charge.hold, measured.credits, {
+        refId: "detect/hallucination",
+        note: measured.note ?? "no measured call — the hold stands",
+      });
+    } catch (settleError) {
+      console.error("[detect/hallucination] settle failed:", settleError);
+    }
+  };
+  // ----------------------------------------------------------------------
+
   try {
     let raw = await withTimeout(
       requestText(
         buildMessages(mode, teamText, sourceExcerpt, parsedBody.data.question, false),
+        measured,
       ),
       AI_TIMEOUT_MS,
       "[detect/hallucination] first AI attempt",
@@ -261,6 +328,7 @@ export async function POST(req: Request) {
       raw = await withTimeout(
         requestText(
           buildMessages(mode, teamText, sourceExcerpt, parsedBody.data.question, true),
+          measured,
         ),
         AI_TIMEOUT_MS,
         "[detect/hallucination] retry AI attempt",
@@ -269,6 +337,7 @@ export async function POST(req: Request) {
     }
 
     if (analysis === null) {
+      await settle();
       return NextResponse.json(
         {
           success: false,
@@ -284,6 +353,7 @@ export async function POST(req: Request) {
     const hallucinationScore = clamp(analysis.hallucinationScore, 0, 100);
     const riskLevel = deriveRiskLevel(hallucinationScore);
 
+    await settle();
     return NextResponse.json({
       success: true,
       hallucinationScore,
@@ -294,6 +364,7 @@ export async function POST(req: Request) {
       mode,
     });
   } catch (error) {
+    await settle();
     console.error("[detect/hallucination] unexpected failure:", error);
     return NextResponse.json(
       {

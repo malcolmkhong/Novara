@@ -1,7 +1,8 @@
 import ZAI from "@/lib/ai/router";
 import { jsonError, parseBody, validationError, withTimeout } from "@/lib/novara/api-helpers";
 import { classifyAiFailure, extractRealUsage } from "@/lib/usage/usage-shapes";
-import { recordUsageCall } from "@/lib/usage/usage-store";
+import { recordUsageCall, GATEWAY_DEFAULT_MODEL_ID } from "@/lib/usage/usage-store";
+import { beginCharge, callerUid, creditsFromUsage, settleCharge } from "@/lib/credits/charge";
 import { z } from "zod";
 
 export const dynamic = "force-dynamic";
@@ -61,6 +62,42 @@ export async function POST(req: Request) {
 
   const { section, genre, logline, premise, characters, targetWords, sessionId } =
     schema.data;
+
+  // ---- SPEND GATE (Step 55/56) ------------------------------------------
+  // The credits are reserved BEFORE the provider is called, so an
+  // unaffordable request never reaches the model and never costs money.
+  const uid = callerUid(req);
+  if (!uid) {
+    return jsonError("unauthenticated", 401);
+  }
+  const charge = await beginCharge(uid, "wizard", { refId: section, note: "wizard" });
+  if (!charge.ok) {
+    if (charge.reason === "kill-switch") {
+      return jsonError("globally_paused", 429);
+    }
+    return Response.json(
+      {
+        error: "insufficient_credits",
+        need: charge.need ?? 0,
+        balance: charge.balance ?? 0,
+        resetAt: charge.resetAt ?? null,
+      },
+      { status: 402 },
+    );
+  }
+  let measuredCredits = 0;
+  let measuredNote: string | null = null;
+  const settle = async () => {
+    try {
+      await settleCharge(uid, charge.hold, measuredCredits, {
+        refId: section,
+        note: measuredNote ?? "no measured call — the hold stands",
+      });
+    } catch (settleError) {
+      console.error("[ai/wizard] settle failed:", settleError);
+    }
+  };
+  // ----------------------------------------------------------------------
 
   const languageSample = `${genre ?? ""}\n${logline ?? ""}\n${premise ?? ""}`;
   const isChinese = /[\u4e00-\u9fff]/.test(languageSample);
@@ -149,14 +186,29 @@ export async function POST(req: Request) {
     // Persist the per-call row; correlationId retro-tags this session onto
     // the novel it culminates in (provenance link written at creation).
     // Measured even when the content check below fails — billed is billed.
+    const usage = extractRealUsage(completion);
     recordUsageCall({
       surface: "wizard",
-      usage: extractRealUsage(completion),
+      usage,
       ...(sessionId ? { correlationId: sessionId } : {}),
     });
-    if (!content)
+    if (usage) {
+      // The measured cost of THIS call. The request carried no model field,
+      // so the price comes from the default model's row (priced-by-fallback).
+      const charged = creditsFromUsage(
+        GATEWAY_DEFAULT_MODEL_ID,
+        usage.promptTokens,
+        usage.completionTokens,
+      );
+      measuredCredits += charged.credits;
+      measuredNote = charged.note ?? measuredNote;
+    }
+    if (!content) {
+      await settle();
       return jsonError("The AI returned an empty draft. Try again.", 502);
+    }
 
+    await settle();
     return Response.json({ content });
   } catch (error) {
     if (sent) {
@@ -168,6 +220,8 @@ export async function POST(req: Request) {
         ...(sessionId ? { correlationId: sessionId } : {}),
       });
     }
+    // A failed call is NOT charged: the whole hold comes back.
+    await settle();
     const message =
       error instanceof Error ? error.message : "Unknown AI service error";
     return jsonError(`AI generation failed: ${message}`, 502);
