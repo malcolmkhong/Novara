@@ -3,6 +3,7 @@ import { z } from "zod";
 
 import { db } from "@/lib/db";
 import { completeJson } from "@/lib/ai/writing";
+import { CreditError } from "@/lib/credits/charge";
 import {
   buildSedimentMessages,
   parseSedimentResponse,
@@ -186,6 +187,10 @@ export async function POST(req: Request, ctx: RouteContext) {
       ledgerNotes,
     });
   } catch (error) {
+    // Step 58 — a credit refusal keeps its status and its payload.
+    if (error instanceof CreditError) {
+      return NextResponse.json(error.payload, { status: error.status });
+    }
     console.error("[novel:sediment] failed:", error);
     return NextResponse.json(
       {

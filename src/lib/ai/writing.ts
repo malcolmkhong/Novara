@@ -20,7 +20,14 @@ import {
   classifyAiFailure,
   extractRealUsage,
 } from "@/lib/usage/usage-shapes";
-import { recordUsageCall, type UsageCallScope } from "@/lib/usage/usage-store";
+import { recordUsageCall, GATEWAY_DEFAULT_MODEL_ID, type UsageCallScope } from "@/lib/usage/usage-store";
+import {
+  chargeOrThrow,
+  CreditError,
+  requireChargeUid,
+  settleCharge,
+  settleMeasured,
+} from "@/lib/credits/charge";
 
 export interface AiMessage {
   role: "assistant" | "user";
@@ -28,6 +35,31 @@ export interface AiMessage {
 }
 
 const AI_JSON_TIMEOUT_MS = 60_000;
+
+/**
+ * Step 58 — the charge surface of every studio call (the novel studio:
+ * init, plan, review, sediment, write). SOFT: the hold is capped by the
+ * balance, and only a zero balance is refused.
+ */
+const CHARGE_SURFACE = "studio";
+
+/** Settling must never break the call it settles. */
+async function settleSafely(fn: () => Promise<unknown>): Promise<void> {
+  try {
+    await fn();
+  } catch (error) {
+    console.error("[ai/writing] settle failed:", error);
+  }
+}
+
+/**
+ * Reserve the credits for one studio call. Throws a CreditError (402 / 429)
+ * when the caller cannot pay — the caller must NOT reach the provider then.
+ */
+async function beginStudioCharge(label: string): Promise<{ uid: string; hold: number }> {
+  const uid = await requireChargeUid(CHARGE_SURFACE);
+  return await chargeOrThrow(uid, CHARGE_SURFACE, { refId: label, note: label });
+}
 
 /** Common schema keys used to repair AI's merged-key corruption. */
 const KNOWN_KEYS =
@@ -103,38 +135,70 @@ export async function completeJson<T>(
   options: JsonOptions<T>,
 ): Promise<T | null> {
   const generate = async (msgs: AiMessage[]): Promise<string | null> => {
-    const zai = await ZAI.create();
-    // Policy F (P5-b): one row per HTTP attempt. ZAI.create() above failing
-    // is a PRE-SEND failure — it throws before any provider contact, no row
-    // (F3). Everything below runs once per parse-retry/self-repair call.
+    // Step 58 — one charge per ATTEMPT. A failed attempt is refunded in
+    // full and the next attempt takes its own charge, so a parse-retry
+    // never charges the user twice for the same work.
+    const charge = await beginStudioCharge(options.label);
+    let settled = false;
     try {
-      const completion: unknown = await withTimeout(
-        zai.chat.completions.create({
-          messages: msgs,
-          thinking: { type: "disabled" },
-        }),
-        AI_JSON_TIMEOUT_MS,
-        `[novel/${options.label}]`,
-      );
-      // Measured row when the provider returned usage (billed truth — even
-      // if the content extraction below fails); no usage object ⇒ no row (F4).
-      recordUsageCall({
-        surface: "studio",
-        usage: extractRealUsage(completion),
-        ...options.ledger,
-      });
-      return extractCompletionContent(completion);
+      const zai = await ZAI.create();
+      // Policy F (P5-b): one row per HTTP attempt. ZAI.create() above failing
+      // is a PRE-SEND failure — it throws before any provider contact, no row
+      // (F3). Everything below runs once per parse-retry/self-repair call.
+      try {
+        const completion: unknown = await withTimeout(
+          zai.chat.completions.create({
+            messages: msgs,
+            thinking: { type: "disabled" },
+          }),
+          AI_JSON_TIMEOUT_MS,
+          `[novel/${options.label}]`,
+        );
+        // Measured row when the provider returned usage (billed truth — even
+        // if the content extraction below fails); no usage object ⇒ no row (F4).
+        const usage = extractRealUsage(completion);
+        recordUsageCall({
+          surface: "studio",
+          usage,
+          ...options.ledger,
+        });
+        // D16 — the cost comes from the tokens the provider really returned.
+        // A completion with no usage object has no measurable cost → the
+        // whole hold comes back.
+        await settleSafely(() =>
+          settleMeasured(
+            charge.uid,
+            charge.hold,
+            usage,
+            GATEWAY_DEFAULT_MODEL_ID,
+            { refId: options.label },
+          ),
+        );
+        settled = true;
+        return extractCompletionContent(completion);
+      } catch (error) {
+        // F1 — sent but no completion payload at our boundary: one zero-token
+        // failed row under the same scope. The outer parse-retry loop calls
+        // generate() again — that next HTTP attempt gets its own row.
+        recordUsageCall({
+          surface: "studio",
+          usage: null,
+          status: "failed",
+          errorKind: classifyAiFailure(error),
+          ...options.ledger,
+        });
+        throw error;
+      }
     } catch (error) {
-      // F1 — sent but no completion payload at our boundary: one zero-token
-      // failed row under the same scope. The outer parse-retry loop calls
-      // generate() again — that next HTTP attempt gets its own row.
-      recordUsageCall({
-        surface: "studio",
-        usage: null,
-        status: "failed",
-        errorKind: classifyAiFailure(error),
-        ...options.ledger,
-      });
+      // A failed attempt is not charged: the hold comes back in full.
+      if (!settled) {
+        await settleSafely(() =>
+          settleCharge(charge.uid, charge.hold, 0, {
+            refId: options.label,
+            note: "attempt failed — hold refunded",
+          }),
+        );
+      }
       throw error;
     }
   };
@@ -150,6 +214,8 @@ export async function completeJson<T>(
         `[novel/${options.label}] parse failed on attempt ${attempt + 1}`,
       );
     } catch (error) {
+      // A credit refusal is not a parse failure — it must reach the caller.
+      if (error instanceof CreditError) throw error;
       console.error(`[novel/${options.label}] attempt ${attempt + 1} failed:`, error);
     }
   }
@@ -172,6 +238,7 @@ export async function completeJson<T>(
       if (parsed !== null) return parsed;
       console.warn(`[novel/${options.label}] AI self-repair failed`);
     } catch (error) {
+      if (error instanceof CreditError) throw error;
       console.error(`[novel/${options.label}] self-repair failed:`, error);
     }
   }
@@ -221,7 +288,17 @@ export async function streamProse(
   callbacks: StreamCallbacks,
   /** P5 — persisted-ledger scope links (novel-scoped write route). */
   ledger?: UsageCallScope,
+  /**
+   * Step 58 — the caller's abort signal (the write route passes the request
+   * signal). When the client disconnects mid-stream the provider stream is
+   * aborted and the hold is settled on whatever tokens were recorded.
+   */
+  options?: { signal?: AbortSignal },
 ): Promise<StreamOutcome> {
+  // Step 58 — the hold is taken BEFORE the stream starts. The settle runs
+  // in the finally: on a normal end, on the watchdog abort and on a
+  // transport error alike.
+  const charge = await beginStudioCharge("studio-write");
   let full = "";
   const controller = new AbortController();
   const overallTimer = setTimeout(() => controller.abort(), OVERALL_STREAM_MS);
@@ -230,6 +307,10 @@ export async function streamProse(
     if (stallTimer) clearTimeout(stallTimer);
     stallTimer = setTimeout(() => controller.abort(), CHUNK_STALL_MS);
   };
+  // The client hung up (or the request was aborted) — stop the provider
+  // stream so the hold is settled instead of hanging until the watchdog.
+  const externalAbort = () => controller.abort();
+  options?.signal?.addEventListener("abort", externalAbort, { once: true });
 
   // Policy F (P5-b) attempt markers:
   //   sent     = the stream request was handed to the provider (init done)
@@ -331,7 +412,9 @@ export async function streamProse(
       text: full,
       completed: false,
       error: aborted
-        ? `Generation stopped early (${aborted && full.length === 0 ? "no output" : "watchdog timeout"}).`
+        ? options?.signal?.aborted
+          ? "The client disconnected — generation stopped early."
+          : `Generation stopped early (${aborted && full.length === 0 ? "no output" : "watchdog timeout"}).`
         : error instanceof Error
           ? error.message
           : "Unknown streaming error.",
@@ -339,6 +422,20 @@ export async function streamProse(
   } finally {
     clearTimeout(overallTimer);
     if (stallTimer) clearTimeout(stallTimer);
+    options?.signal?.removeEventListener("abort", externalAbort);
+    // The settle runs on EVERY exit — the stream ended, the watchdog cut it
+    // short, the client hung up, or the transport died. The cost is what
+    // the provider actually reported (streamUsage); with no usage there is
+    // no measurable cost and the hold comes back in full.
+    await settleSafely(() =>
+      settleMeasured(
+        charge.uid,
+        charge.hold,
+        streamUsage,
+        GATEWAY_DEFAULT_MODEL_ID,
+        { refId: "studio-write" },
+      ),
+    );
   }
 }
 

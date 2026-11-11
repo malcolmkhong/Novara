@@ -87,12 +87,13 @@ async function main() {
   );
   const b2Grants = await countRows(USER_B, "daily_grant");
   log(`  stale-date account: balance before the burst = ${bBefore?.balance} (5 spent)`);
-  log(`  stale-date account: 5 parallel calls -> balances ${b2Parallel.map((a) => a.balance).join(",")}   (expect 20 = reset, NOT 35)`);
+  log(`  stale-date account: 5 parallel calls -> balances ${b2Parallel.map((a) => a.balance).join(",")}   (expect ${creditsDailyFree()} = reset, NOT ${creditsDailyFree() + 5})`);
   log(`  stale-date account: daily_grant rows = ${b2Grants}   (expect 2 — one per day)`);
 
   log("");
   log("=== (c) ten simultaneous spends of 1 against a balance of 5 ===");
-  await withUser(USER_A, false, () => tryConsume(USER_A, 15, { note: "proof setup" }));
+  const allowance = creditsDailyFree();
+  await withUser(USER_A, false, () => tryConsume(USER_A, allowance - 5, { note: "proof setup" }));
   const cBefore = await accountOf(USER_A);
   const cResults = await withUser(USER_A, false, () =>
     Promise.all(Array.from({ length: 10 }, () => tryConsume(USER_A, 1, { note: "proof parallel spend" }))),
@@ -105,7 +106,7 @@ async function main() {
   log(`  parallel tryConsume(1) x10 -> ok=${cOk} refused=${cRefused}   (expect ok=5 refused=5)`);
   log(`  reasons = ${cResults.map((r) => r.reason).join(",")}`);
   log(`  balance after  = ${cAfter?.balance}   (expect 0 — never negative)`);
-  log(`  spend ledger rows = ${cSpends}   (expect 6 = one 15-credit spend + five 1-credit spends)`);
+  log(`  spend ledger rows = ${cSpends}   (expect 6 = one ${allowance - 5}-credit spend + five 1-credit spends)`);
 
   log("");
   log("=== (d) admin: unlimited, nothing deducted, spend still recorded ===");

@@ -18,7 +18,14 @@ import type { Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
 import { capOutputTokens, extractJson, withTimeout } from "@/lib/ai-heuristics";
 import { classifyAiFailure, extractRealUsage } from "@/lib/usage/usage-shapes";
-import { recordProvenanceLink, recordUsageCall } from "@/lib/usage/usage-store";
+import { recordProvenanceLink, recordUsageCall, GATEWAY_DEFAULT_MODEL_ID } from "@/lib/usage/usage-store";
+import {
+  chargeOrThrow,
+  CreditError,
+  requireChargeUid,
+  settleCharge,
+  settleMeasured,
+} from "@/lib/credits/charge";
 import {
   buildDelegationRepairMessages,
   buildLeaderSystemPrompt,
@@ -50,6 +57,21 @@ import type {
 // ---------------------------------------------------------------------------
 
 const AI_TIMEOUT_MS = 55_000;
+/**
+ * Step 58 — the charge surface of every AI-Team call. HARD: a team turn
+ * must be affordable up front (reserve = team-turn).
+ */
+const CHARGE_SURFACE = "team-turn";
+
+/** Settling must never break the call it settles. */
+async function settleSafely(fn: () => Promise<unknown>): Promise<void> {
+  try {
+    await fn();
+  } catch (error) {
+    console.error("[ai-team] settle failed:", error);
+  }
+}
+
 /** Budget for the post-tool follow-up call of an agent turn. */
 const TOOL_FOLLOWUP_TIMEOUT_MS = 35_000;
 /** Per-message cap when replaying conversation history to AI. */
@@ -117,6 +139,15 @@ export async function teamText(
   scope?: AiScope,
 ): Promise<string | null> {
   for (let attempt = 0; ; attempt++) {
+    // Step 58 — a team turn is a HARD surface: the whole turn must be
+    // affordable before it starts. The refusal is thrown (not swallowed) so
+    // the route can answer 402 / 429.
+    const uid = await requireChargeUid(CHARGE_SURFACE);
+    const charge = await chargeOrThrow(uid, CHARGE_SURFACE, {
+      refId: label,
+      note: label,
+    });
+    let settled = false;
     // Policy F (P5-b): one row per HTTP attempt. ZAI.create() failing below
     // is a PRE-SEND failure — no row (F3). A sent attempt with no completion
     // payload records one zero-token failed row (F1); a completion without
@@ -144,15 +175,30 @@ export async function teamText(
       // Persist the per-call row. Surface revived per P5-g (schema restored;
       // scope threading per plan §5): novelId = direct attribution,
       // correlationId = pre-novel session namespace, modelId = as sent.
+      const usage = extractRealUsage(completion);
       recordUsageCall({
         surface: "ai-team",
-        usage: extractRealUsage(completion),
+        usage,
         novelId: scope?.novelId,
         correlationId: scope?.correlationId,
         modelId: scope?.model,
       });
+      // D16 — the cost comes from the tokens the provider really returned;
+      // a completion with no usage has no measurable cost → the hold comes
+      // back in full.
+      await settleSafely(() =>
+        settleMeasured(
+          uid,
+          charge.hold,
+          usage,
+          scope?.model ?? GATEWAY_DEFAULT_MODEL_ID,
+          { refId: label },
+        ),
+      );
+      settled = true;
       return extractCompletionContent(completion);
     } catch (error) {
+      if (error instanceof CreditError) throw error;
       if (sent) {
         recordUsageCall({
           surface: "ai-team",
@@ -163,6 +209,15 @@ export async function teamText(
           correlationId: scope?.correlationId,
           modelId: scope?.model,
         });
+      }
+      // A failed attempt is not charged: the hold comes back in full.
+      if (!settled) {
+        await settleSafely(() =>
+          settleCharge(uid, charge.hold, 0, {
+            refId: label,
+            note: "attempt failed — hold refunded",
+          }),
+        );
       }
       console.error(`[team/${label}] AI request failed:`, error);
       // Retry ONLY transient rate limits; timeouts and other errors fail

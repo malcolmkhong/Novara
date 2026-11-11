@@ -67,8 +67,8 @@ const SURFACE_RESERVES: Record<string, number> = {
   wizard: 40,
   review: 20,
   sediment: 20,
-  "agent-turn": 300,
-  "team-turn": 300,
+  "agent-turn": 15,
+  "team-turn": 20,
 };
 
 /** The hold for a surface. Unknown surfaces get the LARGEST hold — never a
@@ -230,6 +230,50 @@ export async function canAfford(
     };
   }
   return { ok: true, hold: Math.min(reserve, balance), balance };
+}
+
+/**
+ * The verified caller of this request (or background job), or a refusal.
+ *
+ * A spend needs an owner: with no identity in scope the caller must NOT
+ * reach the provider.
+ */
+export async function requireChargeUid(surface: string): Promise<string> {
+  const uid = await currentChargeUid();
+  if (!uid) {
+    throw new CreditError(
+      401,
+      { error: "unauthenticated" },
+      `no request identity in scope for surface "${surface}" — refusing to call the provider`,
+    );
+  }
+  return uid;
+}
+
+/**
+ * Charge a surface or throw the refusal as a CreditError (the caller decides
+ * how to answer it — the routes turn it into a 402 / 429).
+ */
+export async function chargeOrThrow(
+  userId: string,
+  surface: string,
+  meta: CreditMeta = {},
+): Promise<{ uid: string; hold: number }> {
+  const charge = await beginCharge(userId, surface, meta);
+  if (charge.ok) return { uid: userId, hold: charge.hold };
+  if (charge.reason === "kill-switch") {
+    throw new CreditError(429, { error: "globally_paused" }, "globally_paused");
+  }
+  throw new CreditError(
+    402,
+    {
+      error: "insufficient_credits",
+      need: charge.need ?? 0,
+      balance: charge.balance ?? 0,
+      resetAt: charge.resetAt ?? null,
+    },
+    `insufficient_credits: need ${charge.need ?? 0}, balance ${charge.balance ?? 0}`,
+  );
 }
 
 export interface ChargeMeta extends CreditMeta {

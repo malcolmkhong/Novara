@@ -3,6 +3,7 @@ import { z } from "zod";
 
 import { db } from "@/lib/db";
 import { streamProse } from "@/lib/ai/writing";
+import { canAfford, callerUid } from "@/lib/credits/charge";
 import { buildWriteMessages, type WriteBrief } from "@/lib/novel/prompts";
 import {
   chineseWordCount,
@@ -50,6 +51,29 @@ export async function POST(req: Request, ctx: RouteContext) {
     );
   }
   const chapterNumber = parsedBody.data.chapterNumber;
+
+  // Step 58 — this route spends money (a whole chapter of prose). The answer
+  // is a STREAM, so the refusal has to happen BEFORE the stream starts:
+  // an unfunded writer gets a plain 402, not a 200 with an error event.
+  const uid = callerUid(req);
+  if (!uid) {
+    return NextResponse.json({ error: "unauthenticated" }, { status: 401 });
+  }
+  const affordable = await canAfford(uid, "studio");
+  if (!affordable.ok) {
+    if (affordable.reason === "kill-switch") {
+      return NextResponse.json({ error: "globally_paused" }, { status: 429 });
+    }
+    return NextResponse.json(
+      {
+        error: "insufficient_credits",
+        need: affordable.need ?? 0,
+        balance: affordable.balance ?? 0,
+        resetAt: affordable.resetAt ?? null,
+      },
+      { status: 402 },
+    );
+  }
 
   const detail = await loadNovelDetail(id);
   if (!detail) {
@@ -148,6 +172,9 @@ export async function POST(req: Request, ctx: RouteContext) {
         },
         // P5 — prose-stream spend lands on the novel in the ledger.
         { novelId: id },
+        // Step 58 — a client disconnect aborts the provider stream, so the
+        // hold is settled on whatever tokens were recorded.
+        { signal: req.signal },
       );
 
       const prose = stripProseArtifacts(accumulated);

@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 
 import { db } from "@/lib/db";
+import { CreditError } from "@/lib/credits/charge";
 import {
   appendGroundTruthIfClaimed,
   buildHistoryMessages,
@@ -334,6 +335,10 @@ export async function POST(req: Request) {
     };
     return NextResponse.json(payload);
   } catch (error) {
+    // Step 58 — a credit refusal keeps its status and its payload.
+    if (error instanceof CreditError) {
+      return NextResponse.json(error.payload, { status: error.status });
+    }
     console.error("[team/chat] POST failed:", error);
     return NextResponse.json(
       { success: false, error: "Unexpected server error while chatting." },

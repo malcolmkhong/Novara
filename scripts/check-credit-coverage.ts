@@ -90,12 +90,17 @@ for (const file of files) {
     const target = resolveModule(spec, file);
     if (!target) continue;
     resolved.push(target);
-    // A file that imports beginCharge IS a charge point.
+    // A file that takes a HOLD is a charge point: `beginCharge` (the direct
+    // call) or `chargeOrThrow` (the same thing, throwing the refusal).
     const escaped = spec.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     const importLine = source.match(
       new RegExp(`import\\s*\\{([^}]*)\\}\\s*from\\s*["']${escaped}["']`),
     );
-    if (importLine && /\bbeginCharge\b/.test(importLine[1]) && target === CHARGE_MODULE) {
+    if (
+      importLine &&
+      /\b(beginCharge|chargeOrThrow)\b/.test(importLine[1]) &&
+      target === CHARGE_MODULE
+    ) {
       chargers.add(file);
     }
   }

@@ -4,7 +4,7 @@ import ZAI from "@/lib/ai/router";
 import { AI_TIMEOUT_MS, withTimeout } from "@/lib/ai-heuristics";
 import { classifyAiFailure, extractRealUsage } from "@/lib/usage/usage-shapes";
 import { recordUsageCall, GATEWAY_DEFAULT_MODEL_ID } from "@/lib/usage/usage-store";
-import { beginCharge, callerUid, creditsFromUsage, settleCharge } from "@/lib/credits/charge";
+import { beginCharge, callerUid, settleCharge, settleMeasured } from "@/lib/credits/charge";
 
 export const maxDuration = 120;
 
@@ -192,19 +192,16 @@ export async function POST(req: Request) {
   recordUsageCall({ surface: "generate", usage });
 
   // ---- SPEND GATE: settle the reservation against the MEASURED cost -----
-  // The tokens used here are exactly the ones recorded in UsageCall. This
-  // route sends no model field, so the request-side id is
-  // "gateway-default" — the price comes from the DEFAULT model's row and
-  // the ledger row is tagged "priced-by-fallback" (an unpriced call is
-  // never free). With no usage object at all the cost is unknown: the hold
-  // stands (no refund).
-  const charged = usage
-    ? creditsFromUsage(GATEWAY_DEFAULT_MODEL_ID, usage.promptTokens, usage.completionTokens)
-    : null;
+  // D16 — the SAME rule as the chat.ts choke point: the cost comes from the
+  // tokens the provider really returned; a completion with NO usage object
+  // has no measurable cost, so the whole hold is returned. The tokens used
+  // here are exactly the ones recorded in UsageCall. This route sends no
+  // model field, so the request-side id is "gateway-default" — the price
+  // comes from the DEFAULT model's row and the ledger row is tagged
+  // "priced-by-fallback" (an unpriced call is never free).
   try {
-    await settleCharge(uid, charge.hold, charged ? charged.credits : charge.hold, {
+    await settleMeasured(uid, charge.hold, usage, GATEWAY_DEFAULT_MODEL_ID, {
       refId: mode,
-      note: charged?.note ?? "no usage reported — the hold stands",
     });
   } catch (settleError) {
     console.error("[generate] settle failed:", settleError);

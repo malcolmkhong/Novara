@@ -3,6 +3,7 @@ import { z } from "zod";
 
 import { db } from "@/lib/db";
 import { completeJson } from "@/lib/ai/writing";
+import { CreditError } from "@/lib/credits/charge";
 import { recordProvenanceLink } from "@/lib/usage/usage-store";
 import {
   buildInitMessages,
@@ -169,6 +170,10 @@ export async function POST(req: Request) {
 
     return NextResponse.json({ success: true, id: novel.id });
   } catch (error) {
+    // Step 58 — a credit refusal keeps its status and its payload.
+    if (error instanceof CreditError) {
+      return NextResponse.json(error.payload, { status: error.status });
+    }
     console.error("[novel:create] failed:", error);
     return NextResponse.json(
       { success: false, error: "Failed to create the novel. Please try again." },

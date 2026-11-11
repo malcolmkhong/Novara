@@ -3,6 +3,7 @@ import { z } from "zod";
 
 import { db } from "@/lib/db";
 import { completeJson } from "@/lib/ai/writing";
+import { CreditError } from "@/lib/credits/charge";
 import {
   buildPlanMessages,
   parsePlanResponse,
@@ -192,6 +193,10 @@ export async function POST(req: Request, ctx: RouteContext) {
       chapters: fresh.chapters.map(chapterToView),
     });
   } catch (error) {
+    // Step 58 — a credit refusal keeps its status and its payload.
+    if (error instanceof CreditError) {
+      return NextResponse.json(error.payload, { status: error.status });
+    }
     console.error("[novel:plan] failed:", error);
     return NextResponse.json(
       { success: false, error: "Failed to plan the volume. Please try again." },
