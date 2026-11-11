@@ -15,7 +15,7 @@ import type {
   AgentRunDetail,
   AgentRunMode,
 } from "./agent-types";
-import { authFetch } from "@/lib/firebase/client";
+import { authFetch, parseCreditError } from "@/lib/firebase/client";
 import type { MockStartOptions } from "./agent-schemas";
 import { mockAgentRuntime } from "./mock-agent";
 
@@ -81,6 +81,10 @@ async function jsonFetch<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await authFetch(url, { cache: "no-store", ...init });
   const body: unknown = await res.json().catch(() => ({}));
   if (!res.ok) {
+    // Step 61 — a credit refusal is an IDENTIFIABLE error (CreditError with
+    // need / balance / resetAt), not a raw code string.
+    const creditError = parseCreditError(res.status, body);
+    if (creditError) throw creditError;
     const message =
       typeof body === "object" && body !== null && "error" in body
         ? String((body as { error: unknown }).error)

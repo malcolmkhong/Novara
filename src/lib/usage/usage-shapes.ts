@@ -231,6 +231,33 @@ export interface AccountUsageSnapshot {
   history: UsageHistoryBlock;
 }
 
+/**
+ * Step 61 — the signed-in user's credit state (GET /api/usage/credits).
+ *
+ * `balance` is null for an admin (nothing is deducted). `usedToday` is the
+ * NET credits the account consumed today (the spend and refund rows summed
+ * with their sign). `resetAt` is the lazy daily reset — the allowance is
+ * granted on the first credit operation after that moment.
+ */
+export interface CreditsSnapshot {
+  /** Credits available to spend right now. null for an admin. */
+  balance: number | null;
+  /** The daily free allowance, in credits. */
+  allowance: number;
+  /** Net credits consumed today by this account. */
+  usedToday: number;
+  /** ISO timestamp of the next lazy daily reset. */
+  resetAt: string;
+  /** Seconds until that reset. */
+  resetsInSeconds: number;
+  /** Is the caller an admin (unlimited, nothing deducted)? */
+  admin: boolean;
+  /** Admins are unlimited; everyone else spends a finite balance. */
+  unlimited: boolean;
+  /** Is the global kill switch active (the world spend is over the cap)? */
+  globalPaused: boolean;
+}
+
 export interface NovelUsageSummary {
   novelId: string;
   title: string;

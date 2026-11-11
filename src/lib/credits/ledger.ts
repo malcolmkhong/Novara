@@ -361,6 +361,30 @@ export async function globalKillSwitchActive(): Promise<boolean> {
   return (await globalSpendToday()) > creditsGlobalDailyCap();
 }
 
+/**
+ * The NET credits THIS account consumed today (the same NET rule as the
+ * global spend: the spend and refund rows summed with their sign, so a
+ * fully refunded call nets to zero). Grants are excluded (a grant is not
+ * spend); an admin's `admin_usage` rows ARE included, because they are real
+ * consumption even though nothing was deducted from a balance.
+ *
+ * The read is SCOPED: the ownership extension filters CreditLedger by the
+ * caller's userId (the table carries userId), so this never needs dbRaw.
+ */
+export async function usedToday(userId: string, now = new Date()): Promise<number> {
+  const start = new Date(now);
+  start.setUTCHours(0, 0, 0, 0);
+  const agg = await db.creditLedger.aggregate({
+    where: {
+      userId,
+      createdAt: { gte: start },
+      kind: { in: ["spend", "adjustment", "admin_usage"] },
+    },
+    _sum: { delta: true },
+  });
+  return -(agg._sum.delta ?? 0);
+}
+
 /** The current account row, or null when the user has none. */
 export async function accountState(userId: string): Promise<CreditAccountState | null> {
   return await db.creditAccount.findUnique({ where: { userId } });

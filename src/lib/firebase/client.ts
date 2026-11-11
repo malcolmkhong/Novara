@@ -81,6 +81,76 @@ export class AuthError extends Error {
 }
 
 /**
+ * A credit refusal (HTTP 402): the caller cannot pay for this call.
+ *
+ * The server sends { error: "insufficient_credits", need, balance, resetAt }
+ * — before this class the UI only saw the raw code string in a toast. Now
+ * the refusal is identifiable: a UI can show how much is needed, what is
+ * left and when it resets.
+ *
+ * NOT the same class as the server-side CreditError in @/lib/credits/charge:
+ * that one never crosses the wire, this one is built from the response body.
+ */
+export class CreditError extends Error {
+  /** Credits the call needs. */
+  readonly need: number;
+  /** Credits the account has. */
+  readonly balance: number;
+  /** ISO timestamp of the next lazy daily reset. */
+  readonly resetAt: string;
+
+  constructor(
+    message: string,
+    need: number,
+    balance: number,
+    resetAt: string,
+  ) {
+    super(message);
+    this.name = "CreditError";
+    this.need = need;
+    this.balance = balance;
+    this.resetAt = resetAt;
+  }
+}
+
+/**
+ * The global kill switch is on (HTTP 429): every non-admin AI spend is
+ * paused until the world's daily spend falls back under the cap.
+ */
+export class GloballyPausedError extends Error {
+  constructor(message = "globally_paused") {
+    super(message);
+    this.name = "GloballyPausedError";
+  }
+}
+
+/**
+ * Turn a credit-flavoured response into a typed error, or null when the
+ * response is not a credit refusal.
+ *
+ * 402 → CreditError (need / balance / resetAt)
+ * 429 + "globally_paused" → GloballyPausedError
+ */
+export function parseCreditError(status: number, body: unknown): Error | null {
+  const payload = (body ?? {}) as {
+    error?: unknown;
+    need?: unknown;
+    balance?: unknown;
+    resetAt?: unknown;
+  };
+  if (status === 429 && payload.error === "globally_paused") {
+    return new GloballyPausedError();
+  }
+  if (status !== 402) return null;
+  return new CreditError(
+    typeof payload.error === "string" ? payload.error : "insufficient_credits",
+    typeof payload.need === "number" ? payload.need : 0,
+    typeof payload.balance === "number" ? payload.balance : 0,
+    typeof payload.resetAt === "string" ? payload.resetAt : "",
+  );
+}
+
+/**
  * Centralised fetch wrapper. Attaches `Authorization: Bearer <idToken>` and
  * refreshes the token once on a 401 before retrying. Throws `AuthError` when
  * there is no signed-in user.

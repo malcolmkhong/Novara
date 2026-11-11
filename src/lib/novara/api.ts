@@ -27,7 +27,7 @@ import type {
 } from "./types";
 import type { ChapterReview, NovelMemoryView } from "./agent-types";
 
-import { authFetch } from "@/lib/firebase/client";
+import { authFetch, parseCreditError } from "@/lib/firebase/client";
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await authFetch(url, {
@@ -47,6 +47,10 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
     } catch {
       // ignore JSON parse errors on error responses
     }
+    // Step 61 — a credit refusal is an IDENTIFIABLE error, not a raw code
+    // string in a toast: CreditError carries need / balance / resetAt.
+    const creditError = parseCreditError(res.status, body);
+    if (creditError) throw creditError;
     // Attach status + parsed body so callers can branch on structured
     // errors (e.g. the chapter overwrite gate's 409 requiresOverwrite).
     const error = new Error(message) as Error & {
