@@ -34,6 +34,8 @@
 
 import { DEFAULT_MODEL_ID } from "@/lib/ai/providers/registry";
 import { estimateUpperBoundUsd, priceForModelId } from "@/lib/usage/pricing";
+import { currentScopeUserId } from "@/lib/db";
+import { headers } from "next/headers";
 import {
   accountState,
   ensureDailyGrant,
@@ -140,6 +142,96 @@ export function creditsFromUsage(
   };
 }
 
+/**
+ * HARD surfaces: the whole call must be affordable BEFORE it starts. The
+ * reserve is the real cost of one such call (an agent turn, a team turn), so
+ * a user with less than the reserve is refused outright — a partially funded
+ * agent turn would spend money the user cannot cover.
+ *
+ * SOFT surfaces: everything else. There the hold is capped by what the user
+ * has (D13) and only a zero balance is refused.
+ */
+export const HARD_SURFACES = ["agent-turn", "team-turn"] as const;
+
+export function isHardSurface(surface: string): boolean {
+  return (HARD_SURFACES as readonly string[]).includes(surface);
+}
+
+/**
+ * A refusal the caller can turn into an HTTP answer: the status and the
+ * payload. Thrown by the charge choke point so a route never has to guess
+ * whether a failure was a credit problem.
+ */
+export class CreditError extends Error {
+  readonly status: number;
+  readonly payload: Record<string, unknown>;
+
+  constructor(status: number, payload: Record<string, unknown>, message: string) {
+    super(message);
+    this.name = "CreditError";
+    this.status = status;
+    this.payload = payload;
+  }
+}
+
+/** The verified caller of this request (or background job). */
+export async function currentChargeUid(): Promise<string | null> {
+  const scoped = currentScopeUserId();
+  if (scoped) return scoped;
+  try {
+    const h = await headers();
+    const uid = h.get("x-novara-uid")?.trim();
+    return uid ? uid : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * May this caller afford this surface? READ-ONLY — it reserves nothing.
+ *
+ * The pre-flight for the expensive paths (the agent run route asks before it
+ * creates a run, so an unfunded user gets a 402 instead of a run that dies
+ * in the background).
+ */
+export async function canAfford(
+  userId: string,
+  surface: string,
+): Promise<ChargeHold> {
+  if (isAdmin(userId)) return { ok: true, hold: 0, admin: true };
+  if (await globalKillSwitchActive()) {
+    return { ok: false, hold: 0, reason: "kill-switch" };
+  }
+  const reserve = reserveCredits(surface);
+  await ensureDailyGrant(userId);
+  const account = await accountState(userId);
+  const balance = account?.balance ?? 0;
+  if (isHardSurface(surface)) {
+    if (balance < reserve) {
+      return {
+        ok: false,
+        hold: 0,
+        reason: "insufficient",
+        need: reserve,
+        balance,
+        resetAt: nextResetAt(),
+      };
+    }
+    return { ok: true, hold: reserve, balance };
+  }
+  if (balance <= 0) {
+    return {
+      ok: false,
+      hold: 0,
+      reason: "insufficient",
+      need: reserve,
+      balance: 0,
+      resetAt: nextResetAt(),
+    };
+  }
+  return { ok: true, hold: Math.min(reserve, balance), balance };
+}
+
 export interface ChargeMeta extends CreditMeta {
   /** The app surface the charge belongs to ("generate", "draft", …). */
   surface?: string;
@@ -197,8 +289,24 @@ export async function beginCharge(
   const account = await accountState(uid);
   const balance = account?.balance ?? 0;
 
-  // Only an EMPTY balance is refused. A funded user is always served.
-  if (balance <= 0) {
+  // D15 — two reserve classes.
+  //   HARD  (agent-turn, team-turn): the whole call must be affordable up
+  //         front. A user with less than the reserve is refused — no
+  //         provider call happens.
+  //   SOFT  (everything else): D13 — the hold is capped by the balance and
+  //         only a zero balance is refused.
+  if (isHardSurface(surface)) {
+    if (balance < reserve) {
+      return {
+        ok: false,
+        hold: 0,
+        reason: "insufficient",
+        need: reserve,
+        balance,
+        resetAt: nextResetAt(),
+      };
+    }
+  } else if (balance <= 0) {
     return {
       ok: false,
       hold: 0,
@@ -209,7 +317,7 @@ export async function beginCharge(
     };
   }
 
-  const hold = Math.min(reserve, balance);
+  const hold = isHardSurface(surface) ? reserve : Math.min(reserve, balance);
   if (hold <= 0) return { ok: true, hold: 0, balance };
 
   const reserved = await holdCredits(uid, hold, {
@@ -314,6 +422,35 @@ export async function settleCharge(
 
   const account = await accountState(uid);
   return { ok: true, actualCredits: actual, balance: account?.balance ?? null, refunded: 0, wentToDebt: false };
+}
+
+/**
+ * Settle a hold against what the provider actually returned.
+ *
+ * - real tokens -> the measured credit cost,
+ * - no usage (the provider billed us, but gave no numbers) -> the measured
+ *   cost is ZERO, so the hold is returned. A call whose cost cannot be
+ *   measured is not charged (the same honesty rule the usage ledger uses:
+ *   "a completion without usage records nothing").
+ */
+export async function settleMeasured(
+  uid: string,
+  hold: number,
+  usage: { promptTokens: number; completionTokens: number } | null,
+  modelId: string,
+  meta: CreditMeta = {},
+): Promise<SettleResult> {
+  if (!usage) {
+    return await settleCharge(uid, hold, 0, {
+      ...meta,
+      note: meta.note ?? "no measured usage — the hold is returned",
+    });
+  }
+  const charged = creditsFromUsage(modelId, usage.promptTokens, usage.completionTokens);
+  return await settleCharge(uid, hold, charged.credits, {
+    ...meta,
+    note: charged.note ?? meta.note,
+  });
 }
 
 /**

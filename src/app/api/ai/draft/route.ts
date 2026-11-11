@@ -3,6 +3,7 @@ import { getBudgets } from "@/lib/novara/content";
 import { retrieveMemory } from "@/lib/novara/memory";
 import { jsonError, parseBody, validationError } from "@/lib/novara/api-helpers";
 import { chatCompletion } from "@/lib/ai/chat";
+import { CreditError } from "@/lib/credits/charge";
 import { countWords } from "@/lib/novara/words";
 import { z } from "zod";
 
@@ -258,6 +259,11 @@ export async function POST(req: Request) {
       ...(variantCount > 1 ? { variants } : {}),
     });
   } catch (error) {
+    // Step 57 — a credit refusal keeps its status and its payload (402 /
+    // 429) instead of being flattened into a 502.
+    if (error instanceof CreditError) {
+      return Response.json(error.payload, { status: error.status });
+    }
     const message =
       error instanceof Error ? error.message : "Unknown AI service error";
     return jsonError(`AI draft failed: ${message}`, 502);

@@ -1,5 +1,6 @@
 import { jsonError } from "@/lib/novara/api-helpers";
 import { reviewChapter } from "@/lib/novara/review";
+import { CreditError } from "@/lib/credits/charge";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 90;
@@ -20,6 +21,10 @@ export async function POST(_req: Request, { params }: Params) {
       mock: false,
     });
   } catch (error) {
+    // Step 57 — a credit refusal keeps its status and its payload.
+    if (error instanceof CreditError) {
+      return Response.json(error.payload, { status: error.status });
+    }
     const message = error instanceof Error ? error.message : "Unknown AI service error";
     const status = message === "Chapter not found" ? 404 : message === "Chapter has no content to review" ? 422 : 502;
     return jsonError(`AI review failed: ${message}`, status);

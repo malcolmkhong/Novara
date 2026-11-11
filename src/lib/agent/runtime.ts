@@ -1795,6 +1795,9 @@ async function leaderLoop(
       signal,
       sdkParams: modelCtx.sdk,
       surface: "agent",
+      // Step 57 — an agent turn is a HARD surface: the whole turn must be
+      // affordable before it starts (reserve = agent-turn).
+      creditSurface: "agent-turn",
       // P5 — the leader call's ledger scope (run + novel, leader conversation).
       ledger: { runId, novelId, conversationId: "leader" },
     });
@@ -2489,6 +2492,8 @@ async function executeTask(params: {
       signal,
       sdkParams: params.model.sdk,
       surface: "agent",
+      // Step 57 — an agent turn is a HARD surface (reserve = agent-turn).
+      creditSurface: "agent-turn",
       // P5 — the member call's ledger scope (per-run + per-member-task).
       ledger: { runId, novelId, taskId: task.id, conversationId: task.id },
     });

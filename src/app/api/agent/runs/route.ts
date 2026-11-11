@@ -12,6 +12,7 @@
 import { after } from "next/server";
 import { parseBody, validationError } from "@/lib/novara/api-helpers";
 import { startRunInputSchema } from "@/lib/novara/agent-schemas";
+import { canAfford, callerUid } from "@/lib/credits/charge";
 import {
   activeRunFor,
   createRun,
@@ -53,6 +54,30 @@ export async function POST(req: Request) {
 
   const schema = startRunInputSchema.safeParse(parsed.data);
   if (!schema.success) return validationError(schema.error);
+
+  // Step 57 — D15: an agent run is a HARD surface. The whole turn must be
+  // affordable BEFORE the run starts, so an unfunded user is refused here
+  // (402) instead of getting a run that dies in the background. The run
+  // itself still charges every turn it makes (the choke point does that).
+  const uid = callerUid(req);
+  if (!uid) {
+    return Response.json({ error: "unauthenticated" }, { status: 401 });
+  }
+  const affordable = await canAfford(uid, "agent-turn");
+  if (!affordable.ok) {
+    if (affordable.reason === "kill-switch") {
+      return Response.json({ error: "globally_paused" }, { status: 429 });
+    }
+    return Response.json(
+      {
+        error: "insufficient_credits",
+        need: affordable.need ?? 0,
+        balance: affordable.balance ?? 0,
+        resetAt: affordable.resetAt ?? null,
+      },
+      { status: 402 },
+    );
+  }
 
   try {
     const detail = await createRun({

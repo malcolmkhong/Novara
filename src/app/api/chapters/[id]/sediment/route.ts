@@ -1,6 +1,7 @@
 import { jsonError } from "@/lib/novara/api-helpers";
 import { sedimentChapterCore } from "@/lib/novara/sediment";
 import { db } from "@/lib/db";
+import { CreditError } from "@/lib/credits/charge";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 90;
@@ -35,6 +36,10 @@ export async function POST(_req: Request, { params }: Params) {
       ledger,
     });
   } catch (error) {
+    // Step 57 — a credit refusal keeps its status and its payload.
+    if (error instanceof CreditError) {
+      return Response.json(error.payload, { status: error.status });
+    }
     const message = error instanceof Error ? error.message : "Unknown AI service error";
     const status = message === "Chapter not found" ? 404 : message === "Chapter has no content to settle" ? 422 : 502;
     return jsonError(`AI sediment failed: ${message}`, status);

@@ -25,7 +25,18 @@ import {
   extractRealUsage,
   type RealUsage,
 } from "@/lib/usage/usage-shapes";
-import { recordUsageCall, type UsageCallScope } from "@/lib/usage/usage-store";
+import {
+  recordUsageCall,
+  GATEWAY_DEFAULT_MODEL_ID,
+  type UsageCallScope,
+} from "@/lib/usage/usage-store";
+import {
+  beginCharge,
+  currentChargeUid,
+  settleCharge,
+  settleMeasured,
+  CreditError,
+} from "@/lib/credits/charge";
 
 export type ChatMessage = { role: "assistant" | "user"; content: string };
 
@@ -109,13 +120,67 @@ export async function chatCompletion(opts: {
    * attempts record their own zero-token rows under the same scope (Policy F).
    */
   ledger?: UsageCallScope;
+  /**
+   * The CHARGE surface (Step 57) — the reserve class. Defaults to the
+   * ledger surface, then to "chat". The agent turns pass "agent-turn" (a
+   * HARD surface: the whole turn must be affordable before it starts).
+   */
+  creditSurface?: string;
 }): Promise<ChatResult> {
   const budgets = getBudgets();
   const retries = budgets.ai.retryAttempts;
   let lastError: unknown;
 
+  // The charge surface decides the reserve class; the ledger surface keeps
+  // its own vocabulary (so the usage history does not split).
+  const chargeSurface = opts.creditSurface ?? opts.surface ?? "chat";
+
+  // A spend needs an owner. With no verified caller in scope we do NOT call
+  // the provider — an unowned spend is unaccountable.
+  const uid = await currentChargeUid();
+  if (!uid) {
+    throw new CreditError(
+      401,
+      { error: "unauthenticated" },
+      `[ai] no request identity in scope for surface "${chargeSurface}" — refusing to call the provider`,
+    );
+  }
+
+  /** Settling must never break the call it settles. */
+  const settleSafely = async (fn: () => Promise<unknown>): Promise<void> => {
+    try {
+      await fn();
+    } catch (error) {
+      console.error("[ai] settle failed:", error);
+    }
+  };
+
   for (let attempt = 0; attempt <= retries; attempt++) {
     if (opts.signal?.aborted) throw new Error("Aborted before AI call");
+
+    // Step 57 — the charge choke point. One charge per BILLABLE ATTEMPT:
+    // a failed attempt is refunded and the next attempt takes its own
+    // charge, so a retry never costs the user twice.
+    const charge = await beginCharge(uid, chargeSurface, {
+      refId: opts.tag,
+      note: opts.tag,
+    });
+    if (!charge.ok) {
+      if (charge.reason === "kill-switch") {
+        throw new CreditError(429, { error: "globally_paused" }, "globally_paused");
+      }
+      throw new CreditError(
+        402,
+        {
+          error: "insufficient_credits",
+          need: charge.need ?? 0,
+          balance: charge.balance ?? 0,
+          resetAt: charge.resetAt ?? null,
+        },
+        `insufficient_credits: need ${charge.need ?? 0}, balance ${charge.balance ?? 0}`,
+      );
+    }
+
     // Policy F (P5-b failed-call accounting) — one row per HTTP attempt:
     //   sent     = the request was handed to the SDK (init succeeded)
     //   received = a completion payload came back at our boundary
@@ -127,6 +192,7 @@ export async function chatCompletion(opts: {
     let sent = false;
     let received = false;
     let recorded = false;
+    let settled = false;
     try {
       await acquireSlot(opts.signal);
       try {
@@ -158,6 +224,18 @@ export async function chatCompletion(opts: {
           });
           recorded = true;
         }
+        // Settle THIS attempt with what the provider really returned. No
+        // usage -> the measured cost is zero -> the hold comes back.
+        await settleSafely(() =>
+          settleMeasured(
+            uid,
+            charge.hold,
+            usage,
+            opts.sdkParams?.model ?? GATEWAY_DEFAULT_MODEL_ID,
+            { refId: opts.tag },
+          ),
+        );
+        settled = true;
         const content = completion.choices[0]?.message?.content?.trim() ?? "";
         if (!content) throw new Error("The AI returned an empty response");
         return { text: content, usage };
@@ -177,6 +255,16 @@ export async function chatCompletion(opts: {
           errorKind: classifyAiFailure(error),
           ...opts.ledger,
         });
+      }
+      // An attempt that produced nothing is not charged: the hold comes back
+      // (a retry takes its own charge).
+      if (!settled) {
+        await settleSafely(() =>
+          settleCharge(uid, charge.hold, 0, {
+            refId: opts.tag,
+            note: "attempt failed — hold refunded",
+          }),
+        );
       }
       lastError = error;
       if (opts.signal?.aborted) throw error;
