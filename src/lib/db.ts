@@ -177,6 +177,26 @@ export function currentScopeUserId(): string | null {
   return uid ? uid : null;
 }
 
+/**
+ * Resolve (and cache) the current identity BEFORE opening an interactive
+ * transaction.
+ *
+ * WHY THIS EXISTS: the ownership extension resolves the identity inside every
+ * query, and it resolves it with the BASE client. DATABASE_URL carries
+ * `connection_limit=1` (the Neon pooler), and an interactive transaction
+ * HOLDS that one connection — so a base-client query issued from inside a
+ * transaction has nowhere to run and the transaction dies with "Unable to
+ * start a transaction in the given time" / "Transaction already closed".
+ *
+ * Resolving the identity first fills the per-request cache (requestCache),
+ * so the queries inside the transaction reuse it and never need a second
+ * connection. Outside a request scope there is nothing to resolve and
+ * nothing to wait for.
+ */
+export async function warmIdentity(): Promise<void> {
+  await readIdentity();
+}
+
 async function identityFrom(uid: string, isAdmin: boolean): Promise<Identity> {
   if (isAdmin) return { uid, isAdmin: true, novelIds: null };
   if (!uid) return { uid: "", isAdmin: false, novelIds: [] };

@@ -1,0 +1,305 @@
+// ---------------------------------------------------------------------------
+// Novara AI — charge maths (Step 55).
+//
+// THE MATHS AND THE RESERVATION. No routes live here: this module turns a
+// measured provider call into a credit amount, and turns "a call is about to
+// happen" into a reservation that can be settled afterwards.
+//
+// THE RULE: 1 credit = $0.001 of measured AI cost (CREDITS_USD_PER_CREDIT).
+//
+//   usd     = estimateUpperBoundUsd(priceRow, promptTokens, completionTokens)
+//             (the EXISTING pricing helper — no second price table here)
+//   credits = ceil(usd / CREDITS_USD_PER_CREDIT)
+//   and at least 1 credit for any call that actually happened.
+//
+// UNPRICED MODELS MUST NOT BE FREE. A request that carried no model field
+// is recorded under "gateway-default" (and any id with no price row is
+// equally unpriced). Those calls fall back to the DEFAULT model's price —
+// the model the router actually used — and the ledger row is tagged
+// "priced-by-fallback". Without the fallback those calls would cost 0
+// credits, which would make the most common surface free.
+//
+// THE RESERVATION. A call is charged in two steps:
+//   beginCharge()  reserves a conservative per-surface hold (the cost is not
+//                  known yet — the provider has not answered),
+//   settleCharge()  replaces the hold with the MEASURED cost: the surplus is
+//                  refunded, and a call that cost MORE than the hold takes
+//                  the difference as DEBT (a negative balance, forgiven at the
+//                  next daily reset).
+// A failed call (0 tokens) is fully refunded: nothing is charged for it.
+//
+// NOT WIRED YET except for POST /api/generate (Step 55 scope). The other AI
+// routes are untouched.
+// ---------------------------------------------------------------------------
+
+import { DEFAULT_MODEL_ID } from "@/lib/ai/providers/registry";
+import { estimateUpperBoundUsd, priceForModelId } from "@/lib/usage/pricing";
+import {
+  accountState,
+  ensureDailyGrant,
+  globalKillSwitchActive,
+  holdCredits,
+  isAdmin,
+  nextResetAt,
+  recordAdminUsage,
+  refundCredits,
+  takeCreditsAllowDebt,
+  type CreditMeta,
+} from "./ledger";
+
+/** 1 credit = $0.001 of measured AI cost. */
+export const CREDITS_USD_PER_CREDIT = 0.001;
+
+/**
+ * Conservative per-surface holds, in credits. A hold is what a call is
+ * charged BEFORE its real cost is known; it is returned (or topped up) when
+ * the call settles.
+ *
+ * Env-overridable per surface: CREDITS_RESERVE_GENERATE, _DETECT, _WIZARD,
+ * _DRAFT, _REVIEW, _SEDIMENT, _AGENT_TURN, _TEAM_TURN.
+ */
+const SURFACE_RESERVES: Record<string, number> = {
+  generate: 5,
+  detect: 5,
+  wizard: 40,
+  draft: 25,
+  review: 30,
+  sediment: 25,
+  "agent-turn": 100,
+  "team-turn": 100,
+};
+
+/** The hold for a surface. Unknown surfaces get the LARGEST hold — never a
+ *  free pass (a new surface must be added to the map deliberately). */
+export function reserveCredits(surface: string): number {
+  const key = `CREDITS_RESERVE_${surface.toUpperCase().replace(/[^A-Z0-9]+/g, "_")}`;
+  const raw = process.env[key];
+  if (raw !== undefined && raw.trim() !== "") {
+    const parsed = Number(raw);
+    if (Number.isFinite(parsed) && parsed >= 0) return Math.trunc(parsed);
+  }
+  const configured = SURFACE_RESERVES[surface];
+  if (configured !== undefined) return configured;
+  return Math.max(...Object.values(SURFACE_RESERVES));
+}
+
+export interface CreditsFromUsage {
+  /** Credits to charge for this call (0 when nothing was measured). */
+  credits: number;
+  /** The measured-cost estimate in USD (an upper bound). */
+  usd: number;
+  /** Was the price taken from the DEFAULT model because the id had no price? */
+  pricedByFallback: boolean;
+  /** The model id the price came from. */
+  pricedModelId: string;
+  /** The ledger note to attach ("priced-by-fallback" when the fallback was used). */
+  note: string | null;
+}
+
+/**
+ * The credit cost of one measured call.
+ *
+ * `modelId` is the REQUEST-side id exactly as it was recorded in UsageCall
+ * ("gateway-default" for a request that carried no model field).
+ */
+export function creditsFromUsage(
+  modelId: string,
+  promptTokens: number,
+  completionTokens: number,
+): CreditsFromUsage {
+  const prompt = Math.max(0, Math.trunc(promptTokens || 0));
+  const completion = Math.max(0, Math.trunc(completionTokens || 0));
+
+  const direct = priceForModelId(modelId);
+  let priced = direct.priced;
+  let row = direct.priced ? direct.row : null;
+  let pricedModelId = modelId;
+
+  if (!direct.priced) {
+    // UNPRICED MUST NOT BE FREE: fall back to the DEFAULT model's price —
+    // the model the router actually used for a request with no model field.
+    const fallback = priceForModelId(DEFAULT_MODEL_ID);
+    if (fallback.priced) {
+      priced = true;
+      row = fallback.row;
+      pricedModelId = DEFAULT_MODEL_ID;
+    }
+  }
+
+  const usd = row ? estimateUpperBoundUsd(row, prompt, completion) : 0;
+  const nothingMeasured = prompt + completion === 0;
+  const credits = nothingMeasured ? 0 : Math.max(1, Math.ceil(usd / CREDITS_USD_PER_CREDIT));
+  const pricedByFallback = !direct.priced && priced;
+
+  return {
+    credits,
+    usd,
+    pricedByFallback,
+    pricedModelId,
+    note: pricedByFallback ? "priced-by-fallback" : null,
+  };
+}
+
+export interface ChargeMeta extends CreditMeta {
+  /** The app surface the charge belongs to ("generate", "draft", …). */
+  surface?: string;
+}
+
+export interface ChargeHold {
+  /** False → the charge must not proceed. */
+  ok: boolean;
+  /** The reserved credits (0 for an admin: nothing is reserved). */
+  hold: number;
+  /** Why the charge was refused. */
+  reason?: "insufficient" | "kill-switch";
+  /** Credits needed to proceed (the hold). */
+  need?: number;
+  /** The caller's balance at the moment of the refusal. */
+  balance?: number | null;
+  /** When the balance is reset (next UTC midnight, lazily). */
+  resetAt?: string;
+  /** True when the caller is an admin (unlimited, nothing is deducted). */
+  admin?: boolean;
+}
+
+/**
+ * Reserve the credits for a call that is about to happen.
+ *
+ * Order: admin (unlimited, never blocked) → global kill switch → lazy
+ * daily grant → the reservation itself (ONE conditional write).
+ */
+export async function beginCharge(
+  uid: string,
+  surface: string,
+  meta: ChargeMeta = {},
+): Promise<ChargeHold> {
+  if (isAdmin(uid)) {
+    // Admins are unlimited: nothing is reserved, nothing is deducted, and
+    // the kill switch never blocks them. The spend is recorded at settle.
+    return { ok: true, hold: 0, admin: true };
+  }
+
+  if (await globalKillSwitchActive()) {
+    return { ok: false, hold: 0, reason: "kill-switch" };
+  }
+
+  const hold = reserveCredits(surface);
+  if (hold <= 0) {
+    return { ok: true, hold: 0 };
+  }
+
+  // Lazy reset: the allowance is granted on the first credit operation of
+  // the day — there is no cron.
+  await ensureDailyGrant(uid);
+
+  const reserved = await holdCredits(uid, hold, {
+    ...meta,
+    note: meta.note ?? `hold for ${surface}`,
+  });
+  if (!reserved.ok) {
+    const account = await accountState(uid);
+    return {
+      ok: false,
+      hold: 0,
+      reason: "insufficient",
+      need: hold,
+      balance: account?.balance ?? null,
+      resetAt: nextResetAt(),
+    };
+  }
+  return { ok: true, hold, balance: reserved.balance };
+}
+
+export interface SettleResult {
+  ok: boolean;
+  /** The credits actually charged. */
+  actualCredits: number;
+  /** The balance after the settlement. */
+  balance: number | null;
+  /** Credits returned to the user (the hold surplus). */
+  refunded: number;
+  /** True when the call cost MORE than the hold and took on debt. */
+  wentToDebt: boolean;
+  admin?: boolean;
+}
+
+/**
+ * Settle a reservation against the measured cost.
+ *
+ * - actual < hold → the surplus is refunded (a positive history row),
+ * - actual == hold → nothing changes,
+ * - actual > hold → the difference is taken as DEBT (the balance may go
+ *   negative; the debt is forgiven at the next daily reset),
+ * - actual == 0 → the call did not happen (a failure): the WHOLE hold is
+ *   refunded and nothing is charged.
+ */
+export async function settleCharge(
+  uid: string,
+  hold: number,
+  actualCredits: number,
+  meta: CreditMeta = {},
+): Promise<SettleResult> {
+  const actual = Math.max(0, Math.trunc(actualCredits || 0));
+
+  if (isAdmin(uid)) {
+    // No deduction — but the spend is still recorded (and, per D10, it does
+    // not count toward the global kill switch).
+    if (actual > 0) {
+      await recordAdminUsage(uid, actual, {
+        ...meta,
+        note: meta.note ?? "admin spend (unlimited — no deduction)",
+      });
+    }
+    return { ok: true, actualCredits: actual, balance: null, refunded: 0, wentToDebt: false, admin: true };
+  }
+
+  if (actual === 0) {
+    // A failed call: full refund, no charge.
+    const refunded = hold > 0 ? await refundCredits(uid, hold, { ...meta, note: meta.note ?? "full refund — the call did not happen" }) : { ok: true, balance: null };
+    return {
+      ok: true,
+      actualCredits: 0,
+      balance: refunded.balance,
+      refunded: hold,
+      wentToDebt: false,
+    };
+  }
+
+  if (actual < hold) {
+    const surplus = hold - actual;
+    const refunded = await refundCredits(uid, surplus, { ...meta, note: meta.note ?? "hold surplus returned" });
+    return {
+      ok: true,
+      actualCredits: actual,
+      balance: refunded.balance,
+      refunded: surplus,
+      wentToDebt: false,
+    };
+  }
+
+  if (actual > hold) {
+    const extra = await takeCreditsAllowDebt(uid, actual - hold, {
+      ...meta,
+      note: meta.note ?? "over hold — charged as debt (forgiven at the next daily reset)",
+    });
+    return {
+      ok: true,
+      actualCredits: actual,
+      balance: extra.balance,
+      refunded: 0,
+      wentToDebt: true,
+    };
+  }
+
+  const account = await accountState(uid);
+  return { ok: true, actualCredits: actual, balance: account?.balance ?? null, refunded: 0, wentToDebt: false };
+}
+
+/**
+ * The verified caller of this request. The middleware verifies the Firebase
+ * token and forwards `x-novara-uid`; the route reads it from the request.
+ */
+export function callerUid(req: Request): string | null {
+  const uid = req.headers.get("x-novara-uid")?.trim();
+  return uid ? uid : null;
+}

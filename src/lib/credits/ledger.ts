@@ -33,9 +33,37 @@
 // script scripts/prove-credits.ts is the only caller today.
 // ---------------------------------------------------------------------------
 
-import { db, dbRaw } from "@/lib/db";
+import { db, dbRaw, warmIdentity } from "@/lib/db";
 import { isAdminUid } from "@/lib/auth/admin";
 import { utcDayKey } from "@/lib/usage/retention";
+
+/**
+ * The interactive-transaction client type of the EXTENDED client (`db` is
+ * `base.$extends(...)`, so its transaction client is not PrismaClient).
+ */
+type CreditTx = Omit<
+  typeof db,
+  "$connect" | "$disconnect" | "$on" | "$transaction" | "$use" | "$extends"
+>;
+
+/**
+ * Run a credit transaction with the identity ALREADY resolved.
+ *
+ * The warm-up is not an optimisation. DATABASE_URL carries
+ * `connection_limit=1` (the Neon pooler) and an interactive transaction HOLDS
+ * that one connection, while the ownership extension's identity lookup uses
+ * the base client — so a cold identity inside a transaction deadlocks until
+ * the transaction times out ("Unable to start a transaction in the given
+ * time"). Resolving the identity first fills the per-request cache.
+ *
+ * maxWait/timeout are raised because several credit transactions queue
+ * behind the single pooled connection (ten parallel calls take a couple of
+ * transactions each).
+ */
+async function creditTransaction<T>(fn: (tx: CreditTx) => Promise<T>): Promise<T> {
+  await warmIdentity();
+  return await db.$transaction(fn, { maxWait: 20_000, timeout: 20_000 });
+}
 
 /** The configured daily free allowance, in credits. Read lazily (testable). */
 export function creditsDailyFree(): number {
@@ -44,7 +72,7 @@ export function creditsDailyFree(): number {
 
 /** The configured global daily spend cap, in credits, across ALL users. */
 export function creditsGlobalDailyCap(): number {
-  return envInt("CREDITS_GLOBAL_DAILY_CAP", 2000);
+  return envInt("CREDITS_GLOBAL_DAILY_CAP", 500);
 }
 
 function envInt(name: string, fallback: number): number {
@@ -120,7 +148,7 @@ export async function ensureDailyGrant(userId: string): Promise<CreditAccountSta
   const today = utcDayKey(new Date());
   const allowance = creditsDailyFree();
 
-  return await db.$transaction(async (tx) => {
+  return await creditTransaction(async (tx) => {
     // 1. The account row must exist. `update: {}` makes this a no-op for an
     //    existing row, so concurrent callers cannot create two.
     await tx.creditAccount.upsert({
@@ -200,7 +228,7 @@ export async function tryConsume(
   // operation — no cron, no scheduler.
   await ensureDailyGrant(userId);
 
-  return await db.$transaction(async (tx) => {
+  return await creditTransaction(async (tx) => {
     // The spend is ONE conditional write: the check and the decrement are
     // the same statement. Never read-then-write.
     const spent = await tx.creditAccount.updateMany({
@@ -256,7 +284,7 @@ export async function refund(
     return { ok: true, reason: "admin", balance: null };
   }
 
-  return await db.$transaction(async (tx) => {
+  return await creditTransaction(async (tx) => {
     const credited = await tx.creditAccount.updateMany({
       where: { userId },
       data: { balance: { increment: amount } },
@@ -281,6 +309,11 @@ export async function refund(
 /**
  * The world's spend today (credits), across ALL users.
  *
+ * D10 (Step 55): admin usage does NOT count. `admin_usage` rows are
+ * excluded, so an admin's own spending can never trip the kill switch for
+ * everybody else. Admins are unlimited by product decision, and the cap is a
+ * guard for the shared world spend.
+ *
  * This is the ONE unscoped read in this module, and it is deliberate: the
  * metric is global by definition ("sum of negative deltas for today across
  * all users"). The ownership-scoped client CANNOT express it — it would
@@ -293,7 +326,11 @@ export async function globalSpendToday(): Promise<number> {
   const start = new Date();
   start.setUTCHours(0, 0, 0, 0);
   const agg = await dbRaw.creditLedger.aggregate({
-    where: { createdAt: { gte: start }, delta: { lt: 0 } },
+    where: {
+      createdAt: { gte: start },
+      delta: { lt: 0 },
+      kind: { not: "admin_usage" },
+    },
     _sum: { delta: true },
   });
   return -(agg._sum.delta ?? 0);
@@ -302,4 +339,141 @@ export async function globalSpendToday(): Promise<number> {
 /** Is the global kill switch active? (World spend today > the cap.) */
 export async function globalKillSwitchActive(): Promise<boolean> {
   return (await globalSpendToday()) > creditsGlobalDailyCap();
+}
+
+/** The current account row, or null when the user has none. */
+export async function accountState(userId: string): Promise<CreditAccountState | null> {
+  return await db.creditAccount.findUnique({ where: { userId } });
+}
+
+/**
+ * The next lazy daily reset: tomorrow 00:00:00 UTC. The allowance is
+ * granted on the first credit operation after that moment, so this is when
+ * the balance goes back to the allowance (and any debt is forgiven).
+ */
+export function nextResetAt(now = new Date()): string {
+  const next = new Date(now);
+  next.setUTCHours(0, 0, 0, 0);
+  next.setUTCDate(next.getUTCDate() + 1);
+  return next.toISOString();
+}
+
+/**
+ * Reserve (hold) credits for a charge that has not been measured yet: ONE
+ * conditional write, `balance >= amount`. `ok === false` means the user
+ * cannot afford it.
+ */
+export async function holdCredits(
+  userId: string,
+  amount: number,
+  meta: CreditMeta = {},
+): Promise<{ ok: boolean; balance: number | null }> {
+  const value = requirePositiveInt(amount);
+  return await creditTransaction(async (tx) => {
+    const taken = await tx.creditAccount.updateMany({
+      where: { userId, balance: { gte: value } },
+      data: { balance: { decrement: value } },
+    });
+    if (taken.count === 0) {
+      const account = await tx.creditAccount.findUnique({ where: { userId } });
+      return { ok: false, balance: account?.balance ?? null };
+    }
+    await tx.creditLedger.create({
+      data: {
+        userId,
+        delta: -value,
+        kind: "spend",
+        refId: meta.refId ?? null,
+        note: meta.note ?? null,
+      },
+    });
+    const account = await tx.creditAccount.findUnique({ where: { userId } });
+    return { ok: true, balance: account?.balance ?? null };
+  });
+}
+
+/**
+ * Give credits back (a surplus hold, a refund). Increments the balance and
+ * writes a positive history row in the same transaction.
+ */
+export async function refundCredits(
+  userId: string,
+  amount: number,
+  meta: CreditMeta = {},
+): Promise<{ ok: boolean; balance: number | null }> {
+  const value = requirePositiveInt(amount);
+  return await creditTransaction(async (tx) => {
+    const given = await tx.creditAccount.updateMany({
+      where: { userId },
+      data: { balance: { increment: value } },
+    });
+    if (given.count === 0) return { ok: false, balance: null };
+    await tx.creditLedger.create({
+      data: {
+        userId,
+        delta: value,
+        kind: "adjustment",
+        refId: meta.refId ?? null,
+        note: meta.note ?? null,
+      },
+    });
+    const account = await tx.creditAccount.findUnique({ where: { userId } });
+    return { ok: true, balance: account?.balance ?? null };
+  });
+}
+
+/**
+ * Take credits even when that pushes the balance NEGATIVE.
+ *
+ * The balance may go below zero on purpose: the cost was really incurred
+ * (a measured call cost more than the hold reserved). The debt is recorded
+ * in the ledger like any other spend and is FORGIVEN at the next daily
+ * reset — `ensureDailyGrant` sets the balance back to the allowance.
+ */
+export async function takeCreditsAllowDebt(
+  userId: string,
+  amount: number,
+  meta: CreditMeta = {},
+): Promise<{ ok: boolean; balance: number | null }> {
+  const value = requirePositiveInt(amount);
+  return await creditTransaction(async (tx) => {
+    const taken = await tx.creditAccount.updateMany({
+      where: { userId },
+      data: { balance: { decrement: value } },
+    });
+    if (taken.count === 0) return { ok: false, balance: null };
+    await tx.creditLedger.create({
+      data: {
+        userId,
+        delta: -value,
+        kind: "spend",
+        refId: meta.refId ?? null,
+        note: meta.note ?? null,
+      },
+    });
+    const account = await tx.creditAccount.findUnique({ where: { userId } });
+    return { ok: true, balance: account?.balance ?? null };
+  });
+}
+
+/**
+ * Record an admin's spend: a ledger row, NO deduction. Admins are
+ * unlimited (product decision) — but the spend is still recorded, and it
+ * does NOT count toward the global kill switch (D10).
+ */
+export async function recordAdminUsage(
+  userId: string,
+  amount: number,
+  meta: CreditMeta = {},
+): Promise<void> {
+  const value = requirePositiveInt(amount);
+  await db.creditLedger.create({
+    data: {
+      userId,
+      delta: -value,
+      kind: "admin_usage",
+      refId: meta.refId ?? null,
+      note: meta.note ?? null,
+    },
+  });
 }

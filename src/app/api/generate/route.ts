@@ -3,7 +3,8 @@ import { z } from "zod";
 import ZAI from "@/lib/ai/router";
 import { AI_TIMEOUT_MS, withTimeout } from "@/lib/ai-heuristics";
 import { classifyAiFailure, extractRealUsage } from "@/lib/usage/usage-shapes";
-import { recordUsageCall } from "@/lib/usage/usage-store";
+import { recordUsageCall, GATEWAY_DEFAULT_MODEL_ID } from "@/lib/usage/usage-store";
+import { beginCharge, callerUid, creditsFromUsage, settleCharge } from "@/lib/credits/charge";
 
 export const maxDuration = 120;
 
@@ -77,6 +78,32 @@ export async function POST(req: Request) {
 
   const { mode, topic, question } = parsedBody.data;
 
+  // ---- SPEND GATE (Step 55) -------------------------------------------
+  // The credits are reserved BEFORE the provider is called, so an
+  // unaffordable request never reaches the model and never costs money.
+  const uid = callerUid(req);
+  if (!uid) {
+    return NextResponse.json({ error: "unauthenticated" }, { status: 401 });
+  }
+  const charge = await beginCharge(uid, "generate", { refId: mode, note: "generate" });
+  if (!charge.ok) {
+    if (charge.reason === "kill-switch") {
+      // The world spend for the day is over the cap: all non-admin AI spend
+      // stops until the next reset.
+      return NextResponse.json({ error: "globally_paused" }, { status: 429 });
+    }
+    return NextResponse.json(
+      {
+        error: "insufficient_credits",
+        need: charge.need ?? 0,
+        balance: charge.balance ?? 0,
+        resetAt: charge.resetAt ?? null,
+      },
+      { status: 402 },
+    );
+  }
+  // ----------------------------------------------------------------------
+
   let messages: AiMessage[];
   if (mode === "ai-essay") {
     messages = [
@@ -115,10 +142,12 @@ export async function POST(req: Request) {
   // row (F3). A sent attempt with no completion payload records one zero-token
   // failed row (F1); a completion without usage records nothing (F4).
   let sent = false;
+  let completion: unknown = null;
+  let providerError: unknown = null;
   try {
     const zai = await ZAI.create();
     sent = true;
-    const completion: unknown = await withTimeout(
+    completion = await withTimeout(
       zai.chat.completions.create({
         messages,
         thinking: { type: "disabled" },
@@ -126,32 +155,26 @@ export async function POST(req: Request) {
       AI_TIMEOUT_MS,
       "[generate] AI request",
     );
-    // Persist the per-call row (standalone detector tool — global-only,
-    // never culminates in a novel). Measured even when the content check
-    // below fails — the provider billed what it billed.
-    recordUsageCall({ surface: "generate", usage: extractRealUsage(completion) });
-    const text = extractCompletionContent(completion);
-    if (text === null || text.trim().length === 0) {
-      return NextResponse.json(
-        { success: false, error: "AI returned an empty response." },
-        { status: 502 },
-      );
-    }
-    return NextResponse.json({
-      success: true,
-      text: text.trim(),
-      model: "AI",
-    });
   } catch (error) {
+    providerError = error;
+  }
+
+  if (providerError) {
     if (sent) {
       recordUsageCall({
         surface: "generate",
         usage: null,
         status: "failed",
-        errorKind: classifyAiFailure(error),
+        errorKind: classifyAiFailure(providerError),
       });
     }
-    console.error("[generate] AI request failed:", error);
+    // A failed call is NOT charged: the whole hold comes back (0 tokens).
+    try {
+      await settleCharge(uid, charge.hold, 0, { refId: mode, note: "call failed — hold refunded" });
+    } catch (settleError) {
+      console.error("[generate] settle failed:", settleError);
+    }
+    console.error("[generate] AI request failed:", providerError);
     return NextResponse.json(
       {
         success: false,
@@ -161,4 +184,43 @@ export async function POST(req: Request) {
       { status: 502 },
     );
   }
+
+  // Persist the per-call row (standalone detector tool — global-only,
+  // never culminates in a novel). Measured even when the content check
+  // below fails — the provider billed what it billed.
+  const usage = extractRealUsage(completion);
+  recordUsageCall({ surface: "generate", usage });
+
+  // ---- SPEND GATE: settle the reservation against the MEASURED cost -----
+  // The tokens used here are exactly the ones recorded in UsageCall. This
+  // route sends no model field, so the request-side id is
+  // "gateway-default" — the price comes from the DEFAULT model's row and
+  // the ledger row is tagged "priced-by-fallback" (an unpriced call is
+  // never free). With no usage object at all the cost is unknown: the hold
+  // stands (no refund).
+  const charged = usage
+    ? creditsFromUsage(GATEWAY_DEFAULT_MODEL_ID, usage.promptTokens, usage.completionTokens)
+    : null;
+  try {
+    await settleCharge(uid, charge.hold, charged ? charged.credits : charge.hold, {
+      refId: mode,
+      note: charged?.note ?? "no usage reported — the hold stands",
+    });
+  } catch (settleError) {
+    console.error("[generate] settle failed:", settleError);
+  }
+  // -----------------------------------------------------------------------
+
+  const text = extractCompletionContent(completion);
+  if (text === null || text.trim().length === 0) {
+    return NextResponse.json(
+      { success: false, error: "AI returned an empty response." },
+      { status: 502 },
+    );
+  }
+  return NextResponse.json({
+    success: true,
+    text: text.trim(),
+    model: "AI",
+  });
 }
