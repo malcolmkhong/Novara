@@ -428,3 +428,6 @@ export const BRAND = {
     "Novara AI is not just an AI writing tool — it is an AI-powered Novel Creation System that helps you plan, write, edit and manage long-form fiction.",
   contactEmail: "hello@novara.ai",
 };
+
+/** The build version shown in Settings -> About (mirrors package.json). */
+export const APP_VERSION = "0.2.1";

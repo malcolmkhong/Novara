@@ -15,7 +15,8 @@ import type { ChapterDTO, NovelDetail, NovelSummary } from "@/lib/novara/types";
 import { useWriterStore } from "@/hooks/use-writer-store";
 import { NovelDashboard } from "./novel-dashboard";
 import { WorkbenchShell } from "./workbench-shell";
-import { UsageBalanceBadge } from "./usage-balance-badge";
+import { UserMenu } from "@/components/novara/user-menu";
+import { applyFontScale, readFontScale } from "@/lib/novara/settings";
 
 export function WriterApp({ onExit }: { onExit: () => void }) {
   const { toast } = useToast();
@@ -29,6 +30,9 @@ export function WriterApp({ onExit }: { onExit: () => void }) {
     // after mount. The store uses skipHydration, so this is the single
     // hydration-safe point where localStorage state re-enters the app.
     void useWriterStore.persist.rehydrate();
+    // Step 62 — the local editor font scale (novara.settings.fontScale) is
+    // applied as a CSS variable on <html>.
+    applyFontScale(readFontScale());
   }, []);
 
   const refreshList = useCallback(async () => {
@@ -150,12 +154,6 @@ export function WriterApp({ onExit }: { onExit: () => void }) {
             </span>
             <span className="font-display font-bold">AI Writer</span>
           </div>
-          <span className="ml-auto">
-            {/* P5-b — the central "Usage & balance" view lives AT the
-                account-like anchor (Guest session badge; proposal §5). The
-                badge visual is unchanged; it now opens the account view. */}
-            <UsageBalanceBadge />
-          </span>
         </div>
       </header>
 
@@ -195,9 +193,17 @@ export function WriterApp({ onExit }: { onExit: () => void }) {
       </main>
 
       {!detail && (
-        <footer className="mt-auto border-t bg-secondary/40 py-3 text-center text-xs text-muted-foreground">
-          Novara AI Writer — preview build · Full authentication and payments
-          arrive later · Export backups regularly
+        <footer className="mt-auto border-t bg-secondary/40 py-3">
+          <div className="mx-auto flex max-w-6xl items-center gap-3 px-4 sm:px-6">
+            {/* Step 62 — the dashboard has no rail, so the user menu lives at
+                the bottom-left of the footer strip. */}
+            <UserMenu />
+            <p className="min-w-0 flex-1 text-center text-xs text-muted-foreground">
+              Novara AI Writer — preview build · Full authentication and payments
+              arrive later · Export backups regularly
+            </p>
+            <span aria-hidden="true" className="size-8 shrink-0" />
+          </div>
         </footer>
       )}
     </div>

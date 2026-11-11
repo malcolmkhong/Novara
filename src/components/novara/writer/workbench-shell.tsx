@@ -82,6 +82,7 @@ import type { ArtifactTabId } from "@/config/writer";
 import { cn } from "@/lib/utils";
 import { ArtifactPane } from "./artifact-pane";
 import { AssetTree } from "./asset-tree";
+import { UserMenu } from "@/components/novara/user-menu";
 import { ConversationPane } from "./conversation-pane";
 import { ExportDialog } from "./import-export";
 import { buildPinOptions } from "./prompt-box";
@@ -521,6 +522,11 @@ export function WorkbenchShell({
           onDelete={() => setDeleteOpen(true)}
           addingChapter={addingChapter}
         />
+        {/* Step 62 — the user menu is pinned to the BOTTOM of the rail
+            (a sticky footer above the mobile switcher). */}
+        <div className="mt-auto shrink-0 border-t p-2">
+          <UserMenu />
+        </div>
       </aside>
 
       {/* Center — agent conversation */}
