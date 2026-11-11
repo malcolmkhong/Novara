@@ -379,7 +379,7 @@ export function ChapterEditor({
                       {formatWordCount(variant.wordCount)} words
                     </span>
                   </div>
-                  <p className="nice-scroll max-h-56 overflow-y-auto whitespace-pre-wrap px-3 py-2 font-serif text-[13px] leading-6 text-foreground/85">
+                  <p className="nice-scroll max-h-56 overflow-y-auto whitespace-pre-wrap px-3 py-2 novara-prose-preview font-serif text-foreground/85">
                     {variant.content}
                   </p>
                   <div className="border-t px-3 py-2">
@@ -566,7 +566,7 @@ export function ChapterEditor({
                     {formatWordCount(variant.wordCount)} words
                   </span>
                 </div>
-                <p className="nice-scroll max-h-56 overflow-y-auto whitespace-pre-wrap px-3 py-2 font-serif text-[13px] leading-6 text-foreground/85">
+                <p className="nice-scroll max-h-56 overflow-y-auto whitespace-pre-wrap px-3 py-2 novara-prose-preview font-serif text-foreground/85">
                   {variant.content}
                 </p>
                 <div className="border-t px-3 py-2">
@@ -811,7 +811,7 @@ export function ChapterEditor({
                     if (dirty && !saving) void save();
                   }}
                   placeholder="Write your chapter here — or click AI Draft to get a grounded first draft."
-                  className="nice-scroll min-h-[320px] flex-1 resize-y rounded-none border-0 font-serif text-[15px] leading-7 shadow-none focus-visible:ring-0 lg:min-h-[480px]"
+                  className="nice-scroll min-h-[320px] flex-1 resize-y rounded-none border-0 novara-prose-editor font-serif shadow-none focus-visible:ring-0 lg:min-h-[480px]"
                   aria-label="Chapter content"
                 />
               </div>

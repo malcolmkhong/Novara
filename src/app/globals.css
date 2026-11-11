@@ -155,7 +155,7 @@
  * rhythm; pairs with the font-display stack.
  * ------------------------------------------------------------------------ */
 .novara-prose {
-  font-size: 0.925rem;
+  font-size: calc(0.925rem * var(--novara-font-scale, 1));
   line-height: 1.75;
   overflow-wrap: break-word;
 }
@@ -165,10 +165,26 @@
 .novara-prose > *:last-child {
   margin-bottom: 0;
 }
+/* ---------------------------------------------------------------------------
+ * .novara-prose-editor / .novara-prose-preview — the WRITING surfaces
+ * (the chapter prose editor and the bible's prose fields, plus the chapter
+ * preview paragraphs). Step 62: the editor font size (Settings -> General ->
+ * Editor font size) is applied through --novara-font-scale on <html>, so the
+ * setting has a visible effect here. The serif stack + the rhythm stay the
+ * same; only the size scales.
+ * ------------------------------------------------------------------------ */
+.novara-prose-editor {
+  font-size: calc(15px * var(--novara-font-scale, 1));
+  line-height: calc(1.75rem * var(--novara-font-scale, 1));
+}
+.novara-prose-preview {
+  font-size: calc(13px * var(--novara-font-scale, 1));
+  line-height: calc(1.5rem * var(--novara-font-scale, 1));
+}
+
 .novara-prose p {
   margin: 0.85em 0;
-}
-.novara-prose h1,
+}.novara-prose h1,
 .novara-prose h2,
 .novara-prose h3,
 .novara-prose h4 {

@@ -587,7 +587,7 @@ export function CharacterDocument({
             setDirty(true);
           }}
           placeholder="Motivations, flaws, arc, relationships…"
-          className="nice-scroll min-h-[280px] resize-y rounded-none border-0 font-serif text-[15px] leading-7 shadow-none focus-visible:ring-0"
+          className="nice-scroll min-h-[280px] resize-y rounded-none border-0 novara-prose-editor font-serif shadow-none focus-visible:ring-0"
           aria-label="Description"
           readOnly={locked}
         />
@@ -1277,7 +1277,7 @@ export function WorldDocument({
             setDirty(true);
           }}
           placeholder="Rules, geography, history, dangers…"
-          className="nice-scroll min-h-[280px] resize-y rounded-none border-0 font-serif text-[15px] leading-7 shadow-none focus-visible:ring-0"
+          className="nice-scroll min-h-[280px] resize-y rounded-none border-0 novara-prose-editor font-serif shadow-none focus-visible:ring-0"
           aria-label="Content"
           readOnly={locked}
         />
@@ -1751,7 +1751,7 @@ export function VolumeDocument({
             setDirty(true);
           }}
           placeholder="The plan for this volume — arc, turning points, how it pays off…"
-          className="nice-scroll min-h-[280px] resize-y rounded-none border-0 font-serif text-[15px] leading-7 shadow-none focus-visible:ring-0"
+          className="nice-scroll min-h-[280px] resize-y rounded-none border-0 novara-prose-editor font-serif shadow-none focus-visible:ring-0"
           aria-label="Synopsis"
           readOnly={locked}
         />
@@ -1945,7 +1945,7 @@ export function BeatDocument({
             setDirty(true);
           }}
           placeholder="What happens in this beat…"
-          className="nice-scroll min-h-[280px] resize-y rounded-none border-0 font-serif text-[15px] leading-7 shadow-none focus-visible:ring-0"
+          className="nice-scroll min-h-[280px] resize-y rounded-none border-0 novara-prose-editor font-serif shadow-none focus-visible:ring-0"
           aria-label="Summary"
           readOnly={locked}
         />
