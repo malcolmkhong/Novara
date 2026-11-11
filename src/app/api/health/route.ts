@@ -28,9 +28,9 @@ import { dbRaw } from "@/lib/db";
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
-/** Build metadata written by the CI pipeline (see cloudbuild.yaml step 5). */
+/** Build metadata: RELEASE.json (VM pipeline) + GIT_SHA (Cloud Run pipeline). */
 type ReleaseInfo = {
-  commit?: string;
+  commit?: string | null;
   branch?: string;
   builtAt?: string;
   buildId?: string;
@@ -38,20 +38,42 @@ type ReleaseInfo = {
 
 let cachedRelease: ReleaseInfo | null = null;
 
+/**
+ * The commit the running process was built from.
+ *
+ * GIT_SHA is injected by the CI pipeline (Dockerfile ARG/ENV, and the Cloud Run
+ * `--set-env-vars`), so it is read at RUNTIME — that is the whole point:
+ * /api/health must name the commit that is actually serving traffic, not one
+ * baked into a file that only the (dormant) VM pipeline writes.
+ *
+ * It stays a plain string on purpose: no build timestamp, no build id. The
+ * commit IS the answer to "which code is running". When it is absent (local
+ * dev, or a manual build with no COMMIT_SHA) it is null — never the string
+ * "null", and never an empty string.
+ */
+function readCommit(): string | null {
+  const sha = (process.env.GIT_SHA ?? "").trim();
+  return sha ? sha : null;
+}
+
 function readRelease(): ReleaseInfo {
   if (cachedRelease) return cachedRelease;
+  let fromFile: ReleaseInfo = {};
   try {
     // Synchronous read on purpose: this file is tiny, is read at most once per
     // process, and keeping it sync avoids an await on the health path.
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const fs = require("node:fs") as typeof import("node:fs");
     const raw = fs.readFileSync("RELEASE.json", "utf8");
-    cachedRelease = JSON.parse(raw) as ReleaseInfo;
+    fromFile = JSON.parse(raw) as ReleaseInfo;
   } catch {
     // Absent file is normal in local dev — report it honestly as unknown.
-    cachedRelease = {};
+    fromFile = {};
   }
-  return cachedRelease ?? {};
+  // GIT_SHA wins (the pipeline's own truth); RELEASE.json is the fallback for
+  // the older VM pipeline.
+  cachedRelease = { ...fromFile, commit: readCommit() ?? fromFile.commit ?? null };
+  return cachedRelease;
 }
 
 export async function GET() {

@@ -56,6 +56,13 @@ ENV NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID=$NEXT_PUBLIC_FIREBASE_MESSAGING_SEN
 ENV NEXT_PUBLIC_FIREBASE_APP_ID=$NEXT_PUBLIC_FIREBASE_APP_ID
 ENV NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID=$NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID
 
+# Commit identity. Cloud Build injects it: --build-arg=GIT_SHA=$COMMIT_SHA.
+# It is NOT a NEXT_PUBLIC_* var, so it is never inlined into the client
+# bundle — it is read at runtime by /api/health, which reports the commit
+# that is actually running.
+ARG GIT_SHA
+ENV GIT_SHA=$GIT_SHA
+
 RUN bunx next build
 
 # Assemble the standalone runtime tree explicitly (next build does not copy
@@ -84,6 +91,12 @@ ENV NODE_ENV=production \
 # schema file's directory (prisma/), which is how the current dev layout ends
 # up at prisma/db/custom.db. Absolute removes that ambiguity in a container.
 ENV DATABASE_URL=file:/data/custom.db
+
+# The commit this image was built from. Cloud Run also injects GIT_SHA via
+# `--set-env-vars` (that value wins over the image ENV); re-declaring the ARG
+# here keeps a plain `docker build` / `docker run` honest too.
+ARG GIT_SHA
+ENV GIT_SHA=$GIT_SHA
 
 # Non-root runtime user
 RUN groupadd --system --gid 1001 nodejs \

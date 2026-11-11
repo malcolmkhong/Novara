@@ -12,6 +12,11 @@
 // shapes: direct `db.*`, the interactive `db.$transaction(async (tx) => …)`
 // form, and the array `db.$transaction([…])` form.
 //
+// The assertion is DELTA-based: it measures how many rows userA already owns
+// BEFORE this run and compares the AFTER counts against that baseline. It
+// never asserts absolute counts, so a leftover row from an earlier run (or a
+// re-run of this script) can no longer turn a PASS into "RESULT: LEAK".
+//
 // Run:  bun run db:prove:ownership
 // ---------------------------------------------------------------------------
 
@@ -56,6 +61,16 @@ async function main() {
   await diagnosticClientShapes();
 
   console.log("=== PROOF: /api/usage/invoice + /api/team/turns model paths ===");
+
+  // BASELINE. The assertion below is about the DELTA this run creates, never
+  // about absolute counts — otherwise one leftover row from an earlier run
+  // makes a healthy database look like a leak.
+  const beforeInvoices = await withUser(USER_A, false, () => db.usageInvoice.count());
+  const beforeTurns = await withUser(USER_A, false, () => db.teamTurnLog.count());
+  console.log(`baseline: userA already owns UsageInvoice=${beforeInvoices} TeamTurnLog=${beforeTurns}`);
+  console.log("");
+
+  let ok = false;
   try {
     // --- userA writes one row in each previously-leaking table -----------
     const invoice = await withUser(USER_A, false, () =>
@@ -116,33 +131,48 @@ async function main() {
     console.log(`userB sees UsageInvoice inside tx rows=${bTxInvoices.length}`);
     console.log(`userB sees TeamTurnLog  inside tx rows=${bTxTurns.length}`);
 
-    // --- userA must see exactly their own ---------------------------------
+    // --- userA must see exactly the rows it owns, PLUS this run's delta ---
     const aInvoices = await withUser(USER_A, false, () => db.usageInvoice.findMany());
     const aTurns = await withUser(USER_A, false, () => db.teamTurnLog.findMany());
-    console.log(`userA sees UsageInvoice rows=${aInvoices.length}`);
-    console.log(`userA sees TeamTurnLog  rows=${aTurns.length}`);
+    const invoiceDelta = aInvoices.length - beforeInvoices;
+    const turnDelta = aTurns.length - beforeTurns;
+    console.log(`userA sees UsageInvoice rows=${aInvoices.length} (delta +${invoiceDelta}, expected +2)`);
+    console.log(`userA sees TeamTurnLog  rows=${aTurns.length} (delta +${turnDelta}, expected +1)`);
 
-    const ok =
+    ok =
       bInvoices.length === 0 && bInvoiceCount === 0 &&
       bTurns.length === 0 && bTurnCount === 0 &&
       bTxInvoices.length === 0 && bTxTurns.length === 0 &&
-      aInvoices.length === 2 && aTurns.length === 1 &&
+      invoiceDelta === 2 && turnDelta === 1 &&
       invoice.userId === USER_A && turn.userId === USER_A && txInvoice.userId === USER_A;
-    console.log(ok ? "RESULT: ISOLATED (userB sees 0, userA sees their own)" : "RESULT: LEAK");
+    console.log(
+      ok
+        ? "PASS — ISOLATED (userB sees 0 via direct / array $transaction / interactive $transaction; userA delta +2 invoices, +1 turn)"
+        : "FAIL — LEAK or wrong delta (see the numbers above)",
+    );
   } finally {
     // --- cleanup: remove the proof rows with the RAW client ---------------
     for (const id of [created.invoiceId, created.txInvoiceId]) {
       if (id) await dbRaw.usageInvoice.delete({ where: { id } });
     }
     if (created.turnId) await dbRaw.teamTurnLog.delete({ where: { id: created.turnId } });
-    const left = await dbRaw.usageInvoice.count();
-    const leftT = await dbRaw.teamTurnLog.count();
-    console.log(`cleanup done: UsageInvoice rows now=${left}, TeamTurnLog rows now=${leftT}`);
+
+    // The run must leave the tables exactly as it found them, so a re-run
+    // starts from the same baseline and produces the same verdict.
+    const afterInvoices = await withUser(USER_A, false, () => db.usageInvoice.count());
+    const afterTurns = await withUser(USER_A, false, () => db.teamTurnLog.count());
+    const restored = afterInvoices === beforeInvoices && afterTurns === beforeTurns;
+    console.log(
+      `cleanup done: UsageInvoice rows now=${afterInvoices} (baseline ${beforeInvoices}), ` +
+        `TeamTurnLog rows now=${afterTurns} (baseline ${beforeTurns}) -> ${restored ? "RESTORED" : "NOT RESTORED"}`,
+    );
+    if (!restored) ok = false;
   }
+  return ok;
 }
 
 main()
-  .then(() => process.exit(0))
+  .then((ok) => process.exit(ok ? 0 : 1))
   .catch((err) => {
     console.error("PROOF FAILED:", err);
     process.exit(1);
