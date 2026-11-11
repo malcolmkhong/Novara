@@ -1,4 +1,4 @@
-import { jsonError, slugifyFilename } from "@/lib/novara/api-helpers";
+import { contentDisposition, jsonError, slugifyFilename } from "@/lib/novara/api-helpers";
 import { buildManuscriptMarkdown } from "@/lib/novara/export";
 
 export const dynamic = "force-dynamic";
@@ -29,7 +29,7 @@ export async function GET(_req: Request, { params }: Params) {
     status: 200,
     headers: {
       "Content-Type": "text/markdown; charset=utf-8",
-      "Content-Disposition": `attachment; filename="${filename}"`,
+      "Content-Disposition": contentDisposition("attachment", filename),
     },
   });
 }

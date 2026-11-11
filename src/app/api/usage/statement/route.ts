@@ -12,6 +12,7 @@
 // exists nowhere except in statements already exported.
 // ---------------------------------------------------------------------------
 
+import { contentDisposition } from "@/lib/novara/api-helpers";
 import { buildUsageStatement } from "@/lib/usage/retention";
 
 export const dynamic = "force-dynamic";
@@ -23,7 +24,10 @@ export async function GET() {
     status: 200,
     headers: {
       "Content-Type": "text/csv; charset=utf-8",
-      "Content-Disposition": `attachment; filename="novara-usage-statement-${stamp}.csv"`,
+      "Content-Disposition": contentDisposition(
+        "attachment",
+        `novara-usage-statement-${stamp}.csv`
+      ),
       "Cache-Control": "no-store",
     },
   });

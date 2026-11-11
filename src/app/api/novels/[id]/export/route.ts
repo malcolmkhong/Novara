@@ -1,5 +1,5 @@
 import { db } from "@/lib/db";
-import { jsonError, slugifyFilename } from "@/lib/novara/api-helpers";
+import { contentDisposition, jsonError, slugifyFilename } from "@/lib/novara/api-helpers";
 import type {
   ChapterStatus,
   NovelBackupFile,
@@ -159,7 +159,9 @@ export async function GET(_req: Request, { params }: Params) {
   return new Response(JSON.stringify(backup, null, 2), {
     headers: {
       "Content-Type": "application/json; charset=utf-8",
-      "Content-Disposition": `attachment; filename="${filename}"`,
+      // RFC 5987: the ASCII fallback keeps the header a ByteString-safe
+      // value while the real (possibly CJK) name rides in filename*.
+      "Content-Disposition": contentDisposition("attachment", filename),
     },
   });
 }
