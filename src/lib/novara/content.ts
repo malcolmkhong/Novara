@@ -279,10 +279,6 @@ export function getBudgets(): Budgets {
   return load().budgets;
 }
 
-export function getRoles(): RoleConfig[] {
-  return load().roles;
-}
-
 export function getSkillEntry(id: string): SkillEntry | undefined {
   return load().skills.find((s) => s.id === id);
 }

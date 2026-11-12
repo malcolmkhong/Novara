@@ -1,16 +1,17 @@
 // ---------------------------------------------------------------------------
 // Novara AI — asset gate (Phase 9): the write-gate law for NON-BODY assets.
 //
-// Chapters already obey lib/novara/write-gate.ts (定稿锁 + 409 + reopen
-// demotion + ChapterVersion snapshots). This module extends the SAME law to
-// the rest of the repository — characters, world entries, outline beats,
-// volumes, ledger rows and the story contract:
+// Chapters already obey lib/novara/write-gate.ts (the finalization lock + 409
+// + reopen demotion + ChapterVersion snapshots). This module extends the SAME
+// law to the rest of the repository — characters, world entries, outline
+// beats, volumes, ledger rows and the story contract:
 //
 //   1. A `final` asset is Immutable Canon: any PATCH/DELETE without an
 //      explicit `reopen: true` is refused with 409 requiresReopen.
 //   2. Reopening archives the final state VERBATIM into AssetVersion
-//      (reason "reopen", 保留原版) and downgrades the asset to draft in the
-//      same request — the revision then flows through the normal draft path.
+//      (reason "reopen", the original is kept) and downgrades the asset to
+//      draft in the same request — the revision then flows through the normal
+//      draft path.
 //   3. Locking an asset (status → "final") archives the pre-final state
 //      (reason "finalize") so the canon trail is auditable end to end.
 //
@@ -35,16 +36,6 @@ export type AssetType =
 /** The row field that carries the canon lock: `status` (most assets) or
  * `lock` (storyline/promise/clue, whose `status` is a lifecycle state). */
 export type AssetLockField = "status" | "lock";
-
-export interface AssetLockRow {
-  status?: string | null;
-  lock?: string | null;
-}
-
-/** True when the asset is locked canon (Immutable Canon). */
-export function isCanonLocked(row: AssetLockRow): boolean {
-  return row.status === "final" || row.lock === "final";
-}
 
 /** Build the labeled snapshot block preserved into AssetVersion. */
 export function buildAssetSnapshot(
@@ -200,7 +191,7 @@ export function canonLock(lockField: AssetLockField): {
 }
 
 /** DELETE gate — a locked asset refuses deletion unless reopen is explicit;
- * even then the final state is archived first (保留原版). */
+ * even then the final state is archived first (the original is kept). */
 export async function assetDeleteGate(input: {
   novelId: string;
   assetType: AssetType;

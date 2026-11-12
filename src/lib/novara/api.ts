@@ -80,7 +80,8 @@ export interface CreateNovelInput {
   characters?: { name: string; role?: string; description?: string }[];
   worldEntries?: { title: string; category?: string; content?: string }[];
   outlineBeats?: { title: string; summary?: string }[];
-  // Phase 9 — written at creation by the wizard (构想快照 verbatim baseline).
+  // Phase 9 — written at creation by the wizard (the concept snapshot, kept
+  // verbatim as the baseline).
   conceptSnapshot?: string;
   // P5 — the wizard session id (client crypto.randomUUID) that generated
   // this foundation; persisted as a UsageProvenance link so the session's
@@ -137,12 +138,12 @@ export interface UpdateNovelInput {
   synopsis?: string;
   targetWords?: number;
   status?: NovelStatus;
-  /** Story contract (作品契约) — upserted 1:1 (Phase 7 P1). */
+  /** Story contract (the promise this book made) — upserted 1:1 (Phase 7 P1). */
   contract?: string;
   /** Contract canon lock (Phase 9): "final" locks; editing needs reopen. */
   contractStatus?: "draft" | "final";
   contractReopen?: boolean;
-  /** 构想快照 — initial creative vision snapshot (Phase 8). */
+  /** Concept snapshot — the initial creative vision snapshot (Phase 8). */
   conceptSnapshot?: string;
 }
 
@@ -178,7 +179,7 @@ export interface UpdateChapterInput {
   title?: string;
   content?: string;
   status?: ChapterStatus;
-  /** Chapter brief (细纲) — author-editable writing brief (Phase 7). */
+  /** Chapter brief — the author-editable writing brief (Phase 7). */
   brief?: string;
   /** Explicit confirmation required by the anti-overwrite gate (409). */
   overwrite?: boolean;
@@ -306,12 +307,8 @@ export function deleteCharacter(id: string, reopen = false): Promise<{ ok: true 
 }
 
 // ---------------------------------------------------------------------------
-// 世界书 groups (Phase 9) — second-level grouping in the world bible
+// World-book groups (Phase 9) — second-level grouping in the world bible
 // ---------------------------------------------------------------------------
-
-export function listWorldGroups(novelId: string): Promise<{ groups: WorldGroupDTO[] }> {
-  return request(`/api/novels/${novelId}/world-groups`);
-}
 
 export function addWorldGroup(
   novelId: string,
@@ -348,7 +345,7 @@ export interface WorldEntryInput {
 }
 
 export interface WorldEntryUpdateInput extends Partial<WorldEntryInput> {
-  /** 世界书 second-level grouping (Phase 9) — null ungroups. */
+  /** World-book second-level grouping (Phase 9) — null ungroups. */
   groupId?: string | null;
   /** Canon lock (Phase 9): "final" locks; editing a locked row needs reopen. */
   status?: "draft" | "final";
@@ -425,16 +422,12 @@ export function deleteOutlineBeat(id: string, reopen = false): Promise<{ ok: tru
 }
 
 // ---------------------------------------------------------------------------
-// Volumes (Phase 7 P1) — 卷实体
+// Volumes (Phase 7 P1) — the volume entity
 // ---------------------------------------------------------------------------
 
 export interface VolumeInput {
   title: string;
   synopsis?: string;
-}
-
-export function getVolumes(novelId: string): Promise<{ volumes: VolumeDTO[] }> {
-  return request(`/api/novels/${novelId}/volumes`);
 }
 
 export function addVolume(
@@ -469,7 +462,8 @@ export function deleteVolume(id: string, reopen = false): Promise<{ ok: true }> 
 }
 
 // ---------------------------------------------------------------------------
-// Ledger (Phase 7 P1 + Phase 8) — 故事线 / 时间线 / 人物弧线 / 承诺 / 线索
+// Ledger (Phase 7 P1 + Phase 8) — storylines / timeline / character arcs /
+// promises / clues
 // ---------------------------------------------------------------------------
 
 export function getLedger(novelId: string): Promise<LedgerView> {
@@ -537,12 +531,8 @@ export function deleteLedgerRow(
 }
 
 // ---------------------------------------------------------------------------
-// Chapter packs (Phase 8) — 材料包 / 定稿准备包 (草稿区 workspace)
+// Chapter packs (Phase 8) — the material / prep packs (draft-area workspace)
 // ---------------------------------------------------------------------------
-
-export function getPacks(novelId: string): Promise<{ packs: ChapterPackDTO[] }> {
-  return request(`/api/novels/${novelId}/packs`);
-}
 
 export interface PackUpsertInput {
   kind: ChapterPackKind;
