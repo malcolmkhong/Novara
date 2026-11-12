@@ -56,7 +56,7 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
-import type { AgentEvent, AgentRunMode, PinnedRef, PinnedRefType } from "@/lib/novara/agent-types";
+import type { AgentRunMode, PinnedRef, PinnedRefType } from "@/lib/novara/agent-types";
 import type { ModelSelection } from "@/lib/novara/models";
 import type { NovelDetail } from "@/lib/novara/types";
 import {
@@ -64,7 +64,6 @@ import {
   filterSlashCommands,
   type SlashCommand,
 } from "./slash-commands";
-import { ContextUsageButton } from "./context-usage-panel";
 import { ModelPicker } from "./model-picker";
 import { cn } from "@/lib/utils";
 
@@ -200,8 +199,6 @@ export function PromptBox({
   onTogglePin,
   onClearPins,
   pinOptions,
-  novelId,
-  usageEvents,
 }: {
   value: string;
   onChange: (next: string) => void;
@@ -216,10 +213,6 @@ export function PromptBox({
   onTogglePin: (ref: PinnedRef) => void;
   onClearPins: () => void;
   pinOptions: PinOption[];
-  /** Context Usage lives on the toolbar's left cluster (next to +). */
-  novelId: string;
-  /** The displayed run's events — powers the live/last-measured usage. */
-  usageEvents: AgentEvent[];
 }) {
   const [pinOpen, setPinOpen] = useState(false);
   const [token, setToken] = useState<TokenState | null>(null);
@@ -388,16 +381,16 @@ export function PromptBox({
     <div
       ref={containerRef}
       className={cn(
-        "rounded-2xl border bg-card shadow-sm transition-colors",
+        "mx-auto w-full max-w-[680px] rounded-2xl border bg-card px-3 py-2.5 shadow-sm transition-colors",
         "focus-within:border-primary/60 focus-within:ring-2 focus-within:ring-primary/20"
       )}
     >
       {/* Input area — borderless textarea over a rich placeholder layer */}
-      <div className="relative px-4 pt-3.5">
+      <div className="relative px-1">
         {value === "" && (
           <div
             aria-hidden="true"
-            className="pointer-events-none absolute inset-x-4 top-3.5 select-none text-sm leading-6 text-muted-foreground/80"
+            className="pointer-events-none absolute inset-x-1 top-1 select-none text-sm leading-6 text-muted-foreground/80"
           >
             Give the team a goal…
             <span className="font-medium text-primary/90"> @ pin context</span>,
@@ -452,7 +445,7 @@ export function PromptBox({
             }
           }}
           className={cn(
-            "block w-full resize-none border-0 bg-transparent p-0 text-sm leading-6",
+            "block w-full resize-none border-0 bg-transparent px-1 py-1 text-sm leading-6",
             "min-h-[72px] max-h-56 overflow-y-auto",
             "outline-none focus-visible:outline-none focus-visible:ring-0",
             "placeholder:text-transparent"
@@ -464,7 +457,7 @@ export function PromptBox({
       {/* Pinned context chips — inside the container, under the text */}
       {pinnedRefs.length > 0 && (
         <div
-          className="flex flex-wrap items-center gap-1.5 px-4 pb-1"
+          className="flex flex-wrap items-center gap-1.5 px-1 pb-1"
           aria-label="Pinned context"
         >
           {pinnedRefs.map((ref) => (
@@ -494,142 +487,141 @@ export function PromptBox({
         </div>
       )}
 
-      {/* Toolbar */}
-      <div className="flex flex-wrap items-center justify-between gap-2 px-3 pb-3 pt-1.5">
-        {/* Left — pin menu + context usage. The gauge sits exactly between
-            the + button and the model picker: run parameters share one row. */}
-        <div className="flex items-center gap-1.5">
-          <Popover open={pinOpen} onOpenChange={setPinOpen}>
-            <PopoverTrigger asChild>
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                className="h-8 w-8 rounded-full text-muted-foreground hover:text-foreground"
-                aria-label="Pin context — attach chapters, characters, world entries"
-                title="Pin context — or type @ in the composer"
-              >
-                <Plus className="h-4.5 w-4.5" aria-hidden="true" />
-              </Button>
-            </PopoverTrigger>
-            <PopoverContent align="start" className="w-80 p-0">
-              <Command>
-                <CommandInput placeholder="Search chapters, characters, world…" />
-                <CommandList className="max-h-72 overflow-y-auto">
-                  <CommandEmpty>Nothing matches in this novel.</CommandEmpty>
-                  {[...grouped.entries()].map(([group, options]) => (
-                    <CommandGroup key={group} heading={group}>
-                      {options.map((opt) => {
-                        const pinned = pinnedKeys.has(`${opt.type}:${opt.id}`);
-                        return (
-                          <CommandItem
-                            key={`${opt.type}:${opt.id}`}
-                            value={`${opt.label} ${group}`}
-                            onSelect={() =>
-                              onTogglePin({ type: opt.type, id: opt.id, label: opt.label })
-                            }
-                          >
-                            <Check
-                              className={cn(
-                                "mr-2 h-4 w-4 shrink-0",
-                                pinned ? "opacity-100" : "opacity-0"
-                              )}
-                              aria-hidden="true"
-                            />
-                            <span className="truncate">{opt.label}</span>
-                          </CommandItem>
-                        );
-                      })}
-                    </CommandGroup>
-                  ))}
-                </CommandList>
-              </Command>
-            </PopoverContent>
-          </Popover>
+      {/* Controls — one row inside the card: attach · model (the thinking
+          level lives in the picker's own surface) · permission mode ·
+          spacer · voice · send. Nothing was added, nothing was removed.
+          flex-wrap is kept from the old toolbar: below ~400px the seven
+          controls do not fit on one line and must wrap instead of
+          overflowing the card. */}
+      <div className="mt-1 flex flex-wrap items-center gap-1.5 px-1">
+        {/* 1 — attach / pin context */}
+        <Popover open={pinOpen} onOpenChange={setPinOpen}>
+          <PopoverTrigger asChild>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="h-8 w-8 rounded-full text-muted-foreground hover:text-foreground"
+              aria-label="Pin context — attach chapters, characters, world entries"
+              title="Pin context — or type @ in the composer"
+            >
+              <Plus className="h-4.5 w-4.5" aria-hidden="true" />
+            </Button>
+          </PopoverTrigger>
+          <PopoverContent align="start" className="w-80 p-0">
+            <Command>
+              <CommandInput placeholder="Search chapters, characters, world…" />
+              <CommandList className="max-h-72 overflow-y-auto">
+                <CommandEmpty>Nothing matches in this novel.</CommandEmpty>
+                {[...grouped.entries()].map(([group, options]) => (
+                  <CommandGroup key={group} heading={group}>
+                    {options.map((opt) => {
+                      const pinned = pinnedKeys.has(`${opt.type}:${opt.id}`);
+                      return (
+                        <CommandItem
+                          key={`${opt.type}:${opt.id}`}
+                          value={`${opt.label} ${group}`}
+                          onSelect={() =>
+                            onTogglePin({ type: opt.type, id: opt.id, label: opt.label })
+                          }
+                        >
+                          <Check
+                            className={cn(
+                              "mr-2 h-4 w-4 shrink-0",
+                              pinned ? "opacity-100" : "opacity-0"
+                            )}
+                            aria-hidden="true"
+                          />
+                          <span className="truncate">{opt.label}</span>
+                        </CommandItem>
+                      );
+                    })}
+                  </CommandGroup>
+                ))}
+              </CommandList>
+            </Command>
+          </PopoverContent>
+        </Popover>
 
-          <ContextUsageButton
-            novelId={novelId}
-            modelId={modelSelection.modelId}
-            thinkingLevel={modelSelection.thinkingLevel}
-            events={usageEvents}
-          />
-        </div>
+        {/* 2 + 3 — model picker; the thinking level is chosen in its surface */}
+        <ModelPicker selection={modelSelection} onChange={onModelChange} />
 
-        {/* Right — model picker · permissions · voice · send */}
-        <div className="flex items-center gap-1.5">
-          <ModelPicker selection={modelSelection} onChange={onModelChange} />
-
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                className="h-8 gap-1.5 rounded-full px-3 text-xs"
-                aria-label={`Run permission: ${MODE_META[mode].label}`}
-              >
-                <ModeIcon className="h-3.5 w-3.5" aria-hidden="true" />
-                {MODE_META[mode].label}
-                <ChevronDown className="h-3 w-3 opacity-60" aria-hidden="true" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-72">
-              <DropdownMenuLabel className="text-[11px] text-muted-foreground">
-                Preference is saved for this novel
-              </DropdownMenuLabel>
-              {(Object.keys(MODE_META) as AgentRunMode[]).map((m) => {
-                const meta = MODE_META[m];
-                const Icon = meta.icon;
-                return (
-                  <DropdownMenuItem
-                    key={m}
-                    className="items-start gap-2 py-2"
-                    onSelect={() => onModeChange(m)}
-                  >
-                    <Icon className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
-                    <span className="flex-1">
-                      <span className="block text-sm font-medium">{meta.label}</span>
-                      <span className="block text-[11px] leading-4 text-muted-foreground">
-                        {meta.hint}
-                      </span>
+        {/* 4 — approval / permission mode */}
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-8 gap-1.5 rounded-full px-3 text-xs"
+              aria-label={`Run permission: ${MODE_META[mode].label}`}
+            >
+              <ModeIcon className="h-3.5 w-3.5" aria-hidden="true" />
+              {MODE_META[mode].label}
+              <ChevronDown className="h-3 w-3 opacity-60" aria-hidden="true" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-72">
+            <DropdownMenuLabel className="text-[11px] text-muted-foreground">
+              Preference is saved for this novel
+            </DropdownMenuLabel>
+            {(Object.keys(MODE_META) as AgentRunMode[]).map((m) => {
+              const meta = MODE_META[m];
+              const Icon = meta.icon;
+              return (
+                <DropdownMenuItem
+                  key={m}
+                  className="items-start gap-2 py-2"
+                  onSelect={() => onModeChange(m)}
+                >
+                  <Icon className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+                  <span className="flex-1">
+                    <span className="block text-sm font-medium">{meta.label}</span>
+                    <span className="block text-[11px] leading-4 text-muted-foreground">
+                      {meta.hint}
                     </span>
-                    {m === mode && (
-                      <Check className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
-                    )}
-                  </DropdownMenuItem>
-                );
-              })}
-            </DropdownMenuContent>
-          </DropdownMenu>
+                  </span>
+                  {m === mode && (
+                    <Check className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+                  )}
+                </DropdownMenuItem>
+              );
+            })}
+          </DropdownMenuContent>
+        </DropdownMenu>
 
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            disabled
-            className="h-8 w-8 rounded-full text-muted-foreground"
-            aria-label="Voice input — arrives later"
-            title="Voice input arrives later"
-          >
-            <Mic className="h-4 w-4" aria-hidden="true" />
-          </Button>
+        {/* 5 — spacer: the voice and send controls hug the right edge */}
+        <div className="flex-1" />
 
-          <Button
-            type="button"
-            size="icon"
-            className="h-9 w-9 rounded-full"
-            disabled={!canSend}
-            onClick={onStart}
-            aria-label="Run team"
-            title="Run team — ⌘/Ctrl + Enter"
-          >
-            {submitting ? (
-              <Loader2 className="h-4.5 w-4.5 animate-spin" aria-hidden="true" />
-            ) : (
-              <ArrowUp className="h-4.5 w-4.5" aria-hidden="true" />
-            )}
-          </Button>
-        </div>
+        {/* 6 — voice input (still disabled — it arrives later) */}
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          disabled
+          className="h-8 w-8 rounded-full text-muted-foreground"
+          aria-label="Voice input — arrives later"
+          title="Voice input arrives later"
+        >
+          <Mic className="h-4 w-4" aria-hidden="true" />
+        </Button>
+
+        {/* 7 — send */}
+        <Button
+          type="button"
+          size="icon"
+          className="h-9 w-9 rounded-full"
+          disabled={!canSend}
+          onClick={onStart}
+          aria-label="Run team"
+          title="Run team — ⌘/Ctrl + Enter"
+        >
+          {submitting ? (
+            <Loader2 className="h-4.5 w-4.5 animate-spin" aria-hidden="true" />
+          ) : (
+            <ArrowUp className="h-4.5 w-4.5" aria-hidden="true" />
+          )}
+        </Button>
       </div>
 
       {/* Token overlay — anchored to the whole prompt box, floats above it.

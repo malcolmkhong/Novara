@@ -43,6 +43,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
+import { useCredits } from "@/hooks/use-credits";
 import type { UseAgentRunResult } from "@/hooks/use-agent-run";
 import { useWriterStore } from "@/hooks/use-writer-store";
 import { listNovelRuns } from "@/lib/novara/api";
@@ -53,14 +54,20 @@ import {
   type AgentRunMode,
   type AgentRunStatus,
   type RunFinalReport,
+  latestContextUsage,
 } from "@/lib/novara/agent-types";
-import { defaultSelection, getModelDefinition, type ModelSelection } from "@/lib/novara/models";
+import {
+  defaultSelection,
+  formatTokenCount,
+  getModelDefinition,
+  type ModelSelection,
+} from "@/lib/novara/models";
+import type { CreditsSnapshot } from "@/lib/usage/usage-shapes";
 import type { NovelMeta } from "@/lib/novara/types";
 import type { CenterView } from "@/config/writer";
 import { AGENT_BACKEND_LABEL, RUN_STATUS_META } from "@/config/writer";
 import { cn } from "@/lib/utils";
 import { ActivityStream } from "./activity-stream";
-import { ContextUsageButton } from "./context-usage-panel";
 import { ModeSwitch } from "./mode-switch";
 import { PromptBox, type PinOption } from "./prompt-box";
 import { TaskBoard } from "./task-board";
@@ -290,7 +297,7 @@ function ConversationStream({ events }: { events: AgentEvent[] }) {
               >
                 {actor.charAt(0)}
               </span>
-              <div className="max-w-[85%] rounded-lg rounded-tl-sm border bg-card px-3 py-2 text-sm leading-6">
+              <div className="max-w-[85%] rounded-lg rounded-tl-sm border bg-card px-3 py-2 text-[15px] leading-[1.7]">
                 <span
                   className={cn(
                     "mb-0.5 block text-[10px] font-semibold uppercase tracking-wide",
@@ -389,6 +396,108 @@ function ApprovalCard({
 }
 
 // ---------------------------------------------------------------------------
+// The bottom of the pane (STEP 66) — one card, one status line
+// ---------------------------------------------------------------------------
+
+/**
+ * The live run's card — the same grammar as the composer card. Row 1 carries
+ * the run's goal, row 2 the run-mode switch: the children of the old run
+ * control bar moved here, nothing was dropped.
+ */
+function RunCard({
+  goal,
+  mode,
+  disabled,
+  onModeChange,
+  onCancel,
+}: {
+  goal: string;
+  mode: AgentRunMode;
+  disabled: boolean;
+  onModeChange: (next: AgentRunMode) => void;
+  onCancel: () => void;
+}) {
+  return (
+    <div className="mx-auto w-full max-w-[680px] rounded-2xl border bg-card px-3 py-2.5">
+      <div className="flex items-center gap-2 px-1">
+        <p className="min-w-0 flex-1 truncate border-l-2 border-primary/40 pl-2 text-xs text-muted-foreground">
+          “{goal}”
+        </p>
+        <Button variant="outline" size="sm" onClick={onCancel} aria-label="Cancel run">
+          <X className="h-3.5 w-3.5" aria-hidden="true" />
+          Cancel
+        </Button>
+      </div>
+      <div className="mt-1 flex items-center gap-1.5 px-1">
+        <ModeSwitch mode={mode} disabled={disabled} onChange={onModeChange} showHint={false} />
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The quiet status line under the card:
+ *
+ *   Context 5.3K · 53 credits left · resets 8:00 AM
+ *
+ * One text node — the separators live inside the string, not in a row of
+ * chips. The context figure is the SAME number the old gauge showed: the
+ * live usage of the displayed run measured against the model's context
+ * window; the limit rides in the title. The credits come from useCredits(),
+ * which the pane calls ONCE and hands down — this component never fetches.
+ */
+function ComposerStatusLine({
+  usedTokens,
+  contextWindow,
+  credits,
+  loading,
+  error,
+}: {
+  usedTokens: number;
+  contextWindow: number;
+  credits: CreditsSnapshot | null;
+  loading: boolean;
+  error: string | null;
+}) {
+  const contextLabel = usedTokens > 0 ? `Context ${formatTokenCount(usedTokens)}` : "Context —";
+  const contextTitle =
+    usedTokens > 0
+      ? `${formatTokenCount(usedTokens)} of ${formatTokenCount(contextWindow)} tokens`
+      : "No tokens used yet";
+
+  // The credit slot: "—" while the first fetch is in flight (the line keeps
+  // its height), "Unlimited" for an admin, and NOTHING at all when the fetch
+  // failed — a broken request must not leave a hole in the sentence.
+  const creditsLabel = error
+    ? null
+    : credits
+      ? credits.unlimited && credits.balance === null
+        ? "Unlimited"
+        : `${credits.balance} credits left`
+      : loading
+        ? "—"
+        : null;
+
+  const resetLabel = credits?.resetAt
+    ? `resets ${new Date(credits.resetAt).toLocaleTimeString(undefined, {
+        hour: "numeric",
+        minute: "2-digit",
+      })}`
+    : null;
+
+  const line = [contextLabel, creditsLabel, resetLabel].filter(Boolean).join(" · ");
+
+  return (
+    <p
+      className="mx-auto mt-1.5 w-full max-w-[680px] truncate text-center text-[11px] text-muted-foreground"
+      title={contextTitle}
+    >
+      {line}
+    </p>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // ConversationPane
 // ---------------------------------------------------------------------------
 
@@ -446,6 +555,9 @@ export function ConversationPane({
   const [approving, setApproving] = useState(false);
   /** Recent run summaries for the history switcher (latest first). */
   const [history, setHistory] = useState<AgentRun[]>([]);
+  // STEP 66 — ONE credit fetch for the whole composer area. The status line
+  // receives the snapshot as props; it never fetches on its own.
+  const { credits, loading: creditsLoading, error: creditsError } = useCredits();
 
   const detail = run.detail;
   const runStatus = detail?.run.status ?? null;
@@ -589,6 +701,18 @@ export function ConversationPane({
 
   const events = detail?.events ?? [];
 
+  // STEP 66 — the context figure for the status line: the live usage of the
+  // displayed run (the number the old gauge showed), measured against the
+  // model's context window.
+  const contextUsage = useMemo(
+    () => latestContextUsage(detail?.events ?? []),
+    [detail?.events]
+  );
+  const contextUsed = contextUsage?.used ?? 0;
+  const contextWindow =
+    contextUsage?.contextWindow ??
+    getModelDefinition(detail?.run.modelId ?? modelSelection.modelId).contextWindow;
+
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col" aria-label="Agent conversation pane">
       {/* Pane header */}
@@ -686,111 +810,105 @@ export function ConversationPane({
         </p>
       )}
 
-      {/* Body */}
-      <div className="nice-scroll min-h-0 flex-1 overflow-y-auto p-3">
-        {isFinished && detail && (
-          <Card className="mb-3 gap-2 py-3">
-            <CardHeader className="px-4">
-              <CardTitle className="flex items-center gap-2 text-sm">
-                <StatusBadge status={detail.run.status} />
-                Last run
-              </CardTitle>
-              <CardDescription>
-                {detail.run.status === "paused"
-                  ? "Paused after rejection — nothing was written. Discard it to free the team."
-                  : "Finished run — give the team a new goal below."}
-              </CardDescription>
-            </CardHeader>
-            {detail.run.status === "paused" && (
-              <CardContent className="px-4">
-                <Button variant="outline" size="sm" onClick={handleCancelRun}>
-                  <X className="h-3.5 w-3.5" aria-hidden="true" />
-                  Discard paused run
-                </Button>
-              </CardContent>
-            )}
-          </Card>
-        )}
+      {/* Body — the reading column (STEP 66). The scroll container stays full
+          width (the scrollbar must not move); the measure — 680px, ~65–70
+          characters — lives on the inner wrapper, so everything the stream
+          renders is measured and the chrome stays full-bleed. */}
+      <div className="nice-scroll min-h-0 flex-1 overflow-y-auto">
+        <div className="mx-auto w-full max-w-[680px] px-6 py-6">
+          {isFinished && detail && (
+            <Card className="mb-3 gap-2 py-3">
+              <CardHeader className="px-4">
+                <CardTitle className="flex items-center gap-2 text-sm">
+                  <StatusBadge status={detail.run.status} />
+                  Last run
+                </CardTitle>
+                <CardDescription>
+                  {detail.run.status === "paused"
+                    ? "Paused after rejection — nothing was written. Discard it to free the team."
+                    : "Finished run — give the team a new goal below."}
+                </CardDescription>
+              </CardHeader>
+              {detail.run.status === "paused" && (
+                <CardContent className="px-4">
+                  <Button variant="outline" size="sm" onClick={handleCancelRun}>
+                    <X className="h-3.5 w-3.5" aria-hidden="true" />
+                    Discard paused run
+                  </Button>
+                </CardContent>
+              )}
+            </Card>
+          )}
 
-        {detail?.run.finalReport != null && (
-          <div className="mb-3">
-            <FinalReportCard report={detail.run.finalReport} />
-          </div>
-        )}
+          {detail?.run.finalReport != null && (
+            <div className="mb-3">
+              <FinalReportCard report={detail.run.finalReport} />
+            </div>
+          )}
 
-        {view === "chat" ? (
-          <>
-            {events.length === 0 && !detail ? (
-              <div className="flex h-full min-h-40 flex-col items-center justify-center gap-2 text-center">
-                <Sparkles className="h-6 w-6 text-muted-foreground" aria-hidden="true" />
-                <p className="text-sm font-medium">Give the team a goal</p>
-                <p className="max-w-xs text-xs leading-5 text-muted-foreground">
-                  They plan the work on their own board, keep you posted here,
-                  and ask before writing anything into your novel.
+          {view === "chat" ? (
+            <>
+              {events.length === 0 && !detail ? (
+                <div className="flex h-full min-h-40 flex-col items-center justify-center gap-2 text-center">
+                  <Sparkles className="h-6 w-6 text-muted-foreground" aria-hidden="true" />
+                  <p className="text-sm font-medium">Give the team a goal</p>
+                  <p className="max-w-xs text-xs leading-5 text-muted-foreground">
+                    They plan the work on their own board, keep you posted here,
+                    and ask before writing anything into your novel.
+                  </p>
+                </div>
+              ) : (
+                <>
+                  <ConversationStream events={events} />
+                  {detail?.run.status === "running" && (
+                    <div className="flex items-center gap-2 pl-8 text-xs text-muted-foreground">
+                      <Loader2 className="h-3 w-3 animate-spin" aria-hidden="true" />
+                      Working…
+                    </div>
+                  )}
+                  {approval && (
+                    <ApprovalCard
+                      request={approval}
+                      onApprove={handleApprove}
+                      onReject={handleReject}
+                      busy={approving}
+                    />
+                  )}
+                </>
+              )}
+            </>
+          ) : (
+            <div className="space-y-4">
+              {detail ? (
+                <>
+                  <TaskBoard tasks={detail.tasks} runStatus={detail.run.status} />
+                  <ActivityStream events={detail.events} />
+                </>
+              ) : (
+                <p className="py-6 text-center text-sm text-muted-foreground">
+                  No active run — start one from the chat composer.
                 </p>
-              </div>
-            ) : (
-              <>
-                <ConversationStream events={events} />
-                {detail?.run.status === "running" && (
-                  <div className="flex items-center gap-2 pl-8 text-xs text-muted-foreground">
-                    <Loader2 className="h-3 w-3 animate-spin" aria-hidden="true" />
-                    Working…
-                  </div>
-                )}
-                {approval && (
-                  <ApprovalCard
-                    request={approval}
-                    onApprove={handleApprove}
-                    onReject={handleReject}
-                    busy={approving}
-                  />
-                )}
-              </>
-            )}
-          </>
-        ) : (
-          <div className="space-y-4">
-            {detail ? (
-              <>
-                <TaskBoard tasks={detail.tasks} runStatus={detail.run.status} />
-                <ActivityStream events={detail.events} />
-              </>
-            ) : (
-              <p className="py-6 text-center text-sm text-muted-foreground">
-                No active run — start one from the chat composer.
-              </p>
-            )}
-          </div>
-        )}
-        <div ref={bottomAnchorRef} aria-hidden="true" />
+              )}
+            </div>
+          )}
+          <div ref={bottomAnchorRef} aria-hidden="true" />
+        </div>
       </div>
 
-      {/* Composer / run control bar */}
-      {isActive && detail ? (
-        <div className="flex flex-wrap items-center gap-2 border-t bg-card/60 px-3 py-2">
-          <ModeSwitch
+      {/* Bottom — ONE card and ONE quiet status line (STEP 66). The two
+          bordered strips are gone: the live run's controls and the composer
+          share the same card grammar, and the status line below carries the
+          context figure, the credit balance and the reset hour. */}
+      <div className="mt-auto border-t bg-card/60 px-3 py-2">
+        {isActive && detail ? (
+          <RunCard
+            goal={detail.run.goal}
             mode={detail.run.mode}
             disabled={detail.run.status === "awaiting_approval"}
-            onChange={handleRunModeChange}
-            showHint={false}
+            onModeChange={handleRunModeChange}
+            onCancel={handleCancelRun}
           />
-          {/* Live per-call context usage stays visible while the run produces it. */}
-          <ContextUsageButton
-            novelId={novel.id}
-            modelId={detail.run.modelId}
-            events={detail.events}
-          />
-          <p className="min-w-0 flex-1 truncate border-l-2 border-primary/40 pl-2 text-xs text-muted-foreground">
-            “{detail.run.goal}”
-          </p>
-          <Button variant="outline" size="sm" onClick={handleCancelRun} aria-label="Cancel run">
-            <X className="h-3.5 w-3.5" aria-hidden="true" />
-            Cancel
-          </Button>
-        </div>
-      ) : (
-        <div className="border-t bg-card/60 p-3">
+        ) : (
           <PromptBox
             value={goal}
             onChange={setGoal}
@@ -804,11 +922,16 @@ export function ConversationPane({
             onTogglePin={(ref) => togglePin(novel.id, ref)}
             onClearPins={() => clearPins(novel.id)}
             pinOptions={pinOptions}
-            novelId={novel.id}
-            usageEvents={detail?.events ?? []}
           />
-        </div>
-      )}
+        )}
+        <ComposerStatusLine
+          usedTokens={contextUsed}
+          contextWindow={contextWindow}
+          credits={credits}
+          loading={creditsLoading}
+          error={creditsError}
+        />
+      </div>
     </div>
   );
 }
