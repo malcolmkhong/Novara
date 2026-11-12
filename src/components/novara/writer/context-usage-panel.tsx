@@ -36,8 +36,6 @@
 // ---------------------------------------------------------------------------
 
 import { useEffect, useMemo, useState } from "react";
-import { Gauge } from "lucide-react";
-import { Button } from "@/components/ui/button";
 import {
   Popover,
   PopoverContent,
@@ -139,16 +137,29 @@ function summarizeRun(events: AgentEvent[]): RunStats {
   return stats;
 }
 
-export function ContextUsageButton({
+/**
+ * STEP 66.1 — the context segment of the composer's status line.
+ *
+ * The NUMBER moved from the old gauge button into the status line, but the
+ * PANEL it opened did not die: this component renders the segment itself as
+ * the popover trigger, so one click on "Context 5.3K" opens the same panel
+ * (per-call section split · run totals · account ledger) the gauge used to
+ * open — now anchored ABOVE the line.
+ *
+ * The pre-run estimate rides the same code path it always did: it is
+ * fetched when the panel OPENS (never on render, never polled) and only
+ * while no live usage exists.
+ */
+export function ContextUsageSegment({
   novelId,
   modelId,
   thinkingLevel = "low",
   events,
 }: {
   novelId: string;
-  /** The composer's selected model — drives the pre-run estimate window. */
+  /** The model's registry id — drives the pre-run estimate window. */
   modelId: string;
-  /** The composer's selected thinking level — forwarded to the estimate route. */
+  /** The thinking level — forwarded to the estimate route. */
   thinkingLevel?: string;
   /** The displayed run's events (latest `usage` wins). */
   events: AgentEvent[];
@@ -217,26 +228,29 @@ export function ContextUsageButton({
   const real = usage?.real ?? null;
   const isMeasured = isLive && real != null;
 
+  // The segment itself: the ONE place the figure is rendered. "~" marks the
+  // pre-run estimate (no call has billed a token yet) exactly as the old
+  // gauge did.
+  const segmentLabel =
+    used > 0 ? `Context ${isLive ? "" : "~"}${formatTokenCount(used)}` : "Context —";
+  const segmentTitle =
+    used > 0
+      ? `${formatTokenCount(used)} of ${formatTokenCount(window_)} tokens`
+      : "No tokens used yet";
+
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        <Button
+        <button
           type="button"
-          variant="outline"
-          size="sm"
-          className="h-8 gap-1.5 rounded-full px-2.5 text-[11px] font-medium"
-          aria-label="Context usage"
-          title="Context usage — what each team call sends to the model"
+          className="inline cursor-pointer border-0 bg-transparent p-0 align-baseline text-[11px] font-normal leading-4 text-muted-foreground hover:underline focus-visible:underline"
+          aria-label="Context usage — what each team call sends to the model"
+          title={segmentTitle}
         >
-          <Gauge className="h-3.5 w-3.5" aria-hidden="true" />
-          <span className="font-mono">
-            {used > 0
-              ? `${isLive ? "" : "~"}${formatTokenCount(used)} / ${formatTokenCount(window_)}`
-              : "Context"}
-          </span>
-        </Button>
+          {segmentLabel}
+        </button>
       </PopoverTrigger>
-      <PopoverContent align="start" className="w-80 rounded-xl p-4">
+      <PopoverContent align="center" side="top" className="w-80 rounded-xl p-4">
         {/* Layer 1 — THIS CALL (or, before any call: the pre-run estimate) */}
         <div className="flex items-baseline justify-between gap-2">
           <p className="text-xs font-semibold">

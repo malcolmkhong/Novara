@@ -54,11 +54,9 @@ import {
   type AgentRunMode,
   type AgentRunStatus,
   type RunFinalReport,
-  latestContextUsage,
 } from "@/lib/novara/agent-types";
 import {
   defaultSelection,
-  formatTokenCount,
   getModelDefinition,
   type ModelSelection,
 } from "@/lib/novara/models";
@@ -68,6 +66,7 @@ import type { CenterView } from "@/config/writer";
 import { AGENT_BACKEND_LABEL, RUN_STATUS_META } from "@/config/writer";
 import { cn } from "@/lib/utils";
 import { ActivityStream } from "./activity-stream";
+import { ContextUsageSegment } from "./context-usage-panel";
 import { ModeSwitch } from "./mode-switch";
 import { PromptBox, type PinOption } from "./prompt-box";
 import { TaskBoard } from "./task-board";
@@ -440,31 +439,30 @@ function RunCard({
  *
  *   Context 5.3K · 53 credits left · resets 8:00 AM
  *
- * One text node — the separators live inside the string, not in a row of
- * chips. The context figure is the SAME number the old gauge showed: the
- * live usage of the displayed run measured against the model's context
- * window; the limit rides in the title. The credits come from useCredits(),
- * which the pane calls ONCE and hands down — this component never fetches.
+ * The context segment is a BUTTON (STEP 66.1): it is the trigger of the
+ * context panel — per-call section split · run totals · account ledger —
+ * which used to hang off the gauge button in the composer's control row.
+ * The panel is anchored above the line; the segment renders the figure in
+ * exactly one place. The credits come from useCredits(), which the pane
+ * calls ONCE and hands down — this component never fetches.
  */
 function ComposerStatusLine({
-  usedTokens,
-  contextWindow,
+  novelId,
+  modelId,
+  thinkingLevel,
+  events,
   credits,
   loading,
   error,
 }: {
-  usedTokens: number;
-  contextWindow: number;
+  novelId: string;
+  modelId: string;
+  thinkingLevel: string;
+  events: AgentEvent[];
   credits: CreditsSnapshot | null;
   loading: boolean;
   error: string | null;
 }) {
-  const contextLabel = usedTokens > 0 ? `Context ${formatTokenCount(usedTokens)}` : "Context —";
-  const contextTitle =
-    usedTokens > 0
-      ? `${formatTokenCount(usedTokens)} of ${formatTokenCount(contextWindow)} tokens`
-      : "No tokens used yet";
-
   // The credit slot: "—" while the first fetch is in flight (the line keeps
   // its height), "Unlimited" for an admin, and NOTHING at all when the fetch
   // failed — a broken request must not leave a hole in the sentence.
@@ -485,14 +483,16 @@ function ComposerStatusLine({
       })}`
     : null;
 
-  const line = [contextLabel, creditsLabel, resetLabel].filter(Boolean).join(" · ");
-
   return (
-    <p
-      className="mx-auto mt-1.5 w-full max-w-[680px] truncate text-center text-[11px] text-muted-foreground"
-      title={contextTitle}
-    >
-      {line}
+    <p className="mx-auto mt-1.5 w-full max-w-[680px] truncate text-center text-[11px] text-muted-foreground">
+      <ContextUsageSegment
+        novelId={novelId}
+        modelId={modelId}
+        thinkingLevel={thinkingLevel}
+        events={events}
+      />
+      {creditsLabel ? ` · ${creditsLabel}` : ""}
+      {resetLabel ? ` · ${resetLabel}` : ""}
     </p>
   );
 }
@@ -700,18 +700,6 @@ export function ConversationPane({
   };
 
   const events = detail?.events ?? [];
-
-  // STEP 66 — the context figure for the status line: the live usage of the
-  // displayed run (the number the old gauge showed), measured against the
-  // model's context window.
-  const contextUsage = useMemo(
-    () => latestContextUsage(detail?.events ?? []),
-    [detail?.events]
-  );
-  const contextUsed = contextUsage?.used ?? 0;
-  const contextWindow =
-    contextUsage?.contextWindow ??
-    getModelDefinition(detail?.run.modelId ?? modelSelection.modelId).contextWindow;
 
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col" aria-label="Agent conversation pane">
@@ -925,8 +913,10 @@ export function ConversationPane({
           />
         )}
         <ComposerStatusLine
-          usedTokens={contextUsed}
-          contextWindow={contextWindow}
+          novelId={novel.id}
+          modelId={detail?.run.modelId ?? modelSelection.modelId}
+          thinkingLevel={detail?.run.thinkingLevel ?? modelSelection.thinkingLevel}
+          events={events}
           credits={credits}
           loading={creditsLoading}
           error={creditsError}
