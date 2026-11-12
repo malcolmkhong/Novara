@@ -100,7 +100,7 @@ function rowLocked(kind: LedgerKind, row: { lock?: string; status?: string }): b
 }
 
 const REOPEN_ARCHIVE_NOTE =
-  "原版将自动存档到版本史，然后降回草稿，可再次编辑。";
+  "The original is archived to version history, then returned to draft so it can be edited again.";
 
 /**
  * Inline add/edit form model. `chapter` covers timeline/arcs; `numA`/`numB`
@@ -132,12 +132,12 @@ const EMPTY_FIELDS: LedgerFormFields = {
 type LedgerTab = LedgerKind | "all";
 
 const LEDGER_TABS: { value: LedgerTab; label: string }[] = [
-  { value: "all", label: "全部" },
-  { value: "storyline", label: "故事线" },
-  { value: "timeline", label: "时间线" },
-  { value: "arc", label: "人物弧线" },
-  { value: "promise", label: "承诺" },
-  { value: "clue", label: "线索" },
+  { value: "all", label: "All" },
+  { value: "storyline", label: "Storylines" },
+  { value: "timeline", label: "Timeline" },
+  { value: "arc", label: "Character arcs" },
+  { value: "promise", label: "Promises" },
+  { value: "clue", label: "Clues" },
 ];
 
 // ---------------------------------------------------------------------------
@@ -235,7 +235,7 @@ export function LedgerPanel({
         const msg = e instanceof Error ? e.message : "Unknown error";
         setActionError(msg);
         toast({
-          title: "操作失败",
+          title: "Action failed",
           description: msg,
           variant: "destructive",
         });
@@ -390,14 +390,14 @@ export function LedgerPanel({
   return (
     <Card>
       <CardHeader className="pb-3">
-        <CardTitle className="font-display text-base">Ledger · 账本</CardTitle>
+        <CardTitle className="font-display text-base">Ledger</CardTitle>
         <CardDescription>
           Plan-level truth you curate — storylines, timeline, character arcs,
           promises and clues. Read into every AI writing context.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">
-        <div className="flex flex-wrap items-center gap-1" role="tablist" aria-label="账本分区">
+        <div className="flex flex-wrap items-center gap-1" role="tablist" aria-label="Ledger sections">
           {LEDGER_TABS.map((t) => (
             <Button
               key={t.value}
@@ -446,7 +446,7 @@ export function LedgerPanel({
               {(activeTab === "all" || activeTab === "storyline") && (
               <section aria-label="Storylines" className="space-y-2 pb-4">
                 <SectionHeader
-                  title="Storylines · 故事线"
+                  title="Storylines"
                   addLabel="Add storyline"
                   onAdd={() => openAdd("storyline")}
                 />
@@ -467,7 +467,7 @@ export function LedgerPanel({
                             onClick={() => cycleStatus(row)}
                             disabled={busy || rowLocked("storyline", row)}
                             aria-label={`Storyline “${row.name}” is ${row.status} — click to mark ${STORYLINE_CYCLE[row.status]}`}
-                            title={rowLocked("storyline", row) ? "已定稿 — 解除定稿后可改状态" : `Click to mark ${STORYLINE_CYCLE[row.status]}`}
+                            title={rowLocked("storyline", row) ? "Locked — Unlock to change status" : `Click to mark ${STORYLINE_CYCLE[row.status]}`}
                           >
                             {STORYLINE_STATUS_META[row.status].label}
                           </Button>
@@ -513,7 +513,7 @@ export function LedgerPanel({
               {(activeTab === "all" || activeTab === "timeline") && (
               <section aria-label="Timeline" className="space-y-2 py-4">
                 <SectionHeader
-                  title="Timeline · 时间线"
+                  title="Timeline"
                   addLabel="Add event"
                   onAdd={() => openAdd("timeline")}
                 />
@@ -579,7 +579,7 @@ export function LedgerPanel({
               {(activeTab === "all" || activeTab === "arc") && (
               <section aria-label="Character arcs" className="space-y-2 py-4">
                 <SectionHeader
-                  title="Character arcs · 人物弧线"
+                  title="Character arcs"
                   addLabel="Add stage"
                   onAdd={() => openAdd("arc")}
                 />
@@ -649,12 +649,12 @@ export function LedgerPanel({
               {(activeTab === "all" || activeTab === "promise") && (
               <section aria-label="Promises" className="space-y-2 py-4">
                 <SectionHeader
-                  title="Promises · 承诺"
+                  title="Promises"
                   addLabel="Add promise"
                   onAdd={() => openAdd("promise")}
                 />
                 <p className="text-[11px] text-muted-foreground">
-                  Promises made to the reader (账本/承诺.md) — the agent checks
+                  Promises made to the reader (Ledger/Promises.md) — the agent checks
                   these before finalizing a chapter.
                 </p>
                 {form?.kind === "promise" && form.mode === "add" && formEl}
@@ -703,12 +703,12 @@ export function LedgerPanel({
               {(activeTab === "all" || activeTab === "clue") && (
               <section aria-label="Clues" className="space-y-2 pt-4">
                 <SectionHeader
-                  title="Clues · 线索"
+                  title="Clues"
                   addLabel="Add clue"
                   onAdd={() => openAdd("clue")}
                 />
                 <p className="text-[11px] text-muted-foreground">
-                  Clue and evidence threads (账本/线索.md) — plant, surface, reveal.
+                  Clue and evidence threads (Ledger/Clues.md) — plant, surface, reveal.
                 </p>
                 {form?.kind === "clue" && form.mode === "add" && formEl}
                 {clues.length > 0 ? (
@@ -832,7 +832,7 @@ function RowActions({
         aria-label={editLabel}
         onClick={onEdit}
         disabled={editDisabled}
-        title={editDisabled ? "已定稿 — 解除定稿后可编辑" : undefined}
+        title={editDisabled ? "Locked — Unlock to edit" : undefined}
       >
         <Pencil className="h-4 w-4" aria-hidden="true" />
       </Button>

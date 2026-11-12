@@ -255,7 +255,7 @@ export function CreateWizard({
     if (fields.beats.trim()) snapshotParts.push(`【大纲 OUTLINE】\n${fields.beats.trim()}`);
     const conceptSnapshot =
       snapshotParts.length > 0
-        ? `# 构想快照 — captured by "New with the AI team" at creation\n\n${snapshotParts.join("\n\n")}`
+        ? `# Concept snapshot — captured by "New with the AI team" at creation\n\n${snapshotParts.join("\n\n")}`
         : undefined;
 
     const input: CreateNovelInput = {
@@ -444,10 +444,10 @@ export function CreateWizard({
                 />
                 <div className="flex items-center justify-between gap-2">
                   <div className="space-y-0.5">
-                    <Label htmlFor="wizard-world">World bible（世界书）</Label>
+                    <Label htmlFor="wizard-world">World bible</Label>
                     <p className="text-xs text-muted-foreground">
                       One per line — Title — category: content. Lands in the
-                      世界规则 group of the tree.
+                      "World rules" group of the tree.
                     </p>
                   </div>
                   <GenerateButton

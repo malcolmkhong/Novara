@@ -656,7 +656,7 @@ export function WorkbenchShell({
               />
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="meta-contract">Story contract · 作品契约</Label>
+              <Label htmlFor="meta-contract">Story contract</Label>
               <Textarea
                 id="meta-contract"
                 value={formContract}

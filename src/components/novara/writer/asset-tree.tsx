@@ -290,12 +290,12 @@ function loadExpandState(novelId: string): Record<string, boolean> {
 
 /** 本书记忆 tree sub-rows (Phase 9): key is the store's memory deep-link
  * focus value ("all" | MemoryCategory), label is the Chinese sub-row name. */
-const MEMORY_TREE_ROWS: readonly { key: string; label: string }[] = [
-  { key: "all", label: "索引" },
-  { key: "decision", label: "决策" },
-  { key: "dialogue", label: "对话" },
-  { key: "style", label: "文风" },
-  { key: "inspiration", label: "灵感" },
+const MEMORY_TREE_ROWS: readonly { key: string; label: string; zh: string }[] = [
+  { key: "all", label: "Index", zh: "索引" },
+  { key: "decision", label: "Decisions", zh: "决策" },
+  { key: "dialogue", label: "Dialogue", zh: "对话" },
+  { key: "style", label: "Style", zh: "文风" },
+  { key: "inspiration", label: "Inspiration", zh: "灵感" },
 ];
 
 interface AssetTreeProps {
@@ -451,6 +451,10 @@ export function AssetTree({
   const q = query.trim().toLowerCase();
   const searching = q.length > 0;
   const matchesQuery = (text: string) => text.toLowerCase().includes(q);
+  // STEP 65.6a — a translated label keeps BOTH search terms: the new English
+  // label and its original Chinese string. Searching "Final" or "定稿" both work.
+  const matchesLabel = (english: string, chinese: string) =>
+    matchesQuery(english) || matchesQuery(chinese);
 
   // Beat entries keep their original positional index so "NN" prefixes stay
   // stable no matter how beats are grouped.
@@ -516,31 +520,31 @@ export function AssetTree({
   const chapterVersionEntries = (ch: ChapterDTO) => {
     const all = versionsByChapter.get(ch.id) ?? [];
     if (!searching) return all;
-    return matchesQuery(ch.title) || matchesQuery("草稿") || matchesQuery("草稿区")
+    return matchesQuery(ch.title) || matchesLabel("Draft", "草稿") || matchesLabel("Drafts", "草稿区")
       ? all
-      : all.filter((v) => matchesQuery(`稿${v.draftNo}`));
+      : all.filter((v) => matchesLabel(`Draft ${v.draftNo}`, `稿${v.draftNo}`));
   };
   const visibleChapters = searching
     ? detail.chapters.filter(
         (ch) =>
           matchesQuery(ch.title) ||
-          matchesQuery("草稿") ||
-          matchesQuery("草稿区") ||
+          matchesLabel("Draft", "草稿") ||
+          matchesLabel("Drafts", "草稿区") ||
           (versionsByChapter.get(ch.id) ?? []).some((v) =>
-            matchesQuery(`稿${v.draftNo}`)
+            matchesLabel(`Draft ${v.draftNo}`, `稿${v.draftNo}`)
           )
       )
     : detail.chapters;
   const visibleUnsortedBeats = searching
     ? unsortedBeats.filter(
         ({ beat }) =>
-          matchesQuery(beat.title) || matchesQuery("故事骨架") || matchesQuery("大纲")
+          matchesQuery(beat.title) || matchesLabel("Story skeleton", "故事骨架") || matchesLabel("Outline", "大纲")
       )
     : unsortedBeats;
   const volumeMatchesQuery = (v: VolumeDTO) =>
     matchesQuery(v.title) ||
-    matchesQuery("卷规划") ||
-    matchesQuery("大纲") ||
+    matchesLabel("Volumes", "卷规划") ||
+    matchesLabel("Outline", "大纲") ||
     (beatsByVolume.get(v.id) ?? []).some(({ beat }) => matchesQuery(beat.title));
   const visibleVolumes = searching
     ? sortedVolumes.filter((v) => volumeMatchesQuery(v))
@@ -548,20 +552,20 @@ export function AssetTree({
   const volumeBeatEntries = (v: VolumeDTO) => {
     const all = beatsByVolume.get(v.id) ?? [];
     if (!searching) return all;
-    return matchesQuery(v.title) || matchesQuery("卷规划") || matchesQuery("大纲")
+    return matchesQuery(v.title) || matchesLabel("Volumes", "卷规划") || matchesLabel("Outline", "大纲")
       ? all
       : all.filter(({ beat }) => matchesQuery(beat.title));
   };
   const visibleCharacters = searching
     ? detail.characters.filter(
         (c) =>
-          matchesQuery(c.name) || matchesQuery("人物档案") || matchesQuery("世界书")
+          matchesQuery(c.name) || matchesLabel("Characters", "人物档案") || matchesLabel("World book", "世界书")
       )
     : detail.characters;
   // World entries surface per group: a group-name hit exposes the whole group,
   // otherwise entries match by title (matching the group label itself too).
   const worldGroupMatchesQuery = (g: WorldGroupDTO) =>
-    matchesQuery(g.name) || matchesQuery("世界书");
+    matchesQuery(g.name) || matchesLabel("World book", "世界书");
   const worldGroupVisibleEntries = (g: WorldGroupDTO): WorldEntryDTO[] => {
     const entries = worldEntriesInGroup(g.id);
     if (!searching) return entries;
@@ -570,7 +574,7 @@ export function AssetTree({
       : entries.filter((w) => matchesQuery(w.title));
   };
   const visibleUngroupedWorld = searching
-    ? matchesQuery("未分组") || matchesQuery("世界书")
+    ? matchesLabel("Ungrouped", "未分组") || matchesLabel("World book", "世界书")
       ? ungroupedWorldEntries
       : ungroupedWorldEntries.filter((w) => matchesQuery(w.title))
     : ungroupedWorldEntries;
@@ -583,18 +587,18 @@ export function AssetTree({
   const visibleMaterial = searching
     ? materialPacks.filter(
         (p) =>
-          matchesQuery(p.title) || matchesQuery("材料包") || matchesQuery("草稿区")
+          matchesQuery(p.title) || matchesLabel("Materials", "材料包") || matchesLabel("Drafts", "草稿区")
       )
     : materialPacks;
   const visiblePrep = searching
     ? prepPacks.filter(
         (p) =>
-          matchesQuery(p.title) || matchesQuery("定稿准备") || matchesQuery("草稿区")
+          matchesQuery(p.title) || matchesLabel("Final prep", "定稿准备") || matchesLabel("Drafts", "草稿区")
       )
     : prepPacks;
   const visibleFinals = searching
     ? finalChapters.filter(
-        (ch) => matchesQuery(canonLabel(ch)) || matchesQuery("定稿")
+        (ch) => matchesQuery(canonLabel(ch)) || matchesLabel("Final drafts", "定稿")
       )
     : finalChapters;
 
@@ -606,28 +610,28 @@ export function AssetTree({
 
   // Single document rows (作品契约/章摘要/构想/审核) — matched by their
   // Chinese label or an English alias.
-  const contractMatch = matchesQuery("作品契约") || matchesQuery("contract");
-  const digestMatch = matchesQuery("章摘要") || matchesQuery("digest");
-  const memoryMatch = matchesQuery("本书记忆") || matchesQuery("memory");
-  const conceptMatch = matchesQuery("构想") || matchesQuery("concept");
-  const ledgerMatch = matchesQuery("账本") || matchesQuery("ledger");
-  const reviewMatch = matchesQuery("审核") || matchesQuery("review");
+  const contractMatch = matchesLabel("Book contract", "作品契约") || matchesQuery("contract");
+  const digestMatch = matchesLabel("Chapter digests", "章摘要") || matchesQuery("digest");
+  const memoryMatch = matchesLabel("Memory", "本书记忆") || matchesQuery("memory");
+  const conceptMatch = matchesLabel("Concepts", "构想") || matchesQuery("concept");
+  const ledgerMatch = matchesLabel("Ledger", "账本") || matchesQuery("ledger");
+  const reviewMatch = matchesLabel("Review", "审核") || matchesQuery("review");
 
   // 账本 sub-rows — live counts from the five ledgers (Phase 9). Clicking a
   // row writes the ledger deep-link focus, then opens the ledger tab.
-  const ledgerRows: { kind: string; label: string; count: number }[] = [
-    { kind: "storyline", label: "故事线", count: detail.ledger.storylines.length },
-    { kind: "timeline", label: "时间线", count: detail.ledger.timeline.length },
-    { kind: "arc", label: "人物弧线", count: detail.ledger.arcs.length },
-    { kind: "promise", label: "承诺", count: detail.ledger.promises.length },
-    { kind: "clue", label: "线索", count: detail.ledger.clues.length },
+  const ledgerRows: { kind: string; label: string; zh: string; count: number }[] = [
+    { kind: "storyline", label: "Storylines", zh: "故事线", count: detail.ledger.storylines.length },
+    { kind: "timeline", label: "Timeline", zh: "时间线", count: detail.ledger.timeline.length },
+    { kind: "arc", label: "Character arcs", zh: "人物弧线", count: detail.ledger.arcs.length },
+    { kind: "promise", label: "Promises", zh: "承诺", count: detail.ledger.promises.length },
+    { kind: "clue", label: "Clues", zh: "线索", count: detail.ledger.clues.length },
   ];
 
   // Zone matches: the group label (本书记忆/账本) OR any of its sub-row labels.
   const memoryZoneMatch =
-    memoryMatch || MEMORY_TREE_ROWS.some((row) => matchesQuery(row.label));
+    memoryMatch || MEMORY_TREE_ROWS.some((row) => matchesLabel(row.label, row.zh));
   const ledgerZoneMatch =
-    ledgerMatch || ledgerRows.some((row) => matchesQuery(row.label));
+    ledgerMatch || ledgerRows.some((row) => matchesLabel(row.label, row.zh));
 
   const anyMatch =
     visibleChapters.length > 0 ||
@@ -742,7 +746,7 @@ export function AssetTree({
         {versions.map((v) => (
           <TreeFile
             key={v.id}
-            label={`稿${v.draftNo}`}
+            label={`Draft ${v.draftNo}`}
             onClick={() => onOpenChapter(ch.id)}
             trailing={
               <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
@@ -764,7 +768,7 @@ export function AssetTree({
       onClick={() => onOpenPack(kind, pack.chapterIndex)}
       trailing={
         <span className="shrink-0 text-[11px] text-muted-foreground">
-          第{pack.chapterIndex}章
+          Chapter {pack.chapterIndex}
         </span>
       }
     />
@@ -986,7 +990,7 @@ export function AssetTree({
           {(!hideEmptyGroup("world") && (!searching || visibleWorld.length > 0 || visibleCharacters.length > 0)) && (
             <TreeGroup
               icon={<Globe2 className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />}
-              label="世界书"
+              label="World book"
               count={detail.worldEntries.length + detail.characters.length}
               expanded={searching ? true : isExpanded("world")}
               onToggle={searching ? undefined : () => toggle("world")}
@@ -1019,7 +1023,7 @@ export function AssetTree({
               {ungroupedWorldEntries.length > 0 &&
                 (!searching || visibleUngroupedWorld.length > 0) && (
                   <TreeSubGroup
-                    label="未分组"
+                    label="Ungrouped"
                     count={ungroupedWorldEntries.length}
                     badges={badges.get("group:world.ungrouped")}
                     expanded={searching ? true : isExpanded("world.ungrouped")}
@@ -1030,7 +1034,7 @@ export function AssetTree({
                 )}
               {(!searching || visibleCharacters.length > 0) && (
                 <TreeSubGroup
-                  label="人物档案"
+                  label="Characters"
                   count={detail.characters.length}
                   expanded={searching ? true : isExpanded("world.characters")}
                   onToggle={searching ? undefined : () => toggle("world.characters")}
@@ -1065,8 +1069,8 @@ export function AssetTree({
           {(!searching || contractMatch) && (
             <TreeDocRow
               icon={<ScrollText className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />}
-              label="作品契约"
-              subtitle={detail.contract ? "已写入" : "未写入"}
+              label="Book contract"
+              subtitle={detail.contract ? "Written" : "Empty"}
               onClick={() => onOpenArtifactTab("contract")}
             />
           )}
@@ -1078,7 +1082,7 @@ export function AssetTree({
             digestMatch)) && (
             <TreeGroup
               icon={<ListTree className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />}
-              label="大纲"
+              label="Outline"
               count={detail.outlineBeats.length}
               badges={badges.get("group:outline")}
               expanded={searching ? true : isExpanded("outline")}
@@ -1086,7 +1090,7 @@ export function AssetTree({
             >
               {(!searching || visibleUnsortedBeats.length > 0) && (
                 <TreeSubGroup
-                  label="故事骨架"
+                  label="Story skeleton"
                   count={unsortedBeats.length}
                   expanded={searching ? true : isExpanded("outline.skeleton")}
                   onToggle={searching ? undefined : () => toggle("outline.skeleton")}
@@ -1100,7 +1104,7 @@ export function AssetTree({
               )}
               {(!searching || visibleVolumes.length > 0) && (
                 <TreeSubGroup
-                  label="卷规划"
+                  label="Volumes"
                   count={detail.volumes.length}
                   expanded={searching ? true : isExpanded("outline.volumes")}
                   onToggle={searching ? undefined : () => toggle("outline.volumes")}
@@ -1137,7 +1141,7 @@ export function AssetTree({
               {(!searching || digestMatch) && (
                 <TreeDocRow
                   icon={<NotebookPen className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />}
-                  label="章摘要"
+                  label="Chapter digests"
                   onClick={() => onOpenArtifactTab("outline")}
                 />
               )}
@@ -1151,7 +1155,7 @@ export function AssetTree({
             (!searching || visibleFinals.length > 0) && (
               <TreeGroup
                 icon={<Lock className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />}
-                label="定稿"
+                label="Final drafts"
                 count={finalChapters.length}
                 expanded={searching ? true : isExpanded("canon")}
                 onToggle={searching ? undefined : () => toggle("canon")}
@@ -1180,12 +1184,12 @@ export function AssetTree({
           {(!searching || memoryZoneMatch) && (
             <TreeGroup
               icon={<Brain className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />}
-              label="本书记忆"
+              label="Memory"
               expanded={searching ? true : isExpanded("memory")}
               onToggle={searching ? undefined : () => toggle("memory")}
             >
               {MEMORY_TREE_ROWS.filter(
-                (row) => !searching || memoryMatch || matchesQuery(row.label)
+                (row) => !searching || memoryMatch || matchesLabel(row.label, row.zh)
               ).map((row) => (
                 <TreeFile
                   key={row.key}
@@ -1203,8 +1207,8 @@ export function AssetTree({
           {(!searching || conceptMatch) && (
             <TreeDocRow
               icon={<Lightbulb className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />}
-              label="构想"
-              subtitle={novel.conceptSnapshot ? "已快照" : "未快照"}
+              label="Concepts"
+              subtitle={novel.conceptSnapshot ? "Snapshot" : "None"}
               onClick={() => onOpenArtifactTab("contract")}
             />
           )}
@@ -1215,12 +1219,12 @@ export function AssetTree({
           {(!searching || ledgerZoneMatch) && (
             <TreeGroup
               icon={<NotebookPen className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />}
-              label="账本"
+              label="Ledger"
               expanded={searching ? true : isExpanded("ledger")}
               onToggle={searching ? undefined : () => toggle("ledger")}
             >
               {ledgerRows.filter(
-                (row) => !searching || ledgerMatch || matchesQuery(row.label)
+                (row) => !searching || ledgerMatch || matchesLabel(row.label, row.zh)
               ).map((row) => (
                 <TreeFile
                   key={row.kind}
@@ -1242,13 +1246,13 @@ export function AssetTree({
           {/* 草稿区 — drafts + packs + review */}
           <TreeGroup
             icon={<PenLine className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />}
-            label="草稿区"
+            label="Drafts"
             expanded={searching ? true : isExpanded("workspace")}
             onToggle={searching ? undefined : () => toggle("workspace")}
           >
             {(!searching || visibleChapters.length > 0) && (
               <TreeSubGroup
-                label="草稿"
+                label="Draft"
                 count={detail.chapters.length}
                 badges={badges.get("group:drafts")}
                 expanded={searching ? true : isExpanded("workspace.drafts")}
@@ -1264,7 +1268,7 @@ export function AssetTree({
             )}
             {(!searching || visibleMaterial.length > 0) && (
               <TreeSubGroup
-                label="材料包"
+                label="Materials"
                 count={materialPacks.length}
                 expanded={searching ? true : isExpanded("workspace.material")}
                 onToggle={searching ? undefined : () => toggle("workspace.material")}
@@ -1279,7 +1283,7 @@ export function AssetTree({
             )}
             {(!searching || visiblePrep.length > 0) && (
               <TreeSubGroup
-                label="定稿准备"
+                label="Final prep"
                 count={prepPacks.length}
                 expanded={searching ? true : isExpanded("workspace.prep")}
                 onToggle={searching ? undefined : () => toggle("workspace.prep")}
@@ -1295,7 +1299,7 @@ export function AssetTree({
             {(!searching || reviewMatch) && (
               <TreeDocRow
                 icon={<FileSearch className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />}
-                label="审核"
+                label="Review"
                 onClick={() => onOpenArtifactTab("review")}
               />
             )}

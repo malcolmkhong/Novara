@@ -26,7 +26,7 @@ export async function PATCH(req: Request, { params }: Params) {
       where: { novelId_name: { novelId: existing.novelId, name } },
       select: { id: true },
     });
-    if (clash && clash.id !== id) return jsonError(`分组「${name}」已存在`, 409);
+    if (clash && clash.id !== id) return jsonError(`Group "${name}" already exists`, 409);
   }
 
   if (moveTo !== undefined && moveTo !== existing.order) {

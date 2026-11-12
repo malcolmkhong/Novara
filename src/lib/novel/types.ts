@@ -156,21 +156,21 @@ export interface SedimentResult {
 }
 
 export const NOVEL_GENRES = [
-  "都市",
-  "玄幻",
-  "仙侠",
-  "奇幻",
-  "科幻",
-  "历史",
-  "悬疑",
-  "游戏",
-  "古言",
-  "现言",
-  "幻言",
-  "年代",
-  "种田",
-  "快穿",
-  "衍生",
+  "Urban",
+  "Fantasy",
+  "Xianxia",
+  "High fantasy",
+  "Sci-Fi",
+  "Historical",
+  "Mystery",
+  "Gaming",
+  "Historical romance",
+  "Contemporary romance",
+  "Fantasy romance",
+  "Period",
+  "Slow-build",
+  "Quick transmigration",
+  "Fanfiction",
 ] as const;
 
 export type NovelGenre = (typeof NOVEL_GENRES)[number];

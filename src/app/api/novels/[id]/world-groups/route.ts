@@ -36,7 +36,7 @@ export async function POST(req: Request, { params }: Params) {
     where: { novelId_name: { novelId: id, name } },
     select: { id: true },
   });
-  if (clash) return jsonError(`分组「${name}」已存在`, 409);
+  if (clash) return jsonError(`Group "${name}" already exists`, 409);
 
   const last = await db.worldGroup.findFirst({
     where: { novelId: id },

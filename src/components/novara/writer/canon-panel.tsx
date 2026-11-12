@@ -55,7 +55,7 @@ export function CanonPanel({
     <div className="space-y-3">
       <div className="flex flex-wrap items-center gap-2">
         <Lock className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
-        <h3 className="font-display text-sm font-semibold">Canon · 定稿区</h3>
+        <h3 className="font-display text-sm font-semibold">Canon · Final drafts</h3>
         <Badge variant="outline" className="text-[11px] text-muted-foreground">
           {finals.length} finalized
         </Badge>
@@ -63,7 +63,7 @@ export function CanonPanel({
 
       {finals.length === 0 ? (
         <div className="rounded-lg border border-dashed p-6 text-center">
-          <p className="text-sm font-medium">定稿区</p>
+          <p className="text-sm font-medium">Final drafts</p>
           <p className="mt-1 text-xs text-muted-foreground">
             No finalized chapters yet. Review a chapter to 0 blocking issues,
             then finalize it.
@@ -140,7 +140,7 @@ export function CanonPanel({
                     target={{
                       type: "chapter",
                       id: active.id,
-                      label: `第${active.index}章 ${active.title}`,
+                      label: `Chapter ${active.index} ${active.title}`,
                     }}
                     label="Pin to chat"
                   />

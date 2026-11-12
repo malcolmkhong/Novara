@@ -78,13 +78,13 @@ type MemoryZone =
   | "drafts";
 
 const ZONES: { id: MemoryZone; label: string; caption: string; icon: LucideIcon }[] = [
-  { id: "bible", label: "世界书", caption: "World Bible", icon: Globe },
-  { id: "contract", label: "作品契约", caption: "Story Contract", icon: ScrollText },
-  { id: "outline", label: "大纲", caption: "Outline", icon: ListTree },
-  { id: "ledger", label: "账本", caption: "Story Ledger", icon: NotebookText },
-  { id: "novel-memory", label: "本书记忆", caption: "Novel Memory", icon: Brain },
-  { id: "canon", label: "定稿", caption: "Canon", icon: Lock },
-  { id: "drafts", label: "草稿区", caption: "Drafts", icon: PenLine },
+  { id: "bible", label: "World book", caption: "World Bible", icon: Globe },
+  { id: "contract", label: "Book contract", caption: "Story Contract", icon: ScrollText },
+  { id: "outline", label: "Outline", caption: "Outline", icon: ListTree },
+  { id: "ledger", label: "Ledger", caption: "Story Ledger", icon: NotebookText },
+  { id: "novel-memory", label: "Memory", caption: "Novel Memory", icon: Brain },
+  { id: "canon", label: "Final drafts", caption: "Canon", icon: Lock },
+  { id: "drafts", label: "Drafts", caption: "Drafts", icon: PenLine },
 ];
 
 // ---------------------------------------------------------------------------
@@ -92,15 +92,15 @@ const ZONES: { id: MemoryZone; label: string; caption: string; icon: LucideIcon 
 // ---------------------------------------------------------------------------
 
 const CATEGORY_LABELS: Record<MemoryCategory, string> = {
-  world_rule: "世界规则",
-  character_state: "人物状态",
-  relationship: "人物关系",
-  story_fact: "故事事实",
-  open_loop: "未回收伏线",
-  decision: "决策",
-  style: "文风",
-  dialogue: "对话",
-  inspiration: "灵感",
+  world_rule: "World rule",
+  character_state: "Character state",
+  relationship: "Relationship",
+  story_fact: "Story fact",
+  open_loop: "Open loop",
+  decision: "Decision",
+  style: "Style",
+  dialogue: "Dialogue",
+  inspiration: "Inspiration",
 };
 
 const CATEGORY_LABELS_EN: Record<MemoryCategory, string> = {
@@ -141,9 +141,9 @@ const LOOP_STATUS_META: Record<
   "open" | "advanced" | "paid",
   { label: string; title: string; className: string }
 > = {
-  open: { label: "埋下", title: "open", className: "border-amber-300 bg-amber-50 text-amber-700" },
-  advanced: { label: "推进", title: "advanced", className: "border-emerald-300 bg-emerald-50 text-emerald-700" },
-  paid: { label: "已回收", title: "paid", className: "text-muted-foreground" },
+  open: { label: "Planted", title: "open", className: "border-amber-300 bg-amber-50 text-amber-700" },
+  advanced: { label: "Advanced", title: "advanced", className: "border-emerald-300 bg-emerald-50 text-emerald-700" },
+  paid: { label: "Paid off", title: "paid", className: "text-muted-foreground" },
 };
 
 const CHECK_META: Record<
@@ -223,7 +223,7 @@ export function MemoryPanel({
       {/* Zone switcher — canonical 7-zone order; 本书记忆 is the default zone */}
       <div
         role="tablist"
-        aria-label="记忆枢纽分区 Memory hub zones"
+        aria-label="Memory hub zones"
         className="flex flex-wrap gap-1.5"
       >
         {ZONES.map((z) => {
@@ -258,26 +258,26 @@ export function MemoryPanel({
       {/* Slim always-visible totals strip */}
       <div
         className="flex flex-wrap items-center gap-x-2 gap-y-0.5 rounded-lg border bg-muted/30 px-3 py-1.5 text-[11px] text-muted-foreground"
-        aria-label="全书总计 Totals"
+        aria-label="Totals"
       >
         <span className="inline-flex items-center gap-1">
           <PenLine className="h-3 w-3" aria-hidden="true" />
-          <span className="font-medium text-foreground/80">{totalWords.toLocaleString()}</span>词
+          <span className="font-medium text-foreground/80">{totalWords.toLocaleString()}</span> words
         </span>
         <span aria-hidden="true">·</span>
         <span>
-          <span className="font-medium text-foreground/80">{detail.chapters.length}</span>章
+          <span className="font-medium text-foreground/80">{detail.chapters.length}</span> chapters
         </span>
         <span aria-hidden="true">·</span>
         <span>
           <span className="font-medium text-foreground/80">
             {view ? view.items.length.toLocaleString() : loading ? "…" : error ? "—" : "0"}
           </span>
-          条记忆
+          memories
         </span>
         <span className="ml-auto hidden items-center gap-1 sm:inline-flex">
           <Brain className="h-3 w-3" aria-hidden="true" />
-          记忆枢纽 Memory hub
+          Memory hub
         </span>
       </div>
 
@@ -417,25 +417,25 @@ function WorldBibleZone({
   return (
     <Card>
       <CardHeader className="pb-3">
-        <ZoneHeading icon={Globe} title="世界书" caption="World Bible" />
+        <ZoneHeading icon={Globe} title="World book" caption="World Bible" />
         <CardDescription>
-          角色、地点、势力与设定规则 — 注入 AI 写作上下文的设定库。
+          Characters, places, factions and world rules — the setting library injected into AI writing context.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">
         <div className="flex flex-wrap gap-1.5">
-          <CountBadge label="角色" value={detail.characters.length} />
-          <CountBadge label="世界词条" value={entries.length} />
-          <CountBadge label="分组" value={groups.length} />
-          <CountBadge label="未分组" value={ungroupedCount} />
+          <CountBadge label="Characters" value={detail.characters.length} />
+          <CountBadge label="World entries" value={entries.length} />
+          <CountBadge label="Group" value={groups.length} />
+          <CountBadge label="Ungrouped" value={ungroupedCount} />
         </div>
 
         {groupRows.length > 0 && (
           <div>
             <p className="mb-1 text-[11px] text-muted-foreground">
-              分组 · 每组词条数 Groups
+              Groups · entries per group
             </p>
-            <ul className={SCROLL_SHORT} aria-label="世界书分组">
+            <ul className={SCROLL_SHORT} aria-label="World book groups">
               {groupRows.map((g) => (
                 <li
                   key={g.id}
@@ -444,7 +444,7 @@ function WorldBibleZone({
                   <Layers className="h-3 w-3 shrink-0 text-muted-foreground" aria-hidden="true" />
                   <span className="min-w-0 truncate">{g.name}</span>
                   <Badge variant="secondary" className="ml-auto shrink-0 text-[11px] font-normal">
-                    {g.count} 词条
+                    {g.count} entries
                   </Badge>
                 </li>
               ))}
@@ -454,18 +454,18 @@ function WorldBibleZone({
 
         {ungroupedCount > 0 && (
           <p className="text-[11px] text-muted-foreground">
-            另有 {ungroupedCount} 条词条未分组（{groupedCount} 条挂在分组下），显示在世界书顶层。
+            {ungroupedCount} ungrouped entries ({groupedCount} in groups) shown at the World book top level.
           </p>
         )}
 
         {entries.length === 0 && detail.characters.length === 0 && (
           <p className="rounded-lg border border-dashed p-4 text-center text-sm text-muted-foreground">
-            世界书还是空的 — 打开管理页添加角色与设定。
+            World book is empty — open the manager to add characters and settings.
           </p>
         )}
 
         <div className="flex justify-end">
-          <OpenTabButton label="打开世界书管理" tab="bible" onOpen={onOpenArtifactTab} />
+          <OpenTabButton label="Open World book manager" tab="bible" onOpen={onOpenArtifactTab} />
         </div>
       </CardContent>
     </Card>
@@ -491,9 +491,9 @@ function ContractZone({
   return (
     <Card>
       <CardHeader className="pb-3">
-        <ZoneHeading icon={ScrollText} title="作品契约" caption="Story Contract" />
+        <ZoneHeading icon={ScrollText} title="Book contract" caption="Story Contract" />
         <CardDescription>
-          本书对读者许下的承诺：类型期待、受众、文风承诺与硬性禁忌。
+          The promises this book makes to its reader: genre expectations, audience, style commitment and hard taboos.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">
@@ -502,16 +502,16 @@ function ContractZone({
             finalized ? (
               <Badge variant="outline" className={cn("gap-1 text-[11px]", CHIP_EMERALD)}>
                 <Lock className="h-3 w-3" aria-hidden="true" />
-                已定稿（锁定）
+                Locked
               </Badge>
             ) : (
               <Badge variant="outline" className={cn("text-[11px]", CHIP_AMBER)}>
-                草稿
+                Draft
               </Badge>
             )
           ) : (
             <Badge variant="outline" className="text-[11px] text-muted-foreground">
-              未写入
+              Empty
             </Badge>
           )}
         </div>
@@ -519,7 +519,7 @@ function ContractZone({
         {written && contract && (
           <div
             className="nice-scroll max-h-40 overflow-y-auto whitespace-pre-wrap rounded-md border bg-muted/40 p-2.5 text-xs leading-5"
-            aria-label="契约预览 Contract preview"
+            aria-label="Contract preview"
           >
             {contract.length > 400 ? `${contract.slice(0, 400)}…` : contract}
           </div>
@@ -527,7 +527,7 @@ function ContractZone({
 
         {!written && (
           <p className="rounded-lg border border-dashed p-4 text-center text-sm text-muted-foreground">
-            契约尚未写入 — 先写下类型期待、受众与硬性禁忌，它会进入每一次 AI 写作上下文。
+            No contract yet — write genre expectations, audience and hard taboos first; it enters every AI writing context.
           </p>
         )}
 
@@ -541,12 +541,12 @@ function ContractZone({
         >
           <Lock className="mt-0.5 h-3 w-3 shrink-0" aria-hidden="true" />
           {finalized
-            ? "已定稿契约 = 不可变正典（Immutable Canon）。修改须走 reopen 流程并自动存档原版。"
-            : "契约注入每一次 AI 写作上下文；定稿后锁定为不可变正典（Immutable Canon）。"}
+            ? "Finalized contract = Immutable Canon. Changes require the reopen flow and archive the original automatically."
+            : "The contract is injected into every AI writing context; finalizing locks it as Immutable Canon."}
         </p>
 
         <div className="flex justify-end">
-          <OpenTabButton label="打开契约" tab="contract" onOpen={onOpenArtifactTab} />
+          <OpenTabButton label="Open contract" tab="contract" onOpen={onOpenArtifactTab} />
         </div>
       </CardContent>
     </Card>
@@ -579,47 +579,47 @@ function OutlineZone({
   return (
     <Card>
       <CardHeader className="pb-3">
-        <ZoneHeading icon={ListTree} title="大纲" caption="Outline" />
-        <CardDescription>卷规划、情节节拍与章摘要 — 逐章推进的路线图。</CardDescription>
+        <ZoneHeading icon={ListTree} title="Outline" caption="Outline" />
+        <CardDescription>Volumes, story beats and chapter digests — the chapter-by-chapter roadmap.</CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">
         <div className="flex flex-wrap gap-1.5">
-          <CountBadge label="情节节拍" value={beats.length} />
-          <CountBadge label="分卷" value={volumes.length} />
-          <CountBadge label="章摘要" value={digests.length} />
+          <CountBadge label="Story beats" value={beats.length} />
+          <CountBadge label="Volumes" value={volumes.length} />
+          <CountBadge label="Chapter digests" value={digests.length} />
         </div>
 
         {volumeRows.length > 0 ? (
-          <ul className={SCROLL_SHORT} aria-label="分卷列表">
+          <ul className={SCROLL_SHORT} aria-label="Volume list">
             {volumeRows.map((v) => (
               <li
                 key={v.id}
                 className="flex items-center gap-2 border-b py-1.5 text-sm last:border-0"
               >
                 <span className="shrink-0 font-mono text-[11px] text-muted-foreground">
-                  卷{v.index}
+                  Vol. {v.index}
                 </span>
                 <span className="min-w-0 truncate">{v.title}</span>
                 <Badge variant="secondary" className="ml-auto shrink-0 text-[11px] font-normal">
-                  {v.beats} 节拍
+                  {v.beats} beats
                 </Badge>
               </li>
             ))}
           </ul>
         ) : (
           <p className="rounded-lg border border-dashed p-4 text-center text-sm text-muted-foreground">
-            尚未创建分卷 — 打开大纲添加卷规划与情节节拍。
+            No volumes yet — open the Outline to add volumes and story beats.
           </p>
         )}
 
         {unsortedBeats > 0 && (
           <p className="text-[11px] text-muted-foreground">
-            另有 {unsortedBeats} 个节拍未入卷。
+            {unsortedBeats} beats are not in a volume.
           </p>
         )}
 
         <div className="flex justify-end">
-          <OpenTabButton label="打开大纲" tab="outline" onOpen={onOpenArtifactTab} />
+          <OpenTabButton label="Open Outline" tab="outline" onOpen={onOpenArtifactTab} />
         </div>
       </CardContent>
     </Card>
@@ -666,19 +666,19 @@ function LedgerZone({
     {
       kind: "storyline",
       icon: GitBranch,
-      label: "故事线",
+      label: "Storylines",
       caption: "Storylines",
       total: ledger.storylines.length,
       chips: [
-        { label: "进行中", count: storylineTally.active ?? 0, className: CHIP_EMERALD },
-        { label: "沉睡", count: storylineTally.dormant ?? 0, className: CHIP_AMBER },
-        { label: "已收束", count: storylineTally.resolved ?? 0, className: CHIP_MUTED },
+        { label: "Active", count: storylineTally.active ?? 0, className: CHIP_EMERALD },
+        { label: "Dormant", count: storylineTally.dormant ?? 0, className: CHIP_AMBER },
+        { label: "Resolved", count: storylineTally.resolved ?? 0, className: CHIP_MUTED },
       ],
     },
     {
       kind: "timeline",
       icon: Clock,
-      label: "时间线",
+      label: "Timeline",
       caption: "Timeline",
       total: ledger.timeline.length,
       chips: [],
@@ -686,7 +686,7 @@ function LedgerZone({
     {
       kind: "arc",
       icon: User,
-      label: "人物弧线",
+      label: "Character arcs",
       caption: "Character arcs",
       total: ledger.arcs.length,
       chips: [],
@@ -694,25 +694,25 @@ function LedgerZone({
     {
       kind: "promise",
       icon: Stamp,
-      label: "承诺",
+      label: "Promises",
       caption: "Promises",
       total: ledger.promises.length,
       chips: [
-        { label: "待兑现", count: promiseTally.open ?? 0, className: CHIP_AMBER },
-        { label: "已兑现", count: promiseTally.fulfilled ?? 0, className: CHIP_EMERALD },
-        { label: "已背弃", count: promiseTally.broken ?? 0, className: CHIP_MUTED },
+        { label: "Open", count: promiseTally.open ?? 0, className: CHIP_AMBER },
+        { label: "Fulfilled", count: promiseTally.fulfilled ?? 0, className: CHIP_EMERALD },
+        { label: "Broken", count: promiseTally.broken ?? 0, className: CHIP_MUTED },
       ],
     },
     {
       kind: "clue",
       icon: Eye,
-      label: "线索",
+      label: "Clues",
       caption: "Clues",
       total: ledger.clues.length,
       chips: [
-        { label: "已埋设", count: clueTally.planted ?? 0, className: CHIP_AMBER },
-        { label: "已浮现", count: clueTally.surfaced ?? 0, className: CHIP_EMERALD },
-        { label: "已揭示", count: clueTally.revealed ?? 0, className: CHIP_MUTED },
+        { label: "Planted", count: clueTally.planted ?? 0, className: CHIP_AMBER },
+        { label: "Surfaced", count: clueTally.surfaced ?? 0, className: CHIP_EMERALD },
+        { label: "Revealed", count: clueTally.revealed ?? 0, className: CHIP_MUTED },
       ],
     },
   ];
@@ -720,22 +720,22 @@ function LedgerZone({
   return (
     <Card>
       <CardHeader className="pb-3">
-        <ZoneHeading icon={NotebookText} title="账本" caption="Story Ledger" />
+        <ZoneHeading icon={NotebookText} title="Ledger" caption="Story Ledger" />
         <CardDescription>
-          五本账本追踪故事线、时间、弧线、承诺与线索的因果闭环。
+          Five ledgers track the causal loop of storylines, time, arcs, promises and clues.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">
-        <ul aria-label="账本行 Ledger rows">
+        <ul aria-label="Ledger rows">
           {rows.map((row) => (
             <LedgerRow key={row.kind} {...row} onView={viewKind} />
           ))}
         </ul>
         <div className="flex flex-wrap items-center justify-between gap-2">
           <p className="text-[11px] text-muted-foreground">
-            「查看」直达对应账本视图。
+            "View" opens the matching ledger view.
           </p>
-          <OpenTabButton label="打开账本" tab="ledger" onOpen={onOpenArtifactTab} />
+          <OpenTabButton label="Open Ledger" tab="ledger" onOpen={onOpenArtifactTab} />
         </div>
       </CardContent>
     </Card>
@@ -761,7 +761,7 @@ function LedgerRow({
         </p>
         <div className="mt-1 flex flex-wrap gap-1">
           {total === 0 ? (
-            <span className="text-[11px] text-muted-foreground">暂无记录</span>
+            <span className="text-[11px] text-muted-foreground">No records</span>
           ) : (
             chips
               .filter((c) => c.count > 0)
@@ -787,7 +787,7 @@ function LedgerRow({
           className="h-7 px-2 text-xs"
           onClick={() => onView(kind)}
         >
-          查看
+          View
         </Button>
       </div>
     </li>
@@ -855,22 +855,22 @@ function NovelMemoryZone({
       >
         <Brain className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
         <p>
-          记忆由 <span className="font-medium">Review → Settle</span>{" "}
-          每章沉淀，并自动注入 AI 草稿 — 此处为读回视图，非模拟数据。
+          Memory is settled by <span className="font-medium">Review → Settle</span>{" "}
+          and injected into AI drafts automatically — this is a read-back view, not simulated data.
         </p>
       </div>
 
       {error && (
         <div className="flex items-center justify-between gap-2 rounded-lg border border-rose-200 bg-rose-50 p-3 text-sm text-rose-900">
-          <span>记忆加载失败：{error}</span>
+          <span>Failed to load memory: {error}</span>
           <Button size="sm" variant="outline" onClick={onRefresh}>
-            重试
+            Retry
           </Button>
         </div>
       )}
 
       {loading && !view && (
-        <div className="space-y-2" aria-busy="true" aria-label="正在加载记忆">
+        <div className="space-y-2" aria-busy="true" aria-label="Loading memory">
           {[0, 1, 2, 3].map((i) => (
             <div key={i} className="h-10 animate-pulse rounded-md bg-muted" />
           ))}
@@ -880,15 +880,15 @@ function NovelMemoryZone({
       {view && (
         <>
           {/* Counters */}
-          <div className="flex flex-wrap gap-1.5" aria-label="记忆计数">
-            <StatBadge label="事实 facts" value={view.stats.facts} />
-            <StatBadge label="状态 states" value={view.stats.states} />
+          <div className="flex flex-wrap gap-1.5" aria-label="Memory counts">
+            <StatBadge label="Facts" value={view.stats.facts} />
+            <StatBadge label="States" value={view.stats.states} />
             <StatBadge
-              label="未回收伏线 loops"
+              label="Open loops"
               value={view.stats.loopsOpen + view.stats.loopsAdvanced + view.stats.loopFacts}
             />
-            <StatBadge label="已回收 paid" value={view.stats.loopsPaid} />
-            <StatBadge label="章节 chapters" value={view.stats.chapters} />
+            <StatBadge label="Paid off" value={view.stats.loopsPaid} />
+            <StatBadge label="Chapters" value={view.stats.chapters} />
             <span className="ml-auto">
               <Button
                 size="sm"
@@ -902,17 +902,17 @@ function NovelMemoryZone({
                 ) : (
                   <RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />
                 )}
-                刷新
+                Refresh
               </Button>
             </span>
           </div>
 
           {!hasMemory && (
             <div className="rounded-lg border border-dashed p-6 text-center">
-              <p className="text-sm font-medium">还没有记忆</p>
+              <p className="text-sm font-medium">No memory yet</p>
               <p className="mt-1 text-xs text-muted-foreground">
-                写一章，运行 Review，再执行 Settle — 提取的事实、人物状态与伏线会出现在这里，
-                并从此注入每一次 AI 草稿。
+                Write a chapter, run Review, then Settle — extracted facts, character states and loops appear here,
+                and are injected into every AI draft from then on.
               </p>
             </div>
           )}
@@ -921,8 +921,8 @@ function NovelMemoryZone({
             {/* Story memory */}
             <Card>
               <CardHeader className="pb-3">
-                <ZoneHeading icon={Brain} title="记忆条目" caption="Story memory" />
-                <CardDescription>AI 从已沉淀章节中学到的一切。</CardDescription>
+                <ZoneHeading icon={Brain} title="Memory items" caption="Story memory" />
+                <CardDescription>Everything the AI learned from settled chapters.</CardDescription>
               </CardHeader>
               <CardContent className="space-y-3">
                 {hasMemory && (
@@ -935,8 +935,8 @@ function NovelMemoryZone({
                       <Input
                         value={query}
                         onChange={(e) => setQuery(e.target.value)}
-                        placeholder="搜索记忆… Search memory…"
-                        aria-label="搜索记忆条目"
+                        placeholder="Search memory…"
+                        aria-label="Search memory items"
                         className="h-8 pl-8 text-sm"
                       />
                     </div>
@@ -944,7 +944,7 @@ function NovelMemoryZone({
                     <div
                       className="flex flex-wrap gap-1.5"
                       role="group"
-                      aria-label="按类别筛选 Filter by category"
+                      aria-label="Filter by category"
                     >
                       {CATEGORY_ORDER.map((c) => {
                         const count =
@@ -964,7 +964,7 @@ function NovelMemoryZone({
                                 : "text-muted-foreground hover:bg-secondary"
                             )}
                           >
-                            {c === "all" ? "全部" : CATEGORY_LABELS[c]} · {count}
+                            {c === "all" ? "All" : CATEGORY_LABELS[c]} · {count}
                           </button>
                         );
                       })}
@@ -973,7 +973,7 @@ function NovelMemoryZone({
                 )}
 
                 {filtered.length > 0 ? (
-                  <ul className={SCROLL_LIST} aria-label="记忆条目">
+                  <ul className={SCROLL_LIST} aria-label="Memory items">
                     {filtered.map((item) => (
                       <li
                         key={item.id}
@@ -1002,11 +1002,11 @@ function NovelMemoryZone({
                           <p className="text-sm">{item.content}</p>
                           <p className="mt-0.5 text-[11px] text-muted-foreground">
                             {item.sourceChapter != null
-                              ? `第 ${item.sourceChapter} 章起`
-                              : "来源章节未知"}
+                              ? `From Ch ${item.sourceChapter}`
+                              : "Unknown source chapter"}
                             {item.lastSeenChapter != null &&
                               item.lastSeenChapter !== item.sourceChapter &&
-                              ` · 最近见于第 ${item.lastSeenChapter} 章`}
+                              ` · last seen in Ch ${item.lastSeenChapter}`}
                           </p>
                         </div>
                       </li>
@@ -1015,7 +1015,7 @@ function NovelMemoryZone({
                 ) : (
                   hasMemory && (
                     <p className="py-2 text-sm text-muted-foreground">
-                      没有匹配当前筛选的记忆条目。
+                      No memory items match this filter.
                     </p>
                   )
                 )}
@@ -1025,8 +1025,8 @@ function NovelMemoryZone({
             {/* Doctor checks */}
             <Card>
               <CardHeader className="pb-3">
-                <ZoneHeading icon={Stethoscope} title="体检" caption="Doctor checks" />
-                <CardDescription>对真实记忆表的确定性完整性扫描。</CardDescription>
+                <ZoneHeading icon={Stethoscope} title="Doctor checks" caption="Doctor checks" />
+                <CardDescription>A deterministic integrity scan of the real memory tables.</CardDescription>
               </CardHeader>
               <CardContent>
                 <ul aria-label="Doctor checks">
@@ -1081,21 +1081,21 @@ function CanonZone({
   return (
     <Card>
       <CardHeader className="pb-3">
-        <ZoneHeading icon={Lock} title="定稿" caption="Canon" />
-        <CardDescription>Immutable Canon — 已锁定的最终文本。</CardDescription>
+        <ZoneHeading icon={Lock} title="Final drafts" caption="Canon" />
+        <CardDescription>Immutable Canon — the locked final text.</CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">
         <div className="flex flex-wrap gap-1.5">
-          <CountBadge label="已定稿章" value={finals.length} />
-          <CountBadge label="全书章节" value={chapters.length} />
+          <CountBadge label="Finalized chapters" value={finals.length} />
+          <CountBadge label="All chapters" value={chapters.length} />
         </div>
 
         {finals.length === 0 ? (
           <p className="rounded-lg border border-dashed p-4 text-center text-sm text-muted-foreground">
-            还没有定稿章节 — Review 通过后执行 Finalize。
+            No finalized chapters — run Finalize after Review passes.
           </p>
         ) : (
-          <ul className={SCROLL_SHORT} aria-label="定稿章节列表">
+          <ul className={SCROLL_SHORT} aria-label="Finalized chapters">
             {finals.map((c) => (
               <li
                 key={c.id}
@@ -1106,7 +1106,7 @@ function CanonZone({
                   {zeroPad4(c.index)}-{c.title}
                 </span>
                 <span className="ml-auto shrink-0 text-[11px] text-muted-foreground">
-                  {c.wordCount.toLocaleString()} 词
+                  {c.wordCount.toLocaleString()} words
                 </span>
               </li>
             ))}
@@ -1115,11 +1115,11 @@ function CanonZone({
 
         <p className="flex items-start gap-1.5 rounded-md border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-[11px] text-amber-800">
           <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" aria-hidden="true" />
-          定稿 = 不可变正典（Immutable Canon）。修改须走 reopen 流程，并自动存档原版。
+          Final drafts = Immutable Canon. Changes require the reopen flow and archive the original automatically.
         </p>
 
         <div className="flex justify-end">
-          <OpenTabButton label="打开定稿区" tab="canon" onOpen={onOpenArtifactTab} />
+          <OpenTabButton label="Open Final drafts" tab="canon" onOpen={onOpenArtifactTab} />
         </div>
       </CardContent>
     </Card>
@@ -1147,32 +1147,32 @@ function DraftWorkspaceZone({
   return (
     <Card>
       <CardHeader className="pb-3">
-        <ZoneHeading icon={PenLine} title="草稿区" caption="Draft Workspace" />
-        <CardDescription>写作进行时的工作区 — 章节草稿与两类工作包。</CardDescription>
+        <ZoneHeading icon={PenLine} title="Drafts" caption="Draft Workspace" />
+        <CardDescription>The active workspace — chapter drafts and two kinds of packs.</CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">
         <div className="flex flex-wrap gap-1.5">
-          <CountBadge label="草稿章" value={draftCount} />
-          <CountBadge label="修订章" value={revisedCount} />
-          <CountBadge label="材料包" value={materialCount} />
-          <CountBadge label="定稿准备包" value={prepCount} />
+          <CountBadge label="Draft chapters" value={draftCount} />
+          <CountBadge label="Revised chapters" value={revisedCount} />
+          <CountBadge label="Materials" value={materialCount} />
+          <CountBadge label="Final prep packs" value={prepCount} />
         </div>
 
         {chapters.length === 0 && packs.length === 0 && (
           <p className="rounded-lg border border-dashed p-4 text-center text-sm text-muted-foreground">
-            工作区还是空的 — 新建一章开始写作，或先生成材料包。
+            The workspace is empty — create a chapter to start writing, or generate a Materials pack first.
           </p>
         )}
 
         <div className="flex flex-wrap justify-end gap-2">
           <OpenTabButton
-            label="打开编辑器"
+            label="Open editor"
             tab="draft"
             onOpen={onOpenArtifactTab}
             icon={PenLine}
           />
           <OpenTabButton
-            label="打开材料包"
+            label="Open Materials"
             tab="packs"
             onOpen={onOpenArtifactTab}
             icon={Layers}

@@ -63,7 +63,7 @@ export async function POST(req: Request) {
   // designed two-level world-bible shape immediately.
   if (worldEntries && worldEntries.length > 0) {
     const group = await db.worldGroup.create({
-      data: { novelId: novel.id, name: "世界规则", order: 1 },
+      data: { novelId: novel.id, name: "World rules", order: 1 },
     });
     await db.worldEntry.createMany({
       data: worldEntries.map((w) => ({

@@ -43,15 +43,15 @@ const PACK_KIND_META: Record<
   { label: string; icon: LucideIcon; description: string; empty: string }
 > = {
   material: {
-    label: "材料包",
+    label: "Materials",
     icon: PackageOpen,
-    description: "起草前备料：背景、证据、时间线锚点（草稿区/材料包）",
+    description: "Background, evidence and timeline anchors assembled before drafting (Drafts/Materials)",
     empty: "No material packs yet — assemble background evidence before drafting.",
   },
   prep: {
-    label: "定稿准备",
+    label: "Final prep",
     icon: ClipboardCheck,
-    description: "定稿前的原子准备：审读结论、修复记录（草稿区/定稿准备）",
+    description: "Atomic prep before finalizing: review conclusions and repair notes (Drafts/Final prep)",
     empty: "No finalize-prep packs yet.",
   },
 };
@@ -59,7 +59,7 @@ const PACK_KIND_META: Record<
 /** `第{chapterIndex}章 · {title}` — 未起草 when no chapter exists yet. */
 function chapterLabel(chapterIndex: number, chapters: ChapterDTO[]): string {
   const title = chapters.find((c) => c.index === chapterIndex)?.title;
-  return `第${chapterIndex}章 · ${title ?? "未起草"}`;
+  return `Chapter ${chapterIndex} · ${title ?? "Not drafted"}`;
 }
 
 /** Resolves the focused pack from a `${kind}:${chapterIndex}` key. */
@@ -200,7 +200,7 @@ function PackDocument({
             target={{
               type: "pack",
               id: pack.id,
-              label: `${meta.label} · 第${pack.chapterIndex}章 ${pack.title}`,
+              label: `${meta.label} · Chapter ${pack.chapterIndex} ${pack.title}`,
             }}
             className="ml-auto"
           />
@@ -218,7 +218,7 @@ function PackDocument({
             setTitle(e.target.value);
             setDirty(true);
           }}
-          placeholder={`${meta.label} title — 第${pack.chapterIndex}章`}
+          placeholder={`${meta.label} title — Chapter ${pack.chapterIndex}`}
           aria-label="Pack title"
           className="font-medium"
         />
@@ -352,11 +352,11 @@ function PackSection({
                 <button
                   type="button"
                   onClick={() => onSelectPack(`${p.kind}:${p.chapterIndex}`)}
-                  aria-label={`Open ${PACK_KIND_META[p.kind].label} for 第${p.chapterIndex}章`}
+                  aria-label={`Open ${PACK_KIND_META[p.kind].label} for Chapter ${p.chapterIndex}`}
                   className="flex min-h-[40px] w-full items-center gap-2 py-2 text-left transition-colors hover:bg-secondary/60"
                 >
                   <span className="shrink-0 rounded border bg-muted px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground">
-                    第{p.chapterIndex}章
+                    Chapter {p.chapterIndex}
                   </span>
                   <span className="min-w-0 flex-1 truncate text-sm">
                     {p.title || `Untitled ${meta.label}`}
@@ -398,7 +398,7 @@ function PackSection({
             ) : (
               <Plus className="h-4 w-4" aria-hidden="true" />
             )}
-            创建
+            Create
           </Button>
           {chapter == null && (
             <p className="text-[11px] text-rose-600">

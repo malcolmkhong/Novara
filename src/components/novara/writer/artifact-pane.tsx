@@ -123,9 +123,9 @@ function DigestsCard({
   return (
     <Card>
       <CardHeader className="pb-2">
-        <CardTitle className="font-display text-sm">章摘要 · Chapter digests</CardTitle>
+        <CardTitle className="font-display text-sm">Chapter digests</CardTitle>
         <CardDescription>
-          Per-chapter recaps the AI chains continuity from (大纲/卷规划/章摘要).
+          Per-chapter recaps the AI chains continuity from (Outline / Volumes / Chapter digests).
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -140,7 +140,7 @@ function DigestsCard({
               return (
                 <li key={d.chapterId} className="border-b pb-2 last:border-0">
                   <p className="text-xs font-medium">
-                    第{d.chapterIndex}章
+                    Chapter {d.chapterIndex}
                     {chapter ? ` · ${chapter.title}` : ""}
                   </p>
                   {d.summary && (

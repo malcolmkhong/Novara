@@ -53,12 +53,12 @@ export function ContractPanel({
   const contractPin: PinnedRef = {
     type: "contract",
     id: novelId,
-    label: "作品契约 Story contract",
+    label: "Book contract",
   };
   const conceptPin: PinnedRef = {
     type: "concept",
     id: novelId,
-    label: "构想快照 Concept snapshot",
+    label: "Concept snapshot",
   };
 
   // Canon lock (Phase 9) — the story contract is novel-level Immutable Canon:
@@ -81,7 +81,7 @@ export function ContractPanel({
   return (
     <div className="space-y-4">
       <ContractDocument
-        title="作品契约"
+        title="Book contract"
         icon={ScrollText}
         description="The promise this book makes: genre expectations, audience, style commitments, hard taboos. Read into every AI writing context."
         value={contract ?? ""}
@@ -117,9 +117,9 @@ export function ContractPanel({
         }}
       />
       <ContractDocument
-        title="构想快照"
+        title="Concept snapshot"
         icon={Lightbulb}
-        description="The initial creative vision, kept verbatim (构想/构想快照.md analog) so drift between vision and plan stays auditable."
+        description="The initial creative vision, kept verbatim (Concepts/Concept snapshot.md analog) so drift between vision and plan stays auditable."
         value={conceptSnapshot}
         onSave={onSaveConcept}
         placeholder="Paste the vision from the creation wizard here — it stays verbatim so you can audit how far the plan has drifted."
@@ -205,7 +205,7 @@ function ContractDocument({
           <Icon className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
           <CardTitle className="font-display text-base">{title}</CardTitle>
           {locked && (
-            <span className="flex items-center gap-1 text-[11px] font-medium text-emerald-700" title="Immutable Canon — 已定稿，修订请先解除定稿">
+            <span className="flex items-center gap-1 text-[11px] font-medium text-emerald-700" title="Immutable Canon — locked; Unlock before revising">
               <Lock className="h-3.5 w-3.5" aria-hidden="true" />
               Canon
             </span>
@@ -260,7 +260,7 @@ function ContractDocument({
           {locked ? (
             <p className="mr-auto flex items-center gap-1 text-[11px] text-muted-foreground">
               <Lock className="h-3 w-3 shrink-0" aria-hidden="true" />
-              已定稿（Immutable Canon）— 解除定稿后可修订，原版自动存档。
+              Locked (Immutable Canon) — Unlock to revise; the original is archived automatically.
             </p>
           ) : (
             dirty && (

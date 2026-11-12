@@ -715,7 +715,7 @@ export function ChapterEditor({
                 target={{
                   type: "chapter",
                   id: selected.id,
-                  label: `第${selected.index}章 ${selected.title}`,
+                  label: `Chapter ${selected.index} ${selected.title}`,
                 }}
                 label="Pin to chat"
               />
@@ -776,7 +776,7 @@ export function ChapterEditor({
                   className="flex w-full items-center gap-1.5 border-b bg-muted/20 px-4 py-1.5 text-left text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
                 >
                   <ScrollText className="h-3.5 w-3.5" aria-hidden="true" />
-                  Brief / 细纲
+                  Brief / Outline
                   {briefOpen ? (
                     <ChevronUp className="ml-auto h-3.5 w-3.5" aria-hidden="true" />
                   ) : (
@@ -824,7 +824,7 @@ export function ChapterEditor({
                   <div className="mx-auto mb-6 max-w-prose rounded-md border bg-muted/30 px-4 py-3">
                     <p className="mb-1.5 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
                       <ScrollText className="h-3.5 w-3.5" aria-hidden="true" />
-                      Brief / 细纲
+                      Brief / Outline
                     </p>
                     <MarkdownDocument
                       content={brief}
@@ -901,7 +901,7 @@ export function ChapterEditor({
                       )}
                     >
                       <span className="font-mono text-xs">
-                        稿{version.draftNo}
+                        Draft {version.draftNo}
                       </span>
                       <span className="shrink-0 text-xs text-muted-foreground">
                         {formatWordCount(version.wordCount)} words
@@ -939,7 +939,7 @@ export function ChapterEditor({
                 <div className="rounded-md border">
                   <div className="flex items-center justify-between gap-2 border-b px-3 py-2">
                     <span className="text-xs font-medium text-muted-foreground">
-                      稿{activeVersion.draftNo} preview
+                      Draft {activeVersion.draftNo} preview
                     </span>
                     <Button
                       size="sm"

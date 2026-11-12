@@ -272,7 +272,7 @@ export async function PATCH(req: Request, { params }: Params) {
 
     if (locked && !contractReopen) {
       return jsonError(
-        "作品契约已定稿（Immutable Canon），不可直接修改。修订请先解除定稿（reopen）——原版会自动存档。",
+        "Book contract is locked (Immutable Canon) and cannot be edited directly. Unlock (reopen) first — the original is archived automatically.",
         409
       );
     }

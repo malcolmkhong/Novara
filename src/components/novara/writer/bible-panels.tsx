@@ -80,7 +80,7 @@ import { cn } from "@/lib/utils";
 // ---------------------------------------------------------------------------
 
 const REOPEN_ARCHIVE_NOTE =
-  "原版将自动存档到版本史，然后降回草稿，可再次编辑。";
+  "The original is archived to version history, then returned to draft so it can be edited again.";
 
 /** Amber “已定稿” badge shown beside document titles while canon-locked. */
 export function CanonFinalBadge() {
@@ -89,7 +89,7 @@ export function CanonFinalBadge() {
       variant="outline"
       className="shrink-0 border-amber-300 bg-amber-50 text-[11px] text-amber-700"
     >
-      已定稿
+      Locked
     </Badge>
   );
 }
@@ -121,21 +121,21 @@ export function CanonLockButton({
           disabled={busy}
           onClick={() => setConfirming(true)}
           className="h-8 gap-1.5 border-amber-300 bg-amber-50 px-2 text-xs text-amber-700 hover:bg-amber-100 hover:text-amber-800"
-          aria-label="解除定稿"
+          aria-label="Unlock"
         >
           {busy ? (
             <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
           ) : (
             <LockOpen className="h-3.5 w-3.5" aria-hidden="true" />
           )}
-          解除定稿
+          Unlock
         </Button>
         <ConfirmDialog
           open={confirming}
           onOpenChange={setConfirming}
-          title="解除定稿？"
+          title="Unlock?"
           description={REOPEN_ARCHIVE_NOTE}
-          confirmLabel="解除定稿"
+          confirmLabel="Unlock"
           busy={busy}
           onConfirm={() => {
             setConfirming(false);
@@ -154,19 +154,19 @@ export function CanonLockButton({
         disabled={busy}
         onClick={() => setConfirming(true)}
         className="h-8 gap-1.5 border-emerald-300 bg-emerald-50 px-2 text-xs text-emerald-700 hover:bg-emerald-100 hover:text-emerald-800"
-        aria-label="定稿"
+        aria-label="Finalize"
       >
         <Lock className="h-3.5 w-3.5" aria-hidden="true" />
-        定稿
+        Finalize
       </Button>
       <ConfirmDialog
         open={confirming}
         onOpenChange={setConfirming}
-        title="定稿？"
+        title="Finalize?"
         description={
-          "定稿后成为 Immutable Canon：编辑或删除将被拒绝，如需修改须先解除定稿。"
+          "Finalizing makes it Immutable Canon: edits and deletes are refused; Unlock before making changes."
         }
-        confirmLabel="定稿"
+        confirmLabel="Finalize"
         busy={busy}
         onConfirm={() => {
           setConfirming(false);
@@ -182,8 +182,8 @@ function useCanonAction() {
   const { toast } = useToast();
   return (e: unknown) =>
     toast({
-      title: "操作失败",
-      description: e instanceof Error ? e.message : "未知错误",
+      title: "Action failed",
+      description: e instanceof Error ? e.message : "Unknown error",
       variant: "destructive",
     });
 }
@@ -217,8 +217,8 @@ function CanonLockGlyph() {
   return (
     <span
       className="inline-flex shrink-0 items-center text-amber-600"
-      title="已定稿（Immutable Canon）"
-      aria-label="已定稿"
+      title="Locked (Immutable Canon)"
+      aria-label="Locked"
     >
       <Lock className="h-3.5 w-3.5" aria-hidden="true" />
     </span>
@@ -324,7 +324,7 @@ export function CharactersPanel({
                   size="icon"
                   onClick={() => openEdit(c)}
                   disabled={c.status === "final"}
-                  title={c.status === "final" ? "已定稿 — 解除定稿后可编辑" : undefined}
+                  title={c.status === "final" ? "Locked — Unlock to edit" : undefined}
                   aria-label={`Edit ${c.name}`}
                 >
                   <Pencil className="h-4 w-4" aria-hidden="true" />
@@ -391,7 +391,7 @@ export function CharactersPanel({
         title="Delete character?"
         description={
           deleting?.status === "final"
-            ? `“${deleting?.name ?? ""}” 已定稿：删除前原版将自动存档到版本史。`
+            ? `“${deleting?.name ?? ""}” is locked: the original is archived to version history before deletion.`
             : `“${deleting?.name ?? ""}” will be removed from the story bible.`
         }
         onConfirm={async () => {
@@ -770,7 +770,7 @@ export function WorldPanel({
       <div className="flex items-center justify-between gap-2">
         <span className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
           <FolderOpen className="h-3.5 w-3.5" aria-hidden="true" />
-          分组
+          Group
         </span>
         {!creatingGroup && (
           <Button
@@ -783,7 +783,7 @@ export function WorldPanel({
             }}
           >
             <Plus className="h-3.5 w-3.5" aria-hidden="true" />
-            新建分组
+            New group
           </Button>
         )}
       </div>
@@ -796,8 +796,8 @@ export function WorldPanel({
               if (e.key === "Enter") void createGroup();
               if (e.key === "Escape") setCreatingGroup(false);
             }}
-            placeholder="分组名称…"
-            aria-label="新分组名称"
+            placeholder="Group name…"
+            aria-label="New group name"
             autoFocus
             className="h-8 max-w-xs text-sm"
           />
@@ -808,7 +808,7 @@ export function WorldPanel({
             disabled={groupBusy || !newGroupName.trim()}
           >
             {groupBusy && <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />}
-            创建
+            Create
           </Button>
           <Button
             variant="ghost"
@@ -816,13 +816,13 @@ export function WorldPanel({
             className="h-8 px-2 text-xs"
             onClick={() => setCreatingGroup(false)}
           >
-            取消
+            Cancel
           </Button>
         </div>
       )}
       <div className="flex flex-wrap items-center gap-1.5">
         <GroupChip
-          label="全部"
+          label="All"
           count={entries.length}
           active={groupFilter === "all"}
           onSelect={() => setGroupFilter("all")}
@@ -840,14 +840,14 @@ export function WorldPanel({
                   if (e.key === "Enter") void renameGroup(g);
                   if (e.key === "Escape") setRenamingGroupId(null);
                 }}
-                aria-label="分组名称"
+                aria-label="Group name"
                 autoFocus
                 className="h-6 w-32 border-0 px-1 text-xs shadow-none focus-visible:ring-0"
               />
               <button
                 type="button"
                 onClick={() => void renameGroup(g)}
-                aria-label="保存分组名称"
+                aria-label="Save group name"
                 className="rounded p-0.5 text-emerald-600 hover:text-emerald-700"
               >
                 <Check className="h-3 w-3" aria-hidden="true" />
@@ -855,7 +855,7 @@ export function WorldPanel({
               <button
                 type="button"
                 onClick={() => setRenamingGroupId(null)}
-                aria-label="取消重命名"
+                aria-label="Cancel rename"
                 className="rounded p-0.5 text-muted-foreground hover:text-foreground"
               >
                 <X className="h-3 w-3" aria-hidden="true" />
@@ -883,8 +883,8 @@ export function WorldPanel({
                   setRenameValue(g.name);
                   setRenamingGroupId(g.id);
                 }}
-                aria-label={`重命名分组 ${g.name}`}
-                title="重命名"
+                aria-label={`Rename group ${g.name}`}
+                title="Rename"
                 className="rounded p-0.5 text-muted-foreground/50 transition-colors hover:text-foreground"
               >
                 <Pencil className="h-3 w-3" aria-hidden="true" />
@@ -892,8 +892,8 @@ export function WorldPanel({
               <button
                 type="button"
                 onClick={() => setDeletingGroup(g)}
-                aria-label={`删除分组 ${g.name}`}
-                title="删除分组"
+                aria-label={`Delete group ${g.name}`}
+                title="Delete group"
                 className="rounded p-0.5 text-muted-foreground/50 transition-colors hover:text-destructive"
               >
                 <Trash2 className="h-3 w-3" aria-hidden="true" />
@@ -903,7 +903,7 @@ export function WorldPanel({
         )}
         {groups.length === 0 && !creatingGroup && (
           <span className="text-xs text-muted-foreground">
-            暂无分组 — 用「新建分组」为世界书条目建立二级目录。
+            No groups — use "New group" to build a second level for World book entries.
           </span>
         )}
       </div>
@@ -949,7 +949,7 @@ export function WorldPanel({
                       size="icon"
                       onClick={() => openEdit(w)}
                       disabled={w.status === "final"}
-                      title={w.status === "final" ? "已定稿 — 解除定稿后可编辑" : undefined}
+                      title={w.status === "final" ? "Locked — Unlock to edit" : undefined}
                       aria-label={`Edit ${w.title}`}
                     >
                       <Pencil className="h-4 w-4" aria-hidden="true" />
@@ -977,7 +977,7 @@ export function WorldPanel({
             </div>
           ) : (
             <p className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">
-              该分组暂无条目。
+              This group has no entries.
             </p>
           )}
         </div>
@@ -1015,16 +1015,16 @@ export function WorldPanel({
             </div>
             {editing !== "new" && (
               <div className="space-y-1.5">
-                <Label>分组</Label>
+                <Label>Group</Label>
                 <Select
                   value={groupId ?? "ungrouped"}
                   onValueChange={(v) => setGroupId(v === "ungrouped" ? null : v)}
                 >
-                  <SelectTrigger aria-label="分组">
+                  <SelectTrigger aria-label="Group">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="ungrouped">未分组</SelectItem>
+                    <SelectItem value="ungrouped">Ungrouped</SelectItem>
                     {groups.map((g) => (
                       <SelectItem key={g.id} value={g.id}>
                         {g.name}
@@ -1054,7 +1054,7 @@ export function WorldPanel({
         title="Delete world entry?"
         description={
           deleting?.status === "final"
-            ? `“${deleting?.title ?? ""}” 已定稿：删除前原版将自动存档到版本史。`
+            ? `“${deleting?.title ?? ""}” is locked: the original is archived to version history before deletion.`
             : `“${deleting?.title ?? ""}” will be removed from the world bible.`
         }
         onConfirm={async () => {
@@ -1078,9 +1078,9 @@ export function WorldPanel({
       <ConfirmDialog
         open={deletingGroup !== null}
         onOpenChange={(v) => !v && setDeletingGroup(null)}
-        title="删除分组？"
-        description={`“${deletingGroup?.name ?? ""}” 将被删除，组内条目将变为未分组。`}
-        confirmLabel="删除分组"
+        title="Delete group?"
+        description={`“${deletingGroup?.name ?? ""}” will be deleted; its entries become Ungrouped.`}
+        confirmLabel="Delete group"
         busy={groupBusy}
         onConfirm={async () => {
           if (deletingGroup) await removeGroup(deletingGroup);
@@ -1107,7 +1107,7 @@ function GroupChip({
       type="button"
       onClick={onSelect}
       aria-pressed={active}
-      title={`只看「${label}」`}
+      title={`Show only "${label}"`}
       className={cn(
         "flex items-center gap-1 rounded-full px-2 py-0.5 text-xs transition-colors",
         active
@@ -1424,7 +1424,7 @@ export function OutlinePanel({
             size="icon"
             onClick={() => openEdit(b)}
             disabled={locked}
-            title={locked ? "已定稿 — 解除定稿后可编辑" : undefined}
+            title={locked ? "Locked — Unlock to edit" : undefined}
             aria-label={`Edit beat ${no}`}
           >
             <Pencil className="h-4 w-4" aria-hidden="true" />
@@ -1522,7 +1522,7 @@ export function OutlinePanel({
                 <section key="unsorted" className="space-y-2">
                   <div className="flex items-center gap-2 rounded-lg border border-dashed bg-muted/30 px-3 py-1.5">
                     <h4 className="min-w-0 flex-1 truncate text-sm font-medium text-muted-foreground">
-                      Unsorted / 未分组
+                      Unsorted / Ungrouped
                     </h4>
                     <span className="shrink-0 text-xs text-muted-foreground">
                       ({section.beats.length})
@@ -1573,7 +1573,7 @@ export function OutlinePanel({
         title="Delete outline beat?"
         description={
           deleting?.status === "final"
-            ? `“${deleting?.title ?? ""}” 已定稿：删除前原版将自动存档到版本史。`
+            ? `“${deleting?.title ?? ""}” is locked: the original is archived to version history before deletion.`
             : `“${deleting?.title ?? ""}” will be removed from the outline. Later beats keep their order.`
         }
         onConfirm={async () => {
@@ -1600,7 +1600,7 @@ export function OutlinePanel({
         title="Delete volume?"
         description={
           deletingVolume?.status === "final"
-            ? `“${deletingVolume?.title ?? ""}” 已定稿：删除前原版将自动存档到版本史。卷内节拍将变为未分组（不会被删除）。`
+            ? `“${deletingVolume?.title ?? ""}” is locked: the original is archived to version history before deletion. Its beats become Ungrouped (not deleted).`
             : `“${deletingVolume?.title ?? ""}” will be deleted. Beats in this volume will become unsorted (they are not deleted).`
         }
         onConfirm={async () => {
@@ -2120,7 +2120,7 @@ function DocToolbar({
       {locked ? (
         <span className="flex items-center gap-1 text-amber-700">
           <Lock className="h-3.5 w-3.5" aria-hidden="true" />
-          Immutable Canon — 解除定稿后可编辑，原版自动存档
+          Immutable Canon — Unlock to edit; original archived automatically
         </span>
       ) : (
         dirty && (
