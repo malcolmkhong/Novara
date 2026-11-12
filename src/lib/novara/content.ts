@@ -57,6 +57,12 @@ export const budgetsSchema = z.object({
     // Phase 5: Atlas leader-loop turn budget (delegate rounds).
     leaderMaxTurns: z.number().int().min(1).max(32),
     chapterContextChars: z.number().int().min(1000),
+    // STEP 71 — the sediment extractor reads the whole chapter in overlapping,
+    // sentence-aligned windows; these two are the window size and its overlap.
+    sedimentWindowChars: z.number().int().min(1000),
+    sedimentWindowOverlapChars: z.number().int().min(0),
+    sedimentTimeoutMs: z.number().int().min(1000),
+    sedimentWindowPauseMs: z.number().int().min(0),
     chapterTailChars: z.number().int().min(500),
     snapshotCastLimit: z.number().int().min(1),
     snapshotOutlineLimit: z.number().int().min(1),
@@ -131,6 +137,10 @@ export const DEFAULT_BUDGETS: Budgets = {
     planMaxTasks: 44, // multi-chapter QC runs need ~3 orders per chapter
     leaderMaxTurns: 22, // Phase 5: Atlas delegate rounds per run
     chapterContextChars: 24_000,
+    sedimentWindowChars: 4_000,
+    sedimentWindowOverlapChars: 800,
+    sedimentTimeoutMs: 120_000,
+    sedimentWindowPauseMs: 8_000,
     chapterTailChars: 6_000,
     snapshotCastLimit: 12,
     snapshotOutlineLimit: 40,

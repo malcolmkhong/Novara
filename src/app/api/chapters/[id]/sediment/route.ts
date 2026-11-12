@@ -4,7 +4,10 @@ import { db } from "@/lib/db";
 import { CreditError } from "@/lib/credits/charge";
 
 export const dynamic = "force-dynamic";
-export const maxDuration = 90;
+// STEP 71 — the settle now reads the WHOLE chapter in overlapping windows,
+// so this route can make several provider calls (measured: 3 windows ≈ 42s,
+// a long chapter ≈ 8 windows ≈ 2 min). 90s was the single-call ceiling.
+export const maxDuration = 300;
 
 type Params = { params: Promise<{ id: string }> };
 

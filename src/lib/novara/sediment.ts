@@ -19,6 +19,7 @@ import { db } from "@/lib/db";
 import { getBudgets } from "@/lib/novara/content";
 import { chatCompletion } from "@/lib/ai/chat";
 import { closePaidLoops, listOpenLoops } from "@/lib/novara/open-loops";
+import { buildSedimentWindows, mergeSedimentRecords } from "@/lib/novara/sediment-windows";
 
 /**
  * The transaction client the ownership-extended db hands to $transaction.
@@ -243,20 +244,20 @@ export async function extractSediment(chapterId: string): Promise<SedimentRecord
   });
   // STEP 70 — the open loops (promises + clues) go into the prompt so the
   // model can STATE which one this chapter paid (PAID_LOOP). Without the ids
-  // it could not name them, and we never guess by keyword matching.
+  // it could not name them, and we never infer by keyword matching.
   const openLoops = await listOpenLoops(novel.id, { limit: 12 });
 
-  const isChinese = /[\u4e00-\u9fff]/.test(`${novel.title}\n${novel.synopsis}`);
+  const isChinese = /[一-鿿]/.test(`${novel.title}\n${novel.synopsis}`);
   const system = isChinese
     ? "你是 Novara AI 的记忆沉淀引擎。只输出纯文本记录行，严格遵守格式。"
     : "You are the Novara AI memory sediment engine. Output ONLY plain-text record lines, strictly following the format.";
 
-  const parts: string[] = [];
-  parts.push(`NOVEL: ${novel.title}`);
+  const head: string[] = [];
+  head.push(`NOVEL: ${novel.title}`);
   if (novel.synopsis.trim())
-    parts.push(`SYNOPSIS:\n${novel.synopsis.slice(0, 1000)}`);
+    head.push(`SYNOPSIS:\n${novel.synopsis.slice(0, 1000)}`);
   if (openForeshadows.length > 0) {
-    parts.push(
+    head.push(
       `OPEN FORESHADOW LEDGER (id — status — content):\n${openForeshadows
         .map((f) => `- ${f.id} — ${f.status} — ${f.content.slice(0, 200)}`)
         .join("\n")}`
@@ -271,63 +272,120 @@ export async function extractSediment(chapterId: string): Promise<SedimentRecord
         (c) => `- clue ${c.id} — ${c.status} — ${c.title.slice(0, 200)}`
       ),
     ];
-    parts.push(
+    head.push(
       `${isChinese ? "未兑现承诺（OPEN LOOPS）" : "OPEN LOOPS"} (id — status — content):\n${loopLines.join("\n")}`
     );
   }
-  parts.push(`CHAPTER ${chapter.index} TEXT:\n${chapter.content.slice(0, budgets.ai.chapterContextChars)}`);
-  parts.push(isChinese ? SEDIMENT_SPEC_ZH : SEDIMENT_SPEC_EN);
-  const { text: raw } = await chatCompletion({
-    messages: [
-      { role: "assistant", content: system },
-      { role: "user", content: parts.join("\n\n") },
-    ],
-    tag: "AI sediment",
-    surface: "sediment",
-    // P5 — sediment spend lands on the novel in the ledger.
-    ledger: { novelId: novel.id },
-  });
-  const parsed = parseSedimentLines(raw);
-  if (!parsed.summary) {
-    throw new Error("The AI sediment output had no summary line. Try again.");
+
+  // STEP 71 — THE EXTRACTOR MUST READ THE WHOLE CHAPTER.
+  //
+  // The chapter is cut into OVERLAPPING, SENTENCE-ALIGNED windows and each
+  // window is extracted on its own. A chapter that fits in ONE window is
+  // extracted exactly as before (one call, same prompt, same result).
+  //
+  // The windows are extracted SEQUENTIALLY: a window that fails fails the
+  // whole extraction — the caller never receives records, so nothing is ever
+  // projected half.
+  const windows = buildSedimentWindows(
+    chapter.content,
+    budgets.ai.sedimentWindowChars,
+    budgets.ai.sedimentWindowOverlapChars
+  );
+
+  const perWindow: SedimentRecords[] = [];
+  for (const window of windows) {
+    // The gateway throttles repeated calls in a short window — without this
+    // pause the third window stalled past the per-call timeout (measured,
+    // three times in a row). One pause between windows, never after the last.
+    if (window.index > 0 && budgets.ai.sedimentWindowPauseMs > 0) {
+      await new Promise((resolve) =>
+        setTimeout(resolve, budgets.ai.sedimentWindowPauseMs)
+      );
+    }
+    const parts = [...head];
+    if (windows.length === 1) {
+      parts.push(`CHAPTER ${chapter.index} TEXT:\n${window.text}`);
+    } else {
+      // STEP 71 — a window is a PART of the chapter. The state lines must
+      // say where the character stands at the END OF THIS PART, so the merge
+      // (last window that saw the character wins) yields the chapter-end
+      // state — the same thing the single-call extraction produced.
+      parts.push(
+        `CHAPTER ${chapter.index} TEXT (part ${window.part} of ${window.totalParts}):\n${window.text}`
+      );
+      parts.push(
+        isChinese
+          ? `这是本章的第 ${window.part}/${window.totalParts} 段。请为本段中出现的每个角色各写一行 STATE，描述他在【本段结束】时的状态；只有最后一段才到全章结尾。`
+          : `This is part ${window.part} of ${window.totalParts} of the chapter. Write one STATE line for EVERY character who appears in this part, describing where they stand at the END OF THIS PART; only the last part reaches the end of the chapter.`
+      );
+    }
+    parts.push(isChinese ? SEDIMENT_SPEC_ZH : SEDIMENT_SPEC_EN);
+    const { text: raw } = await chatCompletion({
+      messages: [
+        { role: "assistant", content: system },
+        { role: "user", content: parts.join("\n\n") },
+      ],
+      // The window index in the tag: a slow or failing window must be
+      // identifiable in the error and in the usage ledger.
+      tag:
+        windows.length === 1
+          ? "AI sediment"
+          : `AI sediment p${window.part}/${window.totalParts}`,
+      surface: "sediment",
+      // STEP 71 — the provider's latency varies wildly; the global 60s
+      // ceiling killed whole extractions. The windows get their own.
+      timeoutMs: budgets.ai.sedimentTimeoutMs,
+      // P5 — sediment spend lands on the novel in the ledger.
+      ledger: { novelId: novel.id },
+    });
+    const parsed = parseSedimentLines(raw);
+    if (!parsed.summary) {
+      throw new Error(
+        `The AI sediment output had no summary line (window ${window.part}/${window.totalParts}). Try again.`
+      );
+    }
+
+    // Phase 7 (P1) — fold STATE names into canonical bible names via aliases
+    // so snapshots chain per character instead of per name spelling.
+    const nameMap = await normalizeCharacterNames(
+      novel.id,
+      parsed.characterStates.map((cs) => cs.name)
+    );
+    const characterStates = parsed.characterStates.map((cs) => ({
+      ...cs,
+      name: nameMap.get(cs.name) ?? cs.name,
+    }));
+
+    // Ledger ids must exist, belong to this novel, and not be paid already.
+    const ledgerIds = new Set(openForeshadows.map((f) => f.id));
+    const validAdvance = parsed.advanceIds.filter((fid) => ledgerIds.has(fid));
+    const validPaid = parsed.paidIds.filter((fid) => ledgerIds.has(fid));
+
+    // STEP 70 — keep only the paid-loop ids that are real open loops of this
+    // novel. The model STATES them; we never infer by keyword matching.
+    const loopIds = new Set([
+      ...openLoops.promises.map((p) => p.id),
+      ...openLoops.clues.map((c) => c.id),
+    ]);
+    const paidPromises = parsed.paidPromises.filter((p) => loopIds.has(p.id));
+
+    perWindow.push({
+      chapterId: chapter.id,
+      novelId: novel.id,
+      chapterIndex: chapter.index,
+      summary: parsed.summary,
+      facts: parsed.facts,
+      characterStates,
+      plants: parsed.plants,
+      validAdvance,
+      validPaid,
+      paidPromises,
+    });
   }
 
-  // Phase 7 (P1) — fold STATE names into canonical bible names via aliases
-  // so snapshots chain per character instead of per name spelling.
-  const nameMap = await normalizeCharacterNames(
-    novel.id,
-    parsed.characterStates.map((cs) => cs.name)
-  );
-  const characterStates = parsed.characterStates.map((cs) => ({
-    ...cs,
-    name: nameMap.get(cs.name) ?? cs.name,
-  }));
-
-  // Ledger ids must exist, belong to this novel, and not be paid already.
-  const ledgerIds = new Set(openForeshadows.map((f) => f.id));
-  const validAdvance = parsed.advanceIds.filter((fid) => ledgerIds.has(fid));
-  const validPaid = parsed.paidIds.filter((fid) => ledgerIds.has(fid));
-
-  // STEP 70 — keep only the paid-loop ids that are real open loops of this
-  // novel. The model STATES them; we never infer by keyword matching.
-  const loopIds = new Set([
-    ...openLoops.promises.map((p) => p.id),
-    ...openLoops.clues.map((c) => c.id),
-  ]);
-  const paidPromises = parsed.paidPromises.filter((p) => loopIds.has(p.id));
-
-  return {
-    chapterId: chapter.id,
-    novelId: novel.id,
-    chapterIndex: chapter.index,
-    summary: parsed.summary,
-    facts: parsed.facts,
-    characterStates,
-    plants: parsed.plants,
-    validAdvance,
-    validPaid,
-    paidPromises,
-  };
+  // The merge happens HERE, before the caller's transaction: the projection
+  // still runs ONCE, on the merged records.
+  return mergeSedimentRecords(perWindow);
 }
 
 /**

@@ -14,6 +14,21 @@ ai:
   planMaxTasks: 44            # Atlas may not plan more than this (10-chapter QC runs need ~3 orders/chapter)
   leaderMaxTurns: 22          # Phase 5: Atlas delegate-loop turns per run (raised for multi-chapter runs)
   chapterContextChars: 24000  # max chapter text fed to GLM (review/sediment)
+  # STEP 71 — the sediment extractor reads the WHOLE chapter. One window is
+  # what a single extraction call can hold with full attention (a chapter
+  # given whole loses its setup — measured: 55% element recall). A chapter
+  # longer than one window is extracted in overlapping, sentence-aligned
+  # windows and merged before the single projection.
+  sedimentWindowChars: 4000
+  sedimentWindowOverlapChars: 800
+  # A sediment window is a small prompt, but the provider's latency varies
+  # wildly (measured 5s-50s for the same call) — the default 60s per-call
+  # timeout killed whole extractions. The windows get their own ceiling.
+  sedimentTimeoutMs: 120000
+  # The gateway throttles repeated calls in a short window: without a pause
+  # the third window stalled past 120s (three times in a row). Measured: with
+  # a 10s pause the same three windows completed in 25s/6s/12s.
+  sedimentWindowPauseMs: 8000
   chapterTailChars: 6000      # previous-chapter tail inside write context
   snapshotCastLimit: 12       # characters in the story snapshot
   snapshotOutlineLimit: 40    # outline beats in the story snapshot
