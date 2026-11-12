@@ -1,4 +1,20 @@
 steps:
+  # LINT GATE - runs BEFORE the image build. Next 16 removed build-time
+  # ESLint, so `next build` no longer lints anything: without this step a
+  # lint error would ship inside the image. eslint exits non-zero on any
+  # error, which fails this build - the image is then never built, pushed
+  # or deployed.
+  - id: lint
+    name: oven/bun:1.3
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        set -euo pipefail
+        echo "lint: eslint . (any error fails this build)"
+        bun install --frozen-lockfile --ignore-scripts
+        bun run lint
+    timeout: 900s
   - id: build
     name: gcr.io/cloud-builders/docker
     args:

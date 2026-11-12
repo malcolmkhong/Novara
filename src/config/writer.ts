@@ -145,16 +145,6 @@ export interface ArtifactTabDef {
 }
 
 /**
- * Writer tab definition — mirrors ArtifactTabDef but for writer-specific tabs.
- */
-export interface WriterTabDef {
-  id: WriterTabId;
-  label: string;
-  /** Badge shown next to the label, e.g. roadmap phase marker. */
-  phaseTag?: string;
-}
-
-/**
  * Tab order mirrors the repository zones (Phase 8): workspace (Draft/Packs),
  * plan (Outline/Canon), information (Bible/Contract/Ledger/Memory), then
  * verification (Review/QC). The strip scrolls horizontally on narrow panes.
@@ -170,42 +160,6 @@ export const ARTIFACT_TABS: ArtifactTabDef[] = [
   { id: "memory", label: "Memory" },
   { id: "review", label: "Review" },
   { id: "qc", label: "QC" },
-];
-
-/**
- * Writer tab IDs — the top-level tabs in the workbench.
- * These include all tabs shown in the novel workspace.
- */
-export type WriterTabId =
-  | "chapters"
-  | "characters"
-  | "world"
-  | "outline"
-  | "canon"
-  | "bible"
-  | "contract"
-  | "ledger"
-  | "memory"
-  | "review"
-  | "qc"
-  | "draft"
-  | "packs";
-
-/** Writer-facing tab list — mirrors ARTIFACT_TABS plus writer-specific tabs. */
-export const WRITER_TABS: WriterTabDef[] = [
-  { id: "draft", label: "Draft" },
-  { id: "packs", label: "Packs" },
-  { id: "outline", label: "Outline" },
-  { id: "canon", label: "Canon" },
-  { id: "bible", label: "Bible" },
-  { id: "contract", label: "Contract" },
-  { id: "ledger", label: "Ledger" },
-  { id: "memory", label: "Memory" },
-  { id: "review", label: "Review" },
-  { id: "qc", label: "QC" },
-  { id: "chapters", label: "Chapters" },
-  { id: "characters", label: "Characters" },
-  { id: "world", label: "World" },
 ];
 
 // ---------------------------------------------------------------------------

@@ -21,7 +21,7 @@ import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 import type { AgentRunMode, PinnedRef } from "@/lib/novara/agent-types";
 import type { ModelSelection } from "@/lib/novara/models";
-import type { ArtifactTabId, CenterView, RailMode, WriterTabId } from "@/config/writer";
+import type { ArtifactTabId, CenterView, RailMode } from "@/config/writer";
 
 interface WriterState {
   /** Center pane view per novel id (chat flow vs Todos board). */
@@ -70,10 +70,8 @@ interface WriterState {
    * author's choice across reloads and novel switches. Default: "book".
    */
   railModeByNovel: Record<string, RailMode>;
-  activeTabByNovel: Record<string, WriterTabId>;
   setCenterView: (novelId: string, view: CenterView) => void;
   setArtifactTab: (novelId: string, tab: ArtifactTabId) => void;
-  setActiveTab: (novelId: string, tab: WriterTabId) => void;
   selectChapter: (novelId: string, chapterId: string | null) => void;
   selectBeat: (novelId: string, beatId: string | null) => void;
   selectCharacter: (novelId: string, characterId: string | null) => void;
@@ -110,13 +108,10 @@ export const useWriterStore = create<WriterState>()(
   lastModeByNovel: {},
   lastModelByNovel: {},
   railModeByNovel: {},
-  activeTabByNovel: {},
   setCenterView: (novelId, view) =>
     set((s) => ({ centerViewByNovel: { ...s.centerViewByNovel, [novelId]: view } })),
   setArtifactTab: (novelId, tab) =>
     set((s) => ({ artifactTabByNovel: { ...s.artifactTabByNovel, [novelId]: tab } })),
-  setActiveTab: (novelId, tab) =>
-    set((s) => ({ activeTabByNovel: { ...s.activeTabByNovel, [novelId]: tab } })),
   selectChapter: (novelId, chapterId) =>
     set((s) => ({
       selectedChapterByNovel: { ...s.selectedChapterByNovel, [novelId]: chapterId },
@@ -184,7 +179,6 @@ export const useWriterStore = create<WriterState>()(
         lastModeByNovel: s.lastModeByNovel,
         lastModelByNovel: s.lastModelByNovel,
         railModeByNovel: s.railModeByNovel,
-        activeTabByNovel: s.activeTabByNovel,
       }),
       // Rehydrated manually from the client root after mount — keeps the
       // first client render identical to SSR (no hydration mismatch).
