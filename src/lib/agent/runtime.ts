@@ -2154,12 +2154,13 @@ async function leaderLoop(
       // aiCall above; the reply is generated-never-sent).
       const closingResults =
         feeds.length > 0 ? `TOOL RESULTS:\n${feeds.join("\n")}` : null;
-      await guard.append(
+      const closingEntries: AppendMessageEntry[] = [
         { runId, conversationId: LEADER_CONVERSATION, taskId: null, agent: "atlas", role: "assistant", kind: "final", content: reply },
         ...(closingResults
-          ? [{ runId, conversationId: LEADER_CONVERSATION, taskId: null, agent: "atlas", role: "user", kind: "tool_results", content: closingResults }]
+          ? [{ runId, conversationId: LEADER_CONVERSATION, taskId: null, agent: "atlas", role: "user" as const, kind: "tool_results" as const, content: closingResults }]
           : [])
-      );
+      ];
+      await guard.append(closingEntries[0], ...closingEntries.slice(1));
       break;
     }
 

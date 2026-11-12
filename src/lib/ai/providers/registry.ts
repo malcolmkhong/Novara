@@ -124,8 +124,8 @@ const SEEDS: Seed[] = [
     inputUsdPer1M: 0.3,
     cachedInputUsdPer1M: null,
     outputUsdPer1M: 1.65,
-    // MiniMax's SSE framing differs from OpenAI's; the existing parser in
-    // src/lib/novel/ai.ts expects choices[].delta.content, so streaming is
+    // MiniMax's SSE framing differs from OpenAI's; the existing parser
+    // expects choices[].delta.content, so streaming is
     // disabled until a translating adapter is verified.
     supportsStreaming: false,
     authMode: "apiKey",

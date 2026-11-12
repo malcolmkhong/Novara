@@ -56,9 +56,10 @@ steps:
     entrypoint: bun
     args: ["run", "lint"]
 
-  # 4) REAL type gate. next.config.ts sets typescript.ignoreBuildErrors:true,
-  #    so `next build` silently swallows TS errors. This step is the only
-  #    thing standing between a type regression and a published artifact.
+  # 4) REAL type gate, run BEFORE the build so the failure names the file
+  #    and line instead of the bundler's output. next.config.ts no longer sets
+  #    typescript.ignoreBuildErrors, so `next build` fails on a type error
+  #    too — this step is the early, loud one, not the only one.
   - name: oven/bun:1.3
     id: typecheck
     entrypoint: bunx

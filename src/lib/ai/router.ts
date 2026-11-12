@@ -3,7 +3,7 @@
 //
 // All 8 legacy `ZAI.create()` call sites keep their exact call shape; `create`
 // is a thin compat wrapper over ProviderAdapter.chat / ProviderAdapter.stream,
-// so ai.ts and the raw-SSE parser in src/lib/novel/ai.ts stay untouched.
+// so the old call sites and the raw-SSE parser stay untouched.
 // ---------------------------------------------------------------------------
 
 import type {

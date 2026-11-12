@@ -314,6 +314,8 @@ export function NovelWorkspace({
         <TabsContent value="characters" className="mt-4">
           <CharactersPanel
             characters={detail.characters}
+            novelId={novel.id}
+            onRefresh={refresh}
             onAdd={(input) =>
               wrap(() => addCharacter(novel.id, input), "Character added")
             }
@@ -329,6 +331,9 @@ export function NovelWorkspace({
         <TabsContent value="world" className="mt-4">
           <WorldPanel
             entries={detail.worldEntries}
+            groups={detail.worldGroups}
+            novelId={novel.id}
+            onRefresh={refresh}
             onAdd={(input) =>
               wrap(() => addWorldEntry(novel.id, input), "World entry added")
             }
@@ -357,7 +362,7 @@ export function NovelWorkspace({
         </TabsContent>
 
         <TabsContent value="team" className="mt-4 space-y-6">
-          <AgentConsole novel={novel} chapterCount={detail.chapters.length} />
+          <AgentConsole novel={detail.novel} chapterCount={detail.chapters.length} />
           <div>
             <h3 className="mb-3 font-display text-sm font-semibold uppercase tracking-wide text-muted-foreground">
               Team roster
@@ -371,7 +376,10 @@ export function NovelWorkspace({
         </TabsContent>
 
         <TabsContent value="memory" className="mt-4">
-          <MemoryPanel novel={novel} />
+          <MemoryPanel
+            detail={detail}
+            onOpenArtifactTab={(t) => setActiveTab(novel.id, t)}
+          />
         </TabsContent>
       </Tabs>
 

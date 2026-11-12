@@ -19,3 +19,15 @@ export function countWords(text: string): number {
 export function formatWordCount(n: number): string {
   return n.toLocaleString("en-US");
 }
+
+/**
+ * Character count for Chinese prose: every non-whitespace character counts.
+ *
+ * NOT the same metric as `countWords` — that one counts a latin WORD as 1,
+ * this one counts every latin LETTER. For pure CJK prose the two agree.
+ * The AI-team chapter writer uses this one (it reports "chars" to the
+ * model), so the behaviour is preserved exactly where it was used.
+ */
+export function chineseWordCount(text: string): number {
+  return text.replace(/\s/g, "").length;
+}

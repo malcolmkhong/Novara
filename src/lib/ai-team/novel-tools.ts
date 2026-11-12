@@ -24,7 +24,7 @@
 import { db } from "@/lib/db";
 import { currentUserId } from "@/lib/prisma/ownership";
 import { extractJson } from "@/lib/ai-heuristics";
-import { chineseWordCount } from "@/lib/novel/server";
+import { chineseWordCount } from "@/lib/novara/words";
 
 // ---------------------------------------------------------------------------
 // Tuning

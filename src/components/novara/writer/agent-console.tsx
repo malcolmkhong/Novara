@@ -155,7 +155,7 @@ export function AgentConsole({
 }) {
   const { toast } = useToast();
   const run = useAgentRun(novel.id);
-  const lastMode = useWriterStore((s) => s.lastMode);
+  const lastMode = useWriterStore((s) => s.lastModeByNovel[novel.id]);
   const setLastMode = useWriterStore((s) => s.setLastMode);
 
   const [goal, setGoal] = useState("");
@@ -209,11 +209,11 @@ export function AgentConsole({
 
   const handleComposerModeChange = (next: AgentRunMode) => {
     setMode(next);
-    setLastMode(next);
+    setLastMode(novel.id, next);
   };
 
   const handleRunModeChange = (next: AgentRunMode) => {
-    setLastMode(next);
+    setLastMode(novel.id, next);
     run.setMode(next).catch((e: unknown) => {
       toast({
         title: "Could not change mode",
