@@ -36,7 +36,7 @@
 // are stale — marked failed by healStaleRuns.
 // ---------------------------------------------------------------------------
 
-import { db } from "@/lib/db";
+import { db, warmIdentity } from "@/lib/db";
 import { getBudgets, buildSystemPrompt, getSkillEntry } from "@/lib/novara/content";
 import { chatCompletion } from "@/lib/ai/chat";
 import {
@@ -56,8 +56,19 @@ import { countWords } from "@/lib/novara/words";
 import { assessOverwrite } from "@/lib/novara/write-gate";
 import { recordChapterVersion } from "@/lib/novara/versions";
 import { reviewChapter } from "@/lib/novara/review";
-import { sedimentChapterCore, type SedimentOutcome } from "@/lib/novara/sediment";
-import { buildMemoryView, formatMemoryLines, queryMemory } from "@/lib/novara/memory";
+import {
+  extractSediment,
+  isProjectionCurrent,
+  sedimentChapterCore,
+  writeSedimentProjection,
+  type SedimentOutcome,
+} from "@/lib/novara/sediment";
+import {
+  buildMemorySyncReport,
+  buildMemoryView,
+  formatMemoryLines,
+  queryMemory,
+} from "@/lib/novara/memory";
 import {
   auditReport,
   evaluateFinalize,
@@ -2338,6 +2349,8 @@ interface ToolResult {
   feed: string;
   /** Phase 1 — set when an idempotency probe adopted an already-committed effect. */
   adopted?: "write" | "finalize";
+  /** STEP 69 — the chapter a finalize_chapter call finalised (or adopted). */
+  finalizedChapterId?: string;
 }
 
 async function executeTask(params: {
@@ -2482,6 +2495,10 @@ async function executeTask(params: {
   // (the original event already carries them into the run-level totals).
   let adoptedWrites = 0;
   let adoptedFinalizes = 0;
+  // STEP 69 — the chapters this task finalised. A finalised chapter whose
+  // memory was never projected is settled by the runtime (see the repair
+  // step below) — the model is never asked to redo the finalization.
+  const finalisedChapterIds = new Set<string>();
 
   let callCounter = 0; // repair rounds reuse runTurns — keep labels monotonic
   const aiCall = async (tag: string): Promise<string> => {
@@ -2567,6 +2584,9 @@ async function executeTask(params: {
         feeds.push(`${i + 1}. ${result.feed}`);
         if (result.adopted === "write") adoptedWrites += 1;
         if (result.adopted === "finalize") adoptedFinalizes += 1;
+        // STEP 69 — remember WHICH chapter this task finalised: the
+        // projection repair below settles exactly those chapters.
+        if (result.finalizedChapterId) finalisedChapterIds.add(result.finalizedChapterId);
         if (result.stopped) {
           stoppedByGate = true;
           // Phase 1 — persist the interrupted turn before dropping out: the
@@ -2670,12 +2690,44 @@ async function executeTask(params: {
       });
       const finalizeFailed =
         "VERIFY FAILED: this task was expected to certify the chapter but no finalize_chapter was verified — the chapter is still DRAFT. " +
-        "Call finalize_chapter(index) NOW (the E2 gate reads the latest persisted review — 0 blocking passes), then settle_chapter(index) for memory. " +
+        "Call finalize_chapter(index) NOW (the E2 gate reads the latest persisted review — 0 blocking passes); it projects the chapter's memory in the same commit, so settle_chapter is no longer needed. " +
         "Skip optional scans; or reply BLOCKED: with the reason. Narration alone will fail again.";
       meter.addConversation(finalizeFailed);
       messages.push({ role: "user", content: finalizeFailed });
       await params.guard.append({ runId, conversationId: task.id, taskId: task.id, agent: assignee, role: "user", kind: "repair", content: finalizeFailed });
       await runTurns(2);
+    }
+
+    // STEP 69 — THE PROJECTION REPAIR. A chapter that is FINAL but whose
+    // memory was never projected (finalized by an older run, or adopted as
+    // already-final) is settled HERE, by the runtime — NOT by asking the
+    // model to redo the finalization. The settle path is the same server
+    // function the Review tab and the settle_chapter tool use.
+    if (
+      requiresFinalize &&
+      measuredForTask.settlesRun === 0 &&
+      !blockedReason &&
+      !signal.aborted
+    ) {
+      for (const chapterId of finalisedChapterIds) {
+        if (await isProjectionCurrent(chapterId)) continue;
+        try {
+          const settled = await sedimentChapterCore(chapterId);
+          measuredForTask.settlesRun += 1;
+          await emitEvent({
+            ...taskRef,
+            actor: assignee,
+            kind: "write",
+            summary: `Chapter ${settled.chapterIndex} memory projected by the runtime — ${settled.result.factsCreated} facts, ${settled.result.characterStates} states, ${settled.result.plantsCreated} plants (verified in DB).`,
+            payload: { artifact: "chapter", chapterId, index: settled.chapterIndex, settles: settled.result, op: "settle_chapter" },
+          });
+        } catch (error) {
+          const message = error instanceof Error ? error.message : "settle failed";
+          params.issues.push(
+            `${task.key} failed: chapter ${chapterId} is final but its memory could not be projected — ${truncate(message, 160)}`
+          );
+        }
+      }
     }
 
     // Fold this task's measured numbers into the run totals.
@@ -2700,10 +2752,30 @@ async function executeTask(params: {
       await emitEvent({ ...taskRef, actor: assignee, kind: "task_update", summary: `${task.key} failed — write verification never passed.` });
       params.issues.push(`${task.key} failed: no verified write after ${budgets.ai.repairRounds} repair round(s)`);
       outcome = "failed";
-    } else if (requiresFinalize && measuredForTask.chaptersFinalized + adoptedFinalizes === 0) {
+    } else if (
+      requiresFinalize &&
+      (measuredForTask.chaptersFinalized + adoptedFinalizes === 0 ||
+        measuredForTask.settlesRun === 0)
+    ) {
       await db.agentTask.update({ where: { id: task.id }, data: { status: "failed" } });
-      await emitEvent({ ...taskRef, actor: assignee, kind: "task_update", summary: `${task.key} failed — finalize verification never passed (chapter still draft).` });
-      params.issues.push(`${task.key} failed: no verified finalize_chapter after ${budgets.ai.repairRounds} repair round(s) — chapter left in draft`);
+      // STEP 69 — the completion decision counts the PROJECTION, not just
+      // the status flip: a certify task that finalised a chapter without
+      // projecting its memory is not done.
+      const finalised =
+        measuredForTask.chaptersFinalized + adoptedFinalizes > 0;
+      await emitEvent({
+        ...taskRef,
+        actor: assignee,
+        kind: "task_update",
+        summary: finalised
+          ? `${task.key} failed — the chapter was finalised but its memory projection never landed.`
+          : `${task.key} failed — finalize verification never passed (chapter still draft).`,
+      });
+      params.issues.push(
+        finalised
+          ? `${task.key} failed: chapter finalised but no memory projection after ${budgets.ai.repairRounds} repair round(s) — the chapter is final without its memory`
+          : `${task.key} failed: no verified finalize_chapter after ${budgets.ai.repairRounds} repair round(s) — chapter left in draft`
+      );
       outcome = "failed";
     } else {
       await db.agentTask.update({ where: { id: task.id }, data: { status: "done" } });
@@ -2837,9 +2909,23 @@ export async function executeTool(params: ExecuteToolParams): Promise<ToolResult
       const lines = view.doctor.map(
         (d) => `- [${d.status.toUpperCase()}] ${d.name}: ${d.detail}`
       );
+      // STEP 69 — the per-chapter memory sync report, so the agent can SEE
+      // which finalised chapters still have no projected memory (the same
+      // rows GET /api/novels/[id]/memory/status returns).
+      const sync = await buildMemorySyncReport(params.novelId);
+      const syncLines = sync.chapters.map(
+        (c) =>
+          `- ch${c.index} (${c.status}): digest ${c.hasDigest ? "yes" : "NO"} · facts ${c.factCount} · states ${c.stateCount} · plants ${c.plantCount} · ${c.synced ? "synced" : "NOT SYNCED"}`
+      );
+      const unsyncedNote =
+        sync.summary.unsynced > 0
+          ? `\n${sync.summary.unsynced} finalised chapter(s) have NO projected memory (${sync.summary.unsyncedIndexes.join(", ")}) — settle them before trusting the story bible.`
+          : "";
       return {
         ok: true,
-        feed: `doctor_scan → ok (${view.doctor.filter((d) => d.status !== "pass").length} finding(s))\n${lines.join("\n")}`,
+        feed:
+          `doctor_scan → ok (${view.doctor.filter((d) => d.status !== "pass").length} finding(s))\n${lines.join("\n")}\n` +
+          `MEMORY SYNC (per chapter):\n${syncLines.join("\n") || "(no chapters)"}${unsyncedNote}`,
       };
     }
     case "review_chapter": {
@@ -2894,6 +2980,7 @@ export async function executeTool(params: ExecuteToolParams): Promise<ToolResult
         return {
           ok: true,
           adopted: "finalize",
+          finalizedChapterId: chapter.id,
           feed: `finalize_chapter(${action.index}) → ok: chapter is already FINAL — adopted (idempotent re-dispatch, no re-commit).`,
         };
       }
@@ -2908,27 +2995,72 @@ export async function executeTool(params: ExecuteToolParams): Promise<ToolResult
       if (!verdict.allowed) {
         return { ok: false, feed: `finalize_chapter(${action.index}) → ${verdict.reason}` };
       }
-      await db.chapter.update({
-        where: { id: chapter.id },
-        data: { status: "final" },
+      // STEP 69 — the settle precondition (qc.ts evaluateSettle): a persisted
+      // review with 0 blocking and a non-empty chapter. The projection is a
+      // CONSEQUENCE of the finalization, so the same gate guards both.
+      const settleVerdict = evaluateSettle({
+        latestBlockingCount: latest ? latest.blockingCount : null,
+        wordCount: chapter.wordCount,
+      });
+      if (!settleVerdict.allowed) {
+        return { ok: false, feed: `finalize_chapter(${action.index}) → ${settleVerdict.reason}` };
+      }
+
+      // STEP 69 — SETTLE IS A CONSEQUENCE OF FINALIZE, IN ONE TRANSACTION.
+      //
+      // The model call happens FIRST and OUTSIDE the transaction (a slow AI
+      // call must never hold a database connection). The transaction then
+      // flips the chapter to final AND writes the whole memory projection
+      // (digest · StoryFact · CharacterState · Foreshadow) — so a chapter
+      // can NEVER be final with unprojected memory: any failure rolls the
+      // finalization back with it.
+      const records = await extractSediment(chapter.id);
+      // Resolve the ownership identity BEFORE opening the interactive
+      // transaction (DATABASE_URL carries connection_limit=1 — a base-client
+      // query from inside the transaction would have nowhere to run).
+      await warmIdentity();
+      const outcome = await db.$transaction(async (tx) => {
+        await tx.chapter.update({
+          where: { id: chapter.id },
+          data: { status: "final" },
+        });
+        return await writeSedimentProjection(tx, records);
       });
       params.measured.chaptersFinalized += 1;
+      params.measured.settlesRun += 1;
       await emitEvent({
         runId: params.runId,
         taskId: params.taskId,
         actor,
         kind: "write",
-        summary: `Chapter ${chapter.index} "${truncate(chapter.title, 60)}" marked FINAL — E2 gate passed (latest review: ${latest?.blockingCount ?? 0} blocking, verified in DB).`,
+        summary: `Chapter ${chapter.index} "${truncate(chapter.title, 60)}" marked FINAL — E2 gate passed (latest review: ${latest?.blockingCount ?? 0} blocking, verified in DB) and its memory was projected in the same commit.`,
         payload: { artifact: "chapter", chapterId: chapter.id, index: chapter.index, status: "final", op: "finalize_chapter" },
+      });
+      // The projection is its own verified effect: it carries its own event so
+      // the resume path (deriveMeasuredFromEvents) rebuilds settlesRun from
+      // the persisted stream exactly like the live counter did.
+      await emitEvent({
+        runId: params.runId,
+        taskId: params.taskId,
+        actor,
+        kind: "write",
+        summary: `Chapter ${chapter.index} memory settled by the finalization — ${outcome.factsCreated} facts (+${outcome.factsTouched} reinforced), ${outcome.characterStates} states, ${outcome.plantsCreated} plants, ${outcome.advanced} advanced, ${outcome.paid} paid (verified in DB).`,
+        payload: { artifact: "chapter", chapterId: chapter.id, index: chapter.index, settles: outcome, op: "settle_chapter" },
       });
       return {
         ok: true,
-        feed: `finalize_chapter(${action.index}) → ok: chapter status = final (E2 gate passed on the persisted review).`,
+        finalizedChapterId: chapter.id,
+        feed: `finalize_chapter(${action.index}) → ok: chapter status = final (E2 gate passed on the persisted review) and its memory was projected in the same commit — ${outcome.factsCreated} facts (+${outcome.factsTouched} reinforced), ${outcome.characterStates} states, ${outcome.plantsCreated} plants, ${outcome.advanced} advanced, ${outcome.paid} paid.`,
       };
     }
     case "settle_chapter": {
       // Phase 6 — memory sedimentation through the SAME core as the Review
       // tab, gated on a clean review. Single-writer rule preserved.
+      //
+      // STEP 69: the tool stays callable and idempotent, but it is no longer
+      // LOAD-BEARING — finalize_chapter already projects the memory in the
+      // same transaction, so the usual certify flow (finalize, then settle)
+      // hits the probe below and adopts without a second model call.
       const chapter = await db.chapter.findFirst({
         where: { novelId: params.novelId, index: action.index },
       });
@@ -2939,11 +3071,7 @@ export async function executeTool(params: ExecuteToolParams): Promise<ToolResult
       // sedimentChapterCore is itself row-idempotent (digest upsert, fact
       // dedupe, plant dedupe, one-way ledger); the probe only avoids the
       // redundant provider call on re-dispatch.
-      const digest = await db.chapterDigest.findUnique({
-        where: { chapterId: chapter.id },
-        select: { updatedAt: true },
-      });
-      if (digest && digest.updatedAt.getTime() >= chapter.updatedAt.getTime()) {
+      if (await isProjectionCurrent(chapter.id)) {
         return {
           ok: true,
           feed: `settle_chapter(${action.index}) → ok: memory already settled for the current chapter content (digest current — adopted, no re-sedimentation).`,

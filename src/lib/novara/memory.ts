@@ -594,3 +594,165 @@ export async function buildMemoryView(novelId: string): Promise<NovelMemoryView>
     generatedAt: new Date().toISOString(),
   };
 }
+
+// ---------------------------------------------------------------------------
+// Memory sync report (STEP 69 — the read side of "settle follows finalize")
+//
+// A per-chapter "is my memory healthy?" report. The settle step writes the
+// memory projection (ChapterDigest / StoryFact / CharacterState / Foreshadow)
+// and finalize is about to become a consequence of settle; this report reads
+// that projection back and states, for every chapter of a novel, whether the
+// chapter actually has memory behind it.
+//
+// READ-ONLY. This module owns no write path: the sediment pipeline remains
+// the single writer of the four memory tables.
+//
+// Counting rules (deliberate — do not "simplify" them):
+//   · hasDigest  — a ChapterDigest row exists for the chapter (chapterId is
+//     @unique).
+//   · factCount  — DISTINCT StoryFact rows attributed to the chapter:
+//     sourceChapter === chapter.index OR lastSeenChapter === chapter.index.
+//     The OR is deliberate: a chapter whose settle only reinforced older
+//     facts (lastSeenChapter touched) must not read as 0.
+//   · stateCount — CharacterState rows with chapterIndex === chapter.index.
+//   · plantCount — Foreshadow rows with plantChapter === chapter.index.
+//   · synced     — hasDigest && factCount > 0, computed for EVERY row.
+//
+// The summary tallies ONLY chapters whose status === "final": a draft chapter
+// without memory is factual, not unhealthy.
+// ---------------------------------------------------------------------------
+
+export interface ChapterMemorySyncRow {
+  chapterId: string;
+  index: number;
+  /** The chapter's status: "draft" | "revised" | "final". */
+  status: string;
+  hasDigest: boolean;
+  factCount: number;
+  stateCount: number;
+  plantCount: number;
+  synced: boolean;
+}
+
+export interface NovelMemorySyncReport {
+  novelId: string;
+  /** Every chapter of the novel, ordered by index ascending. */
+  chapters: ChapterMemorySyncRow[];
+  summary: {
+    /** Total number of chapters. */
+    chapters: number;
+    /** Chapters with status === "final". */
+    final: number;
+    /** FINAL chapters with synced === true. */
+    synced: number;
+    /** FINAL chapters with synced === false. */
+    unsynced: number;
+    /** Indexes of the unsynced final chapters, ascending. */
+    unsyncedIndexes: number[];
+  };
+  generatedAt: string;
+}
+
+/**
+ * Build the per-chapter memory health report for one novel.
+ *
+ * A handful of queries, never one per chapter: the chapters are read once,
+ * and the memory tables are aggregated by the chapter they belong to.
+ */
+export async function buildMemorySyncReport(
+  novelId: string
+): Promise<NovelMemorySyncReport> {
+  const chapters = await db.chapter.findMany({
+    where: { novelId },
+    orderBy: { index: "asc" },
+    select: { id: true, index: true, status: true },
+  });
+
+  const [digestRows, factGroups, stateGroups, plantGroups] = await Promise.all([
+    // One row per settled chapter (chapterId is @unique).
+    db.chapterDigest.findMany({
+      where: { novelId },
+      select: { chapterId: true },
+    }),
+    // Facts grouped by their (sourceChapter, lastSeenChapter) pair, so a row
+    // that matches both columns of one chapter is still counted once.
+    db.storyFact.groupBy({
+      by: ["sourceChapter", "lastSeenChapter"],
+      where: { novelId },
+      _count: { _all: true },
+    }),
+    db.characterState.groupBy({
+      by: ["chapterIndex"],
+      where: { novelId },
+      _count: { _all: true },
+    }),
+    db.foreshadow.groupBy({
+      by: ["plantChapter"],
+      where: { novelId },
+      _count: { _all: true },
+    }),
+  ]);
+
+  const digestChapterIds = new Set<string>(digestRows.map((d) => d.chapterId));
+
+  // Chapter index -> number of distinct facts attributed to it.
+  const factCounts = new Map<number, number>();
+  for (const group of factGroups) {
+    const count = group._count._all;
+    const source = group.sourceChapter;
+    const lastSeen = group.lastSeenChapter;
+    if (source !== null) {
+      factCounts.set(source, (factCounts.get(source) ?? 0) + count);
+    }
+    // A fact whose source AND lastSeen point at the same chapter is one row,
+    // not two — the second branch only fires for a different chapter.
+    if (lastSeen !== null && lastSeen !== source) {
+      factCounts.set(lastSeen, (factCounts.get(lastSeen) ?? 0) + count);
+    }
+  }
+
+  // Chapter index -> number of character states settled at that chapter.
+  const stateCounts = new Map<number, number>();
+  for (const group of stateGroups) {
+    stateCounts.set(group.chapterIndex, group._count._all);
+  }
+
+  // Chapter index -> number of foreshadows planted at that chapter.
+  const plantCounts = new Map<number, number>();
+  for (const group of plantGroups) {
+    plantCounts.set(group.plantChapter, group._count._all);
+  }
+
+  const rows: ChapterMemorySyncRow[] = chapters.map((chapter) => {
+    const hasDigest = digestChapterIds.has(chapter.id);
+    const factCount = factCounts.get(chapter.index) ?? 0;
+    return {
+      chapterId: chapter.id,
+      index: chapter.index,
+      status: chapter.status,
+      hasDigest,
+      factCount,
+      stateCount: stateCounts.get(chapter.index) ?? 0,
+      plantCount: plantCounts.get(chapter.index) ?? 0,
+      synced: hasDigest && factCount > 0,
+    };
+  });
+
+  const finalRows = rows.filter((row) => row.status === "final");
+  const unsyncedFinalRows = finalRows.filter((row) => !row.synced);
+
+  return {
+    novelId,
+    chapters: rows,
+    summary: {
+      chapters: rows.length,
+      final: finalRows.length,
+      synced: finalRows.filter((row) => row.synced).length,
+      unsynced: unsyncedFinalRows.length,
+      unsyncedIndexes: unsyncedFinalRows
+        .map((row) => row.index)
+        .sort((a, b) => a - b),
+    },
+    generatedAt: new Date().toISOString(),
+  };
+}

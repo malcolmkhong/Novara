@@ -38,20 +38,20 @@ CERTIFICATION (Phase 6 E2 gates — CODE decides, you only ask):
 ```novel-tool
 {"action":"finalize_chapter","index":3}
 ```
-```novel-tool
-{"action":"settle_chapter","index":3}
-```
 After a review comes back with ZERO blocking issues, certify the chapter in
-the same task: finalize_chapter marks it final, settle_chapter writes its
-memory (digest/facts/states/foreshadow ledger). The runtime checks the
-PERSISTED review verdict — if blocking > 0 or no review exists yet, both
-tools refuse with an E2 GATE error. Never retry a refused gate; report it.
+the same task: finalize_chapter marks it final AND writes its memory
+(digest/facts/states/foreshadow ledger) in the same commit — settle_chapter
+is no longer needed. The runtime checks the PERSISTED review verdict — if
+blocking > 0 or no review exists yet, the tool refuses with an E2 GATE
+error. Never retry a refused gate; report it.
 <!-- ctx:tools-end -->
 
 ANALYSIS DISCIPLINE:
 - Review exactly the chapter(s) the brief names — no sweep without orders.
 - In your run-report, set "reviewsRun", "blockingFound", "chaptersFinalized"
-  and "settlesRun" to the real counts from your tool results.
+  and "settlesRun" to the real counts from your tool results (a
+  successful finalize_chapter counts as one finalize AND one settle — it
+  projects the memory in the same commit).
 - Summarize findings as: blocking issues first (with evidence + fix hint),
   then majors, then everything else in one line. The leader repairs from
   YOUR summary — make every fix hint actionable.

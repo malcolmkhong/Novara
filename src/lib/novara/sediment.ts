@@ -19,6 +19,13 @@ import { db } from "@/lib/db";
 import { getBudgets } from "@/lib/novara/content";
 import { chatCompletion } from "@/lib/ai/chat";
 
+/**
+ * The transaction client the ownership-extended db hands to $transaction.
+ * Derived from the client itself (the extension changes the delegate types,
+ * so a plain Prisma.TransactionClient is NOT assignable to it).
+ */
+export type SedimentTx = Parameters<Parameters<typeof db.$transaction>[0]>[0];
+
 const MEMORY_CATEGORIES = [
   "world_rule",
   "character_state",
@@ -160,17 +167,37 @@ async function normalizeCharacterNames(
 }
 
 /**
- * Settles one chapter into the memory layer. Throws on missing/empty chapter
- * or AI failure — callers map errors to their own transport (404/422/502 vs
- * an error feed).
+ * The memory records one settle produced — the INPUT of the projection write.
+ *
+ * Two halves on purpose (STEP 69): the model call is slow and can fail, so
+ * it must never happen inside a database transaction; the row writes are
+ * cheap and MUST share the caller's transaction, so a chapter can never
+ * become final without its memory.
  */
-export async function sedimentChapterCore(chapterId: string): Promise<{
+export interface SedimentRecords {
   chapterId: string;
   novelId: string;
   chapterIndex: number;
-  sedimentedAt: string;
-  result: SedimentOutcome;
-}> {
+  summary: string;
+  facts: { category: string; content: string }[];
+  /** Character states with CANONICAL bible names (aliases folded in). */
+  characterStates: { name: string; state: string }[];
+  plants: { content: string }[];
+  /** Foreshadow ids this settle may advance / pay (validated against the ledger). */
+  validAdvance: string[];
+  validPaid: string[];
+}
+
+/**
+ * STEP 69 — the EXTRACTION half of a settle: read the chapter, ask the model
+ * for its memory records, parse them, fold character names onto the bible and
+ * validate the ledger ids.
+ *
+ * NO DATABASE WRITES. The caller owns the transaction — the runtime folds the
+ * write into the same transaction as the chapter's finalization, so a failed
+ * projection rolls the finalization back.
+ */
+export async function extractSediment(chapterId: string): Promise<SedimentRecords> {
   const budgets = getBudgets();
   const chapter = await db.chapter.findUnique({
     where: { id: chapterId },
@@ -237,131 +264,199 @@ export async function sedimentChapterCore(chapterId: string): Promise<{
   const validAdvance = parsed.advanceIds.filter((fid) => ledgerIds.has(fid));
   const validPaid = parsed.paidIds.filter((fid) => ledgerIds.has(fid));
 
-  const result = await db.$transaction(async (tx) => {
-    // 1. Digest — upsert by unique chapterId.
-    const digest = await tx.chapterDigest.upsert({
-      where: { chapterId: chapter.id },
-      create: {
-        chapterId: chapter.id,
-        novelId: novel.id,
-        summary: parsed.summary,
-      },
-      update: { summary: parsed.summary },
-    });
-
-    // 2. Character states — replace this chapter's snapshot atomically.
-    await tx.characterState.deleteMany({
-      where: { novelId: novel.id, chapterIndex: chapter.index },
-    });
-    if (characterStates.length > 0) {
-      await tx.characterState.createMany({
-        data: characterStates.map((cs) => ({
-          novelId: novel.id,
-          name: cs.name,
-          chapterIndex: chapter.index,
-          state: cs.state,
-        })),
-      });
-    }
-
-    // 3. Facts — dedupe on (novelId, category, content): existing rows get
-    // lastSeenAt touched, new rows carry sourceChapter + firstSeenAt.
-    let factsCreated = 0;
-    let factsTouched = 0;
-    for (const fact of parsed.facts) {
-      const existing = await tx.storyFact.findFirst({
-        where: { novelId: novel.id, category: fact.category, content: fact.content },
-        select: { id: true },
-      });
-      if (existing) {
-        await tx.storyFact.update({
-          where: { id: existing.id },
-          data: { lastSeenAt: new Date(), lastSeenChapter: chapter.index },
-        });
-        factsTouched += 1;
-      } else {
-        await tx.storyFact.create({
-          data: {
-            novelId: novel.id,
-            category: fact.category,
-            content: fact.content,
-            sourceChapter: chapter.index,
-            lastSeenChapter: chapter.index,
-          },
-        });
-        factsCreated += 1;
-      }
-    }
-
-    // 4. Foreshadow plants — dedupe on same content + plantChapter.
-    let plantsCreated = 0;
-    for (const plant of parsed.plants) {
-      const dup = await tx.foreshadow.findFirst({
-        where: {
-          novelId: novel.id,
-          content: plant.content,
-          plantChapter: chapter.index,
-        },
-        select: { id: true },
-      });
-      if (!dup) {
-        await tx.foreshadow.create({
-          data: {
-            novelId: novel.id,
-            content: plant.content,
-            plantChapter: chapter.index,
-            // Line protocol doesn't carry a pay-by deadline; the ledger
-            // keeps it nullable and the doctor (Phase 4) can infer one.
-            payByChapter: null,
-            status: "open",
-            lastChapter: chapter.index,
-          },
-        });
-        plantsCreated += 1;
-      }
-    }
-
-    // 5. Ledger state machine: open -> advanced -> paid, never backwards.
-    let advanced = 0;
-    let paid = 0;
-    if (validAdvance.length > 0) {
-      const r = await tx.foreshadow.updateMany({
-        where: {
-          id: { in: validAdvance },
-          novelId: novel.id,
-          status: { in: ["open", "advanced"] },
-        },
-        data: { status: "advanced", lastChapter: chapter.index },
-      });
-      advanced = r.count;
-    }
-    if (validPaid.length > 0) {
-      const r = await tx.foreshadow.updateMany({
-        where: {
-          id: { in: validPaid },
-          novelId: novel.id,
-          status: { in: ["open", "advanced"] },
-        },
-        data: { status: "paid", lastChapter: chapter.index },
-      });
-      paid = r.count;
-    }
-
-    return {
-      digestSummary: digest.summary,
-      factsCreated,
-      factsTouched,
-      characterStates: characterStates.length,
-      plantsCreated,
-      advanced,
-      paid,
-    } satisfies SedimentOutcome;
-  });
-
   return {
     chapterId: chapter.id,
     novelId: novel.id,
     chapterIndex: chapter.index,
+    summary: parsed.summary,
+    facts: parsed.facts,
+    characterStates,
+    plants: parsed.plants,
+    validAdvance,
+    validPaid,
+  };
+}
+
+/**
+ * The WRITE half of a settle: digest, character states, facts, plants and the
+ * foreshadow state machine, on the CALLER's transaction.
+ *
+ * Idempotent by construction (see the module header): the digest upserts by
+ * the unique chapterId, the character states of the chapter are replaced
+ * atomically, facts dedupe on (novelId, category, content) and plants dedupe
+ * on (content, plantChapter). The foreshadow state machine only ever moves
+ * forward (open → advanced → paid).
+ */
+export async function writeSedimentProjection(
+  tx: SedimentTx,
+  records: SedimentRecords
+): Promise<SedimentOutcome> {
+  const {
+    chapterId,
+    novelId,
+    chapterIndex,
+    summary,
+    facts,
+    characterStates,
+    plants,
+    validAdvance,
+    validPaid,
+  } = records;
+
+  // 1. Digest — upsert by unique chapterId.
+  const digest = await tx.chapterDigest.upsert({
+    where: { chapterId },
+    create: { chapterId, novelId, summary },
+    update: { summary },
+  });
+
+  // 2. Character states — replace this chapter's snapshot atomically.
+  await tx.characterState.deleteMany({
+    where: { novelId, chapterIndex },
+  });
+  if (characterStates.length > 0) {
+    await tx.characterState.createMany({
+      data: characterStates.map((cs) => ({
+        novelId,
+        name: cs.name,
+        chapterIndex,
+        state: cs.state,
+      })),
+    });
+  }
+
+  // 3. Facts — dedupe on (novelId, category, content): existing rows get
+  // lastSeenAt touched, new rows carry sourceChapter + firstSeenAt.
+  let factsCreated = 0;
+  let factsTouched = 0;
+  for (const fact of facts) {
+    const existing = await tx.storyFact.findFirst({
+      where: { novelId, category: fact.category, content: fact.content },
+      select: { id: true },
+    });
+    if (existing) {
+      await tx.storyFact.update({
+        where: { id: existing.id },
+        data: { lastSeenAt: new Date(), lastSeenChapter: chapterIndex },
+      });
+      factsTouched += 1;
+    } else {
+      await tx.storyFact.create({
+        data: {
+          novelId,
+          category: fact.category,
+          content: fact.content,
+          sourceChapter: chapterIndex,
+          lastSeenChapter: chapterIndex,
+        },
+      });
+      factsCreated += 1;
+    }
+  }
+
+  // 4. Foreshadow plants — dedupe on same content + plantChapter.
+  let plantsCreated = 0;
+  for (const plant of plants) {
+    const dup = await tx.foreshadow.findFirst({
+      where: {
+        novelId,
+        content: plant.content,
+        plantChapter: chapterIndex,
+      },
+      select: { id: true },
+    });
+    if (!dup) {
+      await tx.foreshadow.create({
+        data: {
+          novelId,
+          content: plant.content,
+          plantChapter: chapterIndex,
+          // Line protocol doesn't carry a pay-by deadline; the ledger
+          // keeps it nullable and the doctor (Phase 4) can infer one.
+          payByChapter: null,
+          status: "open",
+          lastChapter: chapterIndex,
+        },
+      });
+      plantsCreated += 1;
+    }
+  }
+
+  // 5. Ledger state machine: open -> advanced -> paid, never backwards.
+  let advanced = 0;
+  let paid = 0;
+  if (validAdvance.length > 0) {
+    const r = await tx.foreshadow.updateMany({
+      where: {
+        id: { in: validAdvance },
+        novelId,
+        status: { in: ["open", "advanced"] },
+      },
+      data: { status: "advanced", lastChapter: chapterIndex },
+    });
+    advanced = r.count;
+  }
+  if (validPaid.length > 0) {
+    const r = await tx.foreshadow.updateMany({
+      where: {
+        id: { in: validPaid },
+        novelId,
+        status: { in: ["open", "advanced"] },
+      },
+      data: { status: "paid", lastChapter: chapterIndex },
+    });
+    paid = r.count;
+  }
+
+  return {
+    digestSummary: digest.summary,
+    factsCreated,
+    factsTouched,
+    characterStates: characterStates.length,
+    plantsCreated,
+    advanced,
+    paid,
+  } satisfies SedimentOutcome;
+}
+
+/**
+ * STEP 69 — is this chapter's memory already projected for its CURRENT
+ * content? A digest newer than the chapter's last write means yes.
+ *
+ * This is the idempotency probe: it lets the runtime skip the model call
+ * when the projection is already in place.
+ */
+export async function isProjectionCurrent(chapterId: string): Promise<boolean> {
+  const chapter = await db.chapter.findUnique({
+    where: { id: chapterId },
+    select: { updatedAt: true },
+  });
+  if (!chapter) return false;
+  const digest = await db.chapterDigest.findUnique({
+    where: { chapterId },
+    select: { updatedAt: true },
+  });
+  return !!digest && digest.updatedAt.getTime() >= chapter.updatedAt.getTime();
+}
+
+/**
+ * Settles one chapter into the memory layer. Throws on missing/empty chapter
+ * or AI failure — callers map errors to their own transport (404/422/502 vs
+ * an error feed).
+ */
+export async function sedimentChapterCore(chapterId: string): Promise<{
+  chapterId: string;
+  novelId: string;
+  chapterIndex: number;
+  sedimentedAt: string;
+  result: SedimentOutcome;
+}> {
+  const records = await extractSediment(chapterId);
+  const result = await db.$transaction((tx) => writeSedimentProjection(tx, records));
+  return {
+    chapterId: records.chapterId,
+    novelId: records.novelId,
+    chapterIndex: records.chapterIndex,
     sedimentedAt: new Date().toISOString(),
     result,
   };
