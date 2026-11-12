@@ -23,13 +23,10 @@ import {
   Loader2,
   MessageSquare,
   PanelRight,
-  PauseCircle,
   PenLine,
   ShieldCheck,
-  Sparkles,
   Wrench,
   X,
-  Zap,
   ListChecks,
   type LucideIcon,
 } from "lucide-react";
@@ -92,35 +89,120 @@ const ACTOR_NAME: Record<string, string> = {
   prism: "text-rose-700 dark:text-rose-400",
   forge: "text-teal-700 dark:text-teal-400",
 };
-const FINISHED_STATUSES: readonly AgentRunStatus[] = [
-  "completed",
-  "failed",
-  "cancelled",
-  "paused",
-];
 
 // ---------------------------------------------------------------------------
 // Small shared pieces
 // ---------------------------------------------------------------------------
 
-function StatusBadge({ status }: { status: AgentRunStatus }) {
-  const meta = RUN_STATUS_META[status];
+/**
+ * STEP 67 — compact relative time ("now", "12m", "3h", "2d"). The rail's run
+ * rows use the same idea with an " ago" suffix (asset-tree.tsx:106); the
+ * summary line keeps the bare token.
+ */
+function relativeTime(iso: string): string {
+  const then = new Date(iso).getTime();
+  if (!Number.isFinite(then)) return "";
+  const diff = Date.now() - then;
+  if (diff < 0) return "now";
+  const minutes = Math.floor(diff / 60_000);
+  if (minutes < 1) return "now";
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h`;
+  return `${Math.floor(hours / 24)}d`;
+}
+
+/**
+ * STEP 67 — ONE run summary line, collapsed by default:
+ *
+ *   Completed · 4/5 tasks · 1,842 words · 2 reviews, clean · 12m
+ *
+ * It replaces the "Last run" card: the answer to "what is my team doing?"
+ * used to be stated three times before the reader saw anything. Clicking
+ * expands the final report IN PLACE — the report is rendered nowhere else
+ * in the stream, so exactly one report is on screen at a time.
+ *
+ * While the run is still in flight there is no report yet: the line renders
+ * as plain text — no expander, no dead button.
+ */
+function RunSummaryLine({
+  status,
+  tasksDone,
+  tasksTotal,
+  words,
+  reviewsRun,
+  blockingFound,
+  updatedAt,
+  expanded,
+  hasReport,
+  onToggle,
+}: {
+  status: AgentRunStatus;
+  tasksDone: number;
+  tasksTotal: number;
+  words: number;
+  reviewsRun: number;
+  blockingFound: number;
+  updatedAt: string;
+  expanded: boolean;
+  hasReport: boolean;
+  onToggle: () => void;
+}) {
+  const parts: string[] = [RUN_STATUS_META[status].label];
+  if (tasksTotal > 0) parts.push(`${tasksDone}/${tasksTotal} tasks`);
+  if (words > 0) parts.push(`${words.toLocaleString("en-US")} words`);
+  if (reviewsRun > 0) {
+    parts.push(
+      `${reviewsRun} review${reviewsRun === 1 ? "" : "s"}${
+        blockingFound > 0 ? `, ${blockingFound} blocking` : ", clean"
+      }`
+    );
+  }
+  const when = relativeTime(updatedAt);
+  if (when) parts.push(when);
+
+  const content = (
+    <>
+      <span className="truncate">{parts.join(" · ")}</span>
+      {hasReport && (
+        <span className="ml-auto flex shrink-0 items-center gap-1">
+          Report
+          <ChevronRight
+            className={cn("h-3.5 w-3.5 transition-transform", expanded && "rotate-90")}
+            aria-hidden="true"
+          />
+        </span>
+      )}
+    </>
+  );
+
+  if (!hasReport) {
+    return (
+      <div className="flex w-full items-center gap-2 rounded-lg border bg-card/40 px-3 py-2 text-left text-[12px] text-muted-foreground">
+        {content}
+      </div>
+    );
+  }
+
   return (
-    <Badge variant="outline" className={meta.badgeClass}>
-      {meta.label}
-    </Badge>
+    <button
+      type="button"
+      onClick={onToggle}
+      aria-expanded={expanded}
+      className="flex w-full items-center gap-2 rounded-lg border bg-card/40 px-3 py-2 text-left text-[12px] text-muted-foreground hover:bg-accent/40"
+    >
+      {content}
+    </button>
   );
 }
 
-function ModeChip({ mode }: { mode: AgentRunMode }) {
-  const Icon = mode === "approval" ? ShieldCheck : Zap;
-  return (
-    <Badge variant="outline" className="gap-1">
-      <Icon className="h-3 w-3" aria-hidden="true" />
-      {mode === "approval" ? "Approval" : "Full access"}
-    </Badge>
-  );
-}
+/** STEP 67 — the empty state's three starters. Each one fills the composer
+ *  (it never submits) so the author edits before sending. */
+const STARTER_PROMPTS = [
+  "Draft chapter 1 from the outline",
+  "Review the last chapter for continuity",
+  "Plan the next three scenes",
+] as const;
 
 function FinalReportCard({ report }: { report: RunFinalReport }) {
   const keys = Array.from(
@@ -349,14 +431,21 @@ function ApprovalCard({
   onApprove,
   onReject,
   busy,
+  cardRef,
+  approveRef,
 }: {
   request: NonNullable<UseAgentRunResult["approval"]>;
   onApprove: () => void;
   onReject: () => void;
   busy: boolean;
+  /** STEP 67 — the "Review" button scrolls to this card. */
+  cardRef?: React.RefObject<HTMLDivElement | null>;
+  /** STEP 67 — the action the "Review" button hands the focus to. */
+  approveRef?: React.RefObject<HTMLButtonElement | null>;
 }) {
   return (
     <div
+      ref={cardRef}
       role="alert"
       className="rounded-lg border border-amber-300 bg-amber-50 p-3"
     >
@@ -385,7 +474,7 @@ function ApprovalCard({
         <Button variant="outline" size="sm" onClick={onReject} disabled={busy}>
           Reject
         </Button>
-        <Button size="sm" onClick={onApprove} disabled={busy}>
+        <Button ref={approveRef} size="sm" onClick={onApprove} disabled={busy}>
           {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />}
           Approve
         </Button>
@@ -553,6 +642,8 @@ export function ConversationPane({
   }, [storedModel, novel.id]);
   const [submitting, setSubmitting] = useState(false);
   const [approving, setApproving] = useState(false);
+  /** STEP 67 — the final report lives inside the summary line, collapsed. */
+  const [reportExpanded, setReportExpanded] = useState(false);
   /** Recent run summaries for the history switcher (latest first). */
   const [history, setHistory] = useState<AgentRun[]>([]);
   // STEP 66 — ONE credit fetch for the whole composer area. The status line
@@ -562,9 +653,12 @@ export function ConversationPane({
   const detail = run.detail;
   const runStatus = detail?.run.status ?? null;
   const isActive = runStatus != null && ACTIVE_STATUSES.includes(runStatus);
-  const isFinished = runStatus != null && FINISHED_STATUSES.includes(runStatus);
 
   const bottomAnchorRef = useRef<HTMLDivElement>(null);
+  // STEP 67 — the "Review" button scrolls to the inline approval card and
+  // hands the focus to its action.
+  const approvalCardRef = useRef<HTMLDivElement>(null);
+  const approveButtonRef = useRef<HTMLButtonElement>(null);
 
   // Bring the chat view forward when the gate needs the author (once per gate).
   const approval = run.approval;
@@ -585,6 +679,10 @@ export function ConversationPane({
   // Refresh the history list when the displayed run changes (covers new runs
   // started from the composer and manual switches via the switcher itself).
   const displayedRunId = detail?.run.id ?? null;
+  // STEP 67 — a different run means a different report: collapse it again.
+  useEffect(() => {
+    setReportExpanded(false);
+  }, [displayedRunId]);
   useEffect(() => {
     let alive = true;
     // listNovelRuns attaches the Firebase ID token — a raw fetch here would
@@ -701,20 +799,42 @@ export function ConversationPane({
 
   const events = detail?.events ?? [];
 
+  // STEP 67 — the numbers the summary line states. The words and the review
+  // counts come from the run's MEASURED report (reported vs verified), not
+  // from anything the model claims; a segment whose value is zero is
+  // omitted rather than printed as "0".
+  const runReport = detail?.run.finalReport ?? null;
+  const doneTaskCount = detail
+    ? detail.tasks.filter((task) => task.status === "done").length
+    : 0;
+  const runWords = runReport?.verified.words ?? 0;
+  const runReviews = runReport?.verified.reviewsRun ?? 0;
+  const runBlocking = runReport?.verified.blockingFound ?? 0;
+  /** The runtime opens ONE gate at a time, so the pending count is 0 or 1. */
+  const pendingApprovalCount = approval ? 1 : 0;
+
+  /** STEP 67 — bring the reader to the inline approval and focus its action.
+   *  The approval never becomes a modal. */
+  const handleReviewApproval = () => {
+    approvalCardRef.current?.scrollIntoView({ block: "center", behavior: "smooth" });
+    approveButtonRef.current?.focus({ preventScroll: true });
+  };
+
+  /** STEP 67 — a starter prompt fills the composer (it never submits) and
+   *  hands the caret back so the author edits before sending. */
+  const handleStarterPrompt = (text: string) => {
+    setGoal(text);
+    window.requestAnimationFrame(() => {
+      document.getElementById("agent-goal")?.focus();
+    });
+  };
+
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col" aria-label="Agent conversation pane">
-      {/* Pane header */}
+      {/* Pane header — navigation only (STEP 67). The run status moved into
+          the run summary line and the approval-mode chip is already a control
+          in the composer; saying either here said it twice. */}
       <div className="flex items-center gap-2 border-b px-3 py-2">
-        {detail ? (
-          <>
-            <StatusBadge status={detail.run.status} />
-            <ModeChip mode={detail.run.mode} />
-          </>
-        ) : (
-          <Badge variant="outline" className="text-muted-foreground">
-            Idle
-          </Badge>
-        )}
         <div className="ml-auto flex items-center gap-1">
           {history.length > 0 && (
             <select
@@ -804,46 +924,70 @@ export function ConversationPane({
           renders is measured and the chrome stays full-bleed. */}
       <div className="nice-scroll min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto w-full max-w-[680px] px-6 py-6">
-          {isFinished && detail && (
-            <Card className="mb-3 gap-2 py-3">
-              <CardHeader className="px-4">
-                <CardTitle className="flex items-center gap-2 text-sm">
-                  <StatusBadge status={detail.run.status} />
-                  Last run
-                </CardTitle>
-                <CardDescription>
-                  {detail.run.status === "paused"
-                    ? "Paused after rejection — nothing was written. Discard it to free the team."
-                    : "Finished run — give the team a new goal below."}
-                </CardDescription>
-              </CardHeader>
-              {detail.run.status === "paused" && (
-                <CardContent className="px-4">
-                  <Button variant="outline" size="sm" onClick={handleCancelRun}>
-                    <X className="h-3.5 w-3.5" aria-hidden="true" />
-                    Discard paused run
-                  </Button>
-                </CardContent>
-              )}
-            </Card>
+          {/* STEP 67 — the run is described ONCE. The approval action sits
+              directly above the summary line; the final report expands INSIDE
+              the summary line and is rendered nowhere else in the stream. */}
+          {pendingApprovalCount > 0 && (
+            <button
+              type="button"
+              onClick={handleReviewApproval}
+              className="mb-2 flex w-full items-center gap-2 rounded-lg border border-primary/40 bg-primary/5 px-3 py-2 text-left text-[13px] font-medium text-primary hover:bg-primary/10"
+            >
+              {pendingApprovalCount} approval{pendingApprovalCount === 1 ? "" : "s"} waiting — Review
+            </button>
           )}
 
-          {detail?.run.finalReport != null && (
-            <div className="mb-3">
-              <FinalReportCard report={detail.run.finalReport} />
-            </div>
+          {detail && (
+            <>
+              <RunSummaryLine
+                status={detail.run.status}
+                tasksDone={doneTaskCount}
+                tasksTotal={detail.tasks.length}
+                words={runWords}
+                reviewsRun={runReviews}
+                blockingFound={runBlocking}
+                updatedAt={detail.run.updatedAt}
+                expanded={reportExpanded}
+                hasReport={detail.run.finalReport != null}
+                onToggle={() => setReportExpanded((v) => !v)}
+              />
+              {reportExpanded && detail.run.finalReport != null && (
+                <div className="mt-2">
+                  <FinalReportCard report={detail.run.finalReport} />
+                </div>
+              )}
+              {/* A paused run still needs its way out — the "Last run" card
+                  that used to carry this button is gone. */}
+              {detail.run.status === "paused" && (
+                <Button variant="outline" size="sm" className="mt-2" onClick={handleCancelRun}>
+                  <X className="h-3.5 w-3.5" aria-hidden="true" />
+                  Discard paused run
+                </Button>
+              )}
+            </>
           )}
 
           {view === "chat" ? (
             <>
-              {events.length === 0 && !detail ? (
-                <div className="flex h-full min-h-40 flex-col items-center justify-center gap-2 text-center">
-                  <Sparkles className="h-6 w-6 text-muted-foreground" aria-hidden="true" />
-                  <p className="text-sm font-medium">Give the team a goal</p>
-                  <p className="max-w-xs text-xs leading-5 text-muted-foreground">
-                    They plan the work on their own board, keep you posted here,
-                    and ask before writing anything into your novel.
+              {!detail ? (
+                <div className="flex min-h-[320px] flex-col items-center justify-center px-6 text-center">
+                  <h2 className="text-[17px] font-medium">Give the team a goal</h2>
+                  <p className="mt-1.5 max-w-[420px] text-[13px] text-muted-foreground">
+                    Describe what you want written, or point at a chapter or outline beat.
                   </p>
+                  <div className="mt-4 flex flex-wrap justify-center gap-2">
+                    {STARTER_PROMPTS.map((text) => (
+                      <Button
+                        key={text}
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => handleStarterPrompt(text)}
+                      >
+                        {text}
+                      </Button>
+                    ))}
+                  </div>
                 </div>
               ) : (
                 <>
@@ -860,6 +1004,8 @@ export function ConversationPane({
                       onApprove={handleApprove}
                       onReject={handleReject}
                       busy={approving}
+                      cardRef={approvalCardRef}
+                      approveRef={approveButtonRef}
                     />
                   )}
                 </>
