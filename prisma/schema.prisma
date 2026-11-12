@@ -472,6 +472,17 @@ model StoryFact {
   // | decision | style | dialogue | inspiration   (Phase 7: 5 -> 9)
   category      String
   content       String
+  // STEP 72 — the SUBJECT this fact is about, as the MODEL named it (never
+  // guessed by keyword). Two live rows in the same category about the same
+  // subject cannot both be true: the older one is retired (retiredAt set),
+  // so the memory pool keeps ONE live line per subject.
+  // NULL = the model named no subject: the row stays live and is counted
+  // (the settle reports it) — an unnamed subject is never guessed.
+  subject       String?
+  // STEP 72 — retired = superseded by a newer row about the same subject, or
+  // carried a loop that has since been paid. A retired row is KEPT (the
+  // trail) but is NOT retrievable.
+  retiredAt     DateTime?
   sourceChapter Int?
   firstSeenAt   DateTime @default(now())
   lastSeenAt    DateTime @updatedAt
@@ -483,6 +494,7 @@ model StoryFact {
   novel Novel @relation(fields: [novelId], references: [id], onDelete: Cascade)
 
   @@index([novelId, category])
+  @@index([novelId, subject])
 }
 
 model CharacterState {

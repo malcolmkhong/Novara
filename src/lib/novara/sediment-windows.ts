@@ -158,12 +158,116 @@ export function buildSedimentWindows(
  * · ledger   — dedupe on id (the same ids are advanced/paid twice when two
  *   windows share the overlap).
  * · loops    — dedupe on id (PAID_LOOP ids).
+ *
+ * STEP 72 — NEAR-DUPLICATES: the overlap re-reads ~800 chars around every
+ * cut, so the same scene can come back REWORDED. Exact-content dedupe cannot
+ * see that, and the reworded copy becomes a second row. Records in the same
+ * category whose token overlap is at least NEAR_DUPLICATE_THRESHOLD are merged
+ * here — before the transaction — keeping the LONGER (clearer) one.
  */
+
+/**
+ * Token-overlap similarity above which two records are the same fact.
+ *
+ * MEASURED on the owner's chapter 2 (133 same-category live pairs):
+ *   · the SAME fact reworded by a later extraction: 0.493 – 0.732
+ *   · two DIFFERENT facts in the same category:       ≤ 0.310
+ * 0.45 sits in the gap with ~0.18 of margin on both sides.
+ */
+export const NEAR_DUPLICATE_THRESHOLD = 0.45;
+
+/**
+ * The tokens of a record: CJK character bigrams (CJK has no spaces) plus
+ * lowercased latin/number words. The same tokenisation the memory retrieval
+ * uses for keyword hits.
+ */
+export function similarityTokens(text: string): Set<string> {
+  const out = new Set<string>();
+  const lower = text.toLowerCase();
+  for (const word of lower.match(/[a-z0-9]+/g) ?? []) {
+    if (word.length > 1) out.add(word);
+  }
+  for (const run of lower.match(/[\u4e00-\u9fff]{2,}/g) ?? []) {
+    for (let i = 0; i < run.length - 1; i += 1) out.add(run.slice(i, i + 2));
+  }
+  return out;
+}
+
+/**
+ * The overlap coefficient: how much of the SMALLER record is contained in the
+ * larger one. It catches the containment case (a reworded copy that says
+ * almost the same thing) that Jaccard misses.
+ */
+export function similarity(a: string, b: string): number {
+  const ta = similarityTokens(a);
+  const tb = similarityTokens(b);
+  if (ta.size === 0 || tb.size === 0) return 0;
+  let shared = 0;
+  for (const token of ta) if (tb.has(token)) shared += 1;
+  return shared / Math.min(ta.size, tb.size);
+}
+
+export interface NearDuplicateMerge {
+  kept: { category: string; content: string };
+  dropped: { category: string; content: string };
+  similarity: number;
+}
+
+/**
+ * Merge the near-identical records of ONE category. Keeps the longer copy.
+ * Returns what was merged so the caller can report it.
+ */
+export function mergeNearDuplicates(
+  facts: SedimentRecords["facts"],
+  threshold = NEAR_DUPLICATE_THRESHOLD
+): { facts: SedimentRecords["facts"]; merges: NearDuplicateMerge[] } {
+  const byCategory = new Map<string, SedimentRecords["facts"]>();
+  for (const fact of facts) {
+    const list = byCategory.get(fact.category) ?? [];
+    list.push(fact);
+    byCategory.set(fact.category, list);
+  }
+  const merges: NearDuplicateMerge[] = [];
+  const kept: SedimentRecords["facts"] = [];
+  for (const [, list] of byCategory) {
+    const survivors: SedimentRecords["facts"] = [];
+    for (const candidate of list) {
+      let merged = false;
+      for (const survivor of survivors) {
+        const score = similarity(survivor.content, candidate.content);
+        if (score < threshold) continue;
+        // Keep the LONGER (clearer) statement.
+        const keep = candidate.content.length > survivor.content.length ? candidate : survivor;
+        const drop = keep === survivor ? candidate : survivor;
+        merges.push({ kept: { category: keep.category, content: keep.content }, dropped: { category: drop.category, content: drop.content }, similarity: Number(score.toFixed(3)) });
+        survivors[survivors.indexOf(survivor)] = keep;
+        merged = true;
+        break;
+      }
+      if (!merged) survivors.push(candidate);
+    }
+    kept.push(...survivors);
+  }
+  // Restore the original order (category-grouped output would reorder them).
+  kept.sort((a, b) => facts.indexOf(a) - facts.indexOf(b));
+  return { facts: kept, merges };
+}
+
 export function mergeSedimentRecords(windows: SedimentRecords[]): SedimentRecords {
   if (windows.length === 0) {
     throw new Error("mergeSedimentRecords: no windows to merge");
   }
-  if (windows.length === 1) return windows[0];
+  if (windows.length === 1) {
+    // One window: still merge the near-duplicates the model wrote inside it.
+    const only = windows[0];
+    const nearMerged = mergeNearDuplicates(only.facts);
+    return {
+      ...only,
+      facts: nearMerged.facts,
+      nearDuplicatesMerged: nearMerged.merges.length,
+      nearDuplicatePairs: nearMerged.merges,
+    };
+  }
 
   const first = windows[0];
   const summary = windows
@@ -182,6 +286,9 @@ export function mergeSedimentRecords(windows: SedimentRecords[]): SedimentRecord
       facts.push(fact);
     }
   }
+  // STEP 72 — near-identical records (the overlap re-read) collapse into one.
+  const nearMerged = mergeNearDuplicates(facts);
+  const mergedFacts = nearMerged.facts;
 
   // States: one per character — the LAST window that saw them wins (that is
   // the chapter-end state, which is what the projection stores).
@@ -221,12 +328,14 @@ export function mergeSedimentRecords(windows: SedimentRecords[]): SedimentRecord
     novelId: first.novelId,
     chapterIndex: first.chapterIndex,
     summary,
-    facts: facts.slice(0, 24),
+    facts: mergedFacts.slice(0, 24),
     characterStates: characterStates.slice(0, 24),
     plants: plants.slice(0, 12),
     validAdvance: validAdvance.slice(0, 12),
     validPaid: validPaid.slice(0, 12),
     paidPromises: paidPromises.slice(0, 12),
+    nearDuplicatesMerged: nearMerged.merges.length,
+    nearDuplicatePairs: nearMerged.merges,
   };
 }
 

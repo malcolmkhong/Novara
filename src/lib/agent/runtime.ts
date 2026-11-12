@@ -3105,7 +3105,26 @@ export async function executeTool(params: ExecuteToolParams): Promise<ToolResult
       // (digest · StoryFact · CharacterState · Foreshadow) — so a chapter
       // can NEVER be final with unprojected memory: any failure rolls the
       // finalization back with it.
-      const records = await extractSediment(chapter.id);
+      // STEP 72 — a failed extraction must reach the user in plain words.
+      // The chapter stays draft (the status flip never happened), and the
+      // feed says exactly that — no silent draft.
+      let records: Awaited<ReturnType<typeof extractSediment>>;
+      try {
+        records = await extractSediment(chapter.id);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "the memory step failed";
+        await emitEvent({
+          runId: params.runId,
+          taskId: params.taskId,
+          actor,
+          kind: "error",
+          summary: `Chapter ${chapter.index} was NOT finalised — ${truncate(message, 240)}`,
+        });
+        return {
+          ok: false,
+          feed: `finalize_chapter(${action.index}) → error: ${message}`,
+        };
+      }
       // Resolve the ownership identity BEFORE opening the interactive
       // transaction (DATABASE_URL carries connection_limit=1 — a base-client
       // query from inside the transaction would have nowhere to run).
@@ -3135,13 +3154,19 @@ export async function executeTool(params: ExecuteToolParams): Promise<ToolResult
         taskId: params.taskId,
         actor,
         kind: "write",
-        summary: `Chapter ${chapter.index} memory settled by the finalization — ${outcome.factsCreated} facts (+${outcome.factsTouched} reinforced), ${outcome.characterStates} states, ${outcome.plantsCreated} plants, ${outcome.advanced} advanced, ${outcome.paid} paid (verified in DB).`,
+        summary: `Chapter ${chapter.index} memory settled by the finalization — ${outcome.factsCreated} facts (+${outcome.factsTouched} reinforced, ${outcome.factsRetired} retired as superseded), ${outcome.characterStates} states, ${outcome.plantsCreated} plants, ${outcome.advanced} advanced, ${outcome.paid} paid (verified in DB).`,
         payload: { artifact: "chapter", chapterId: chapter.id, index: chapter.index, settles: outcome, op: "settle_chapter" },
       });
+      // STEP 72 — the anti-rot counters are REPORTED, not hidden: a fact the
+      // model left without a subject stays live, and the operator must see it.
+      const subjectlessNote =
+        outcome.subjectlessFacts > 0
+          ? ` ${outcome.subjectlessFacts} rot-prone fact(s) had no subject and stay live (the model named no subject — never guessed).`
+          : "";
       return {
         ok: true,
         finalizedChapterId: chapter.id,
-        feed: `finalize_chapter(${action.index}) → ok: chapter status = final (E2 gate passed on the persisted review) and its memory was projected in the same commit — ${outcome.factsCreated} facts (+${outcome.factsTouched} reinforced), ${outcome.characterStates} states, ${outcome.plantsCreated} plants, ${outcome.advanced} advanced, ${outcome.paid} paid.`,
+        feed: `finalize_chapter(${action.index}) → ok: chapter status = final (E2 gate passed on the persisted review) and its memory was projected in the same commit — ${outcome.factsCreated} facts (+${outcome.factsTouched} reinforced, ${outcome.factsRetired} retired as superseded), ${outcome.characterStates} states, ${outcome.plantsCreated} plants, ${outcome.advanced} advanced, ${outcome.paid} paid.${subjectlessNote}`,
       };
     }
     case "settle_chapter": {

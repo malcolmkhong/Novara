@@ -163,6 +163,11 @@ export async function POST(req: Request) {
           content: f.content,
           sourceChapter: f.sourceChapter,
           lastSeenChapter: f.sourceChapter,
+          // STEP 72 — the subject and the retirement stamp travel with the
+          // backup, so a restored novel keeps its one-live-line-per-subject
+          // rule.
+          subject: f.subject,
+          retiredAt: f.retiredAt ? new Date(f.retiredAt) : null,
         })),
       });
       memoryRestored.facts = r.count;

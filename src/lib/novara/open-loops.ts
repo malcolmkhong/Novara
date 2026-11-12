@@ -356,8 +356,11 @@ export async function closePaidLoops(input: {
   actor: string;
   chapterIndex?: number | null;
   tx?: DbTx;
-}): Promise<{ closed: { kind: OpenLoopKind; id: string; from: string; to: string }[]; refused: string[] }> {
-  const closed: { kind: OpenLoopKind; id: string; from: string; to: string }[] = [];
+}): Promise<{
+  closed: { kind: OpenLoopKind; id: string; from: string; to: string; title?: string }[];
+  refused: string[];
+}> {
+  const closed: { kind: OpenLoopKind; id: string; from: string; to: string; title?: string }[] = [];
   const refused: string[] = [];
   for (const entry of input.paid) {
     const kind = await resolveLoopKind(input.novelId, entry.id, input.tx);
@@ -376,7 +379,7 @@ export async function closePaidLoops(input: {
       tx: input.tx,
     });
     if (result.ok && result.from && result.to) {
-      closed.push({ kind, id: entry.id, from: result.from, to: result.to });
+      closed.push({ kind, id: entry.id, from: result.from, to: result.to, title: result.title });
     } else {
       refused.push(`${entry.id}: ${result.error ?? "refused"}`);
     }

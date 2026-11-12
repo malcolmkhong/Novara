@@ -121,7 +121,10 @@ function keywordHits(keywords: string[], haystack: string): number {
 async function collectSedimentItems(novelId: string): Promise<RawItem[]> {
   const [facts, states, foreshadows] = await Promise.all([
     db.storyFact.findMany({
-      where: { novelId },
+      // STEP 72 — a RETIRED fact (superseded by a newer row about the same
+      // subject, or a loop that has since been paid) is kept in the database
+      // as the trail but is NOT part of the memory pool.
+      where: { novelId, retiredAt: null },
       select: {
         id: true, category: true, content: true,
         sourceChapter: true, lastSeenChapter: true,
@@ -676,9 +679,10 @@ export async function buildMemorySyncReport(
     }),
     // Facts grouped by their (sourceChapter, lastSeenChapter) pair, so a row
     // that matches both columns of one chapter is still counted once.
+    // STEP 72 — retired rows are not part of the live pool.
     db.storyFact.groupBy({
       by: ["sourceChapter", "lastSeenChapter"],
-      where: { novelId },
+      where: { novelId, retiredAt: null },
       _count: { _all: true },
     }),
     db.characterState.groupBy({

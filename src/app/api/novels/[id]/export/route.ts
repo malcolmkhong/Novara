@@ -111,6 +111,11 @@ export async function GET(_req: Request, { params }: Params) {
           category: f.category,
           content: f.content,
           sourceChapter: f.sourceChapter,
+          // STEP 72 — the subject (the model's own name for the thing the
+          // fact is about) and the retirement state travel with the backup:
+          // without them a restored novel could never supersede a fact.
+          subject: f.subject,
+          retiredAt: f.retiredAt ? f.retiredAt.toISOString() : null,
         })),
         characterStates: novel.characterStates.map((s) => ({
           name: s.name,

@@ -316,6 +316,10 @@ export interface BackupStoryFact {
   category: string;
   content: string;
   sourceChapter?: number | null;
+  /** STEP 72 — the subject the model named (null = never named). */
+  subject?: string | null;
+  /** STEP 72 — the retirement stamp (null = live). */
+  retiredAt?: string | null;
 }
 
 export interface BackupCharacterState {

@@ -126,9 +126,15 @@ export async function chatCompletion(opts: {
    * HARD surface: the whole turn must be affordable before it starts).
    */
   creditSurface?: string;
+  /**
+   * STEP 72 — override the internal transient-error retry count. The
+   * sediment extractor owns its own per-window retry (4s, then 10s), so it
+   * passes 0 here: one retry policy per layer, not two stacked.
+   */
+  maxRetries?: number;
 }): Promise<ChatResult> {
   const budgets = getBudgets();
-  const retries = budgets.ai.retryAttempts;
+  const retries = opts.maxRetries ?? budgets.ai.retryAttempts;
   let lastError: unknown;
 
   // The charge surface decides the reserve class; the ledger surface keeps

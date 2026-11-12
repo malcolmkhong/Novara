@@ -133,6 +133,11 @@ export const backupFileSchema = z.object({
               category: z.enum(MEMORY_CATEGORY_VALUES),
               content: z.string().min(1).max(20000),
               sourceChapter: z.number().int().min(1).nullable().default(null),
+              // STEP 72 — the subject the model named (null = never named) and
+              // the retirement stamp (null = live). Both optional so a v1/v2
+              // file without them still validates.
+              subject: z.string().trim().min(1).max(200).nullable().default(null),
+              retiredAt: z.string().datetime().nullable().default(null),
             })
           )
           .max(20000)
