@@ -73,7 +73,10 @@ export const toolActionSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("read_promises") }),
   z.object({
     action: z.literal("update_ledger"),
-    kind: z.enum(["promise", "clue"]),
+    // The kind and the status are validated by the TOOL, not by the schema:
+    // the tool's own message is the one the model reads ("kind must be
+    // promise or clue — storylines, timeline and arcs are author-owned").
+    kind: z.string().trim().min(1).max(24),
     id: z.string().trim().min(1).max(64),
     // The lifecycle of each kind is its own: a promise is open | advanced |
     // paid, a clue is planted | surfaced | revealed. The runtime accepts the
