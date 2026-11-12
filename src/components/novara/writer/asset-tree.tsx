@@ -1,54 +1,24 @@
 "use client";
 
 // ---------------------------------------------------------------------------
-// Novara AI — Workbench left rail: novel header + asset tree.
+// Novara AI — STEP 76: the left rail.
 //
-// The tree is not just navigation: nodes carry LIVE agent badges (D1) bound
-// via AgentTask.artifactType/artifactLabel, so the author can see which asset
-// the team is touching right now — the "章新区 · 工作中" pattern from the
-// workbench reference design.
+// The rail keeps its chrome (the novel's identity, the Write|Book switch, ONE
+// search line) and renders the DOCUMENT TREE in Book mode — every row is a
+// folder or a document (RULE 1). The tree itself is built by `buildDocTree`
+// (src/lib/novara/doc-tree.ts); this file only renders it.
 //
-// Phase 9 repository structure (DSH-style zones, rendered top → bottom):
-//   世界书   — dynamic 世界书 groups (one sub-group per WorldGroupDTO, ordered)
-//              + 未分组 (ungrouped entries; agent world_entry fallback badge)
-//              + 人物档案 (characters); canon-locked (status "final") files
-//              carry a Lock icon
-//   作品契约 — single document row → contract tab ("已写入"/"未写入")
-//   大纲     — 故事骨架 (unsorted beats) + 卷规划 (per-volume beats) + 章摘要
-//   定稿     — zero-padded final-chapter files (hidden until one exists)
-//   本书记忆 — expandable group → 索引/决策/对话/文风/灵感 sub-rows → memory
-//              tab (writes the store's memory deep-link focus first)
-//   构想     — single document row → contract tab ("已快照"/"未快照")
-//   账本     — expandable group → 故事线/时间线/人物弧线/承诺/线索 sub-rows
-//              with live counts → ledger tab (writes ledger focus first)
-//   草稿区   — 草稿 (draft chapters, expandable into 稿N version rows) +
-//              材料包 + 定稿准备 (packs) + 审核
-//
-// File-explorer semantics: groups AND sub-groups are expandable/collapsible
-// via the chevron OR by clicking the group label; their children are
-// clickable "files" that open in the right artifact pane. A search box
-// filters the tree by file label while the query is active (groups with
-// matches render force-expanded); clearing it restores the exact previous
-// expand/collapse state.
+// The search line filters the tree by row label (folder names included) while
+// the query is active (matching folders render force-expanded); clearing it
+// restores the exact previous expand/collapse state.
 // ---------------------------------------------------------------------------
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import {
-  Brain,
-  ChevronRight,
-  FileSearch,
-  Globe2,
-  Hand,
-  Lightbulb,
-  ListTree,
   Loader2,
-  Lock,
   MoreHorizontal,
-  NotebookPen,
-  PenLine,
   Pencil,
   Plus,
-  ScrollText,
   Search,
   Settings,
   Trash2,
@@ -67,262 +37,62 @@ import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
 import type {
   AgentRun,
-  AgentRunStatus,
   AgentTask,
-  AgentTaskStatus,
 } from "@/lib/novara/agent-types";
-import type { ArtifactTabId, RailMode } from "@/config/writer";
 import { RUN_STATUS_META } from "@/config/writer";
-import { listNovelRuns } from "@/lib/novara/api";
-import type {
-  ChapterDTO,
-  ChapterPackDTO,
-  ChapterPackKind,
-  ChapterVersionSummaryDTO,
-  NovelDetail,
-  OutlineBeatDTO,
-  VolumeDTO,
-  WorldEntryDTO,
-  WorldGroupDTO,
-} from "@/lib/novara/types";
+import { relativeTime, type DocNode, type Node } from "@/lib/novara/doc-tree";
+import type { NovelDetail } from "@/lib/novara/types";
 import { formatWordCount } from "@/lib/novara/words";
 import { cn } from "@/lib/utils";
 import { useWriterStore } from "@/hooks/use-writer-store";
+import { DocTreePanel } from "./doc-tree-panel";
+import { BadgeIcons, buildTreeBadges } from "./tree-badges";
 
 // ---------------------------------------------------------------------------
-// STEP 65 — the rail's Write mode (the run list)
+// Collapse state (file-explorer style). Persisted per novel in localStorage
+// so the explorer "stays as you left it" across remounts. STEP 76: the keys
+// are the tree's own folder ids ("f:<name>").
 // ---------------------------------------------------------------------------
 
-/** How many runs the rail asks for. The server clamps to 1..50. */
-const RUN_LIST_LIMIT = 50;
-
-/** Stable empty list — keeps the run rows' referential identity stable. */
-const EMPTY_RUNS: AgentRun[] = [];
-
-/**
- * Relative time for a run row ("now", "2m ago", "3h ago", "4d ago", "2w ago").
- * 11px, muted, right-aligned — the grammar's timestamp treatment.
- */
-function relativeTime(iso: string): string {
-  const then = new Date(iso).getTime();
-  if (!Number.isFinite(then)) return "";
-  const diff = Date.now() - then;
-  if (diff < 0) return "now";
-  const minutes = Math.floor(diff / 60_000);
-  if (minutes < 1) return "now";
-  if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
-  const days = Math.floor(hours / 24);
-  if (days < 7) return `${days}d ago`;
-  return `${Math.floor(days / 7)}w ago`;
-}
-
-// ---------------------------------------------------------------------------
-// Badge binding: live tasks → tree node keys
-// ---------------------------------------------------------------------------
-interface NodeBadge {
-  taskKey: string;
-  status: Extract<AgentTaskStatus, "in_progress" | "needs_approval">;
-}
-
-type BadgeMap = Map<string, NodeBadge[]>;
-
-/** Chapter label like "Chapter 3" → numeric index (best effort). */
-function chapterIndexFromLabel(label: string | null): number | null {
-  if (!label) return null;
-  const m = label.match(/chapter\s+(\d+)/i);
-  return m ? Number.parseInt(m[1], 10) : null;
-}
-
-export function buildTreeBadges(
-  tasks: AgentTask[],
-  /** Existing chapter indexes, so badges fall back to the 草稿 group header
-   * when the task targets a chapter that is not in the tree yet. */
-  existingChapterIndexes: number[] = []
-): BadgeMap {
-  const map: BadgeMap = new Map();
-  const push = (key: string, badge: NodeBadge) => {
-    const list = map.get(key) ?? [];
-    list.push(badge);
-    map.set(key, list);
-  };
-  for (const task of tasks) {
-    if (task.status !== "in_progress" && task.status !== "needs_approval") {
-      continue;
-    }
-    const badge: NodeBadge = { taskKey: task.key, status: task.status };
-    switch (task.artifactType) {
-      case "chapter": {
-        const idx = chapterIndexFromLabel(task.artifactLabel);
-        push(
-          idx != null && existingChapterIndexes.includes(idx)
-            ? `chapter:${idx}`
-            : "group:drafts",
-          badge
-        );
-        break;
-      }
-      case "character":
-        push(
-          task.artifactId ? `character:${task.artifactId}` : "group:world.characters",
-          badge
-        );
-        break;
-      case "world_entry":
-        // Entries without an artifact yet fall back to the 未分组 sub-group.
-        push(
-          task.artifactId ? `world:${task.artifactId}` : "group:world.ungrouped",
-          badge
-        );
-        break;
-      case "outline_beat":
-        push(task.artifactId ? `beat:${task.artifactId}` : "group:outline", badge);
-        break;
-      default:
-        push("novel", badge);
-    }
-  }
-  return map;
-}
-
-function BadgeIcons({ badges }: { badges: NodeBadge[] | undefined }) {
-  if (!badges || badges.length === 0) return null;
-  return (
-    <span className="flex shrink-0 items-center gap-1" aria-live="polite">
-      {badges.map((b) =>
-        b.status === "in_progress" ? (
-          <Loader2
-            key={b.taskKey}
-            className="h-3.5 w-3.5 animate-spin text-primary"
-            aria-label={`${b.taskKey} working on this asset`}
-            role="img"
-          />
-        ) : (
-          <Hand
-            key={b.taskKey}
-            className="h-3.5 w-3.5 text-amber-600"
-            aria-label={`${b.taskKey} waiting for approval on this asset`}
-            role="img"
-          />
-        )
-      )}
-    </span>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// AssetTree
-// ---------------------------------------------------------------------------
-
-/** Static expandable group/sub-group keys (dynamic rows use prefixed keys:
- * volume plans "volume:<id>", 世界书 groups "world.group.<groupId>", draft
- * chapter versions "chapter.v.<chapterId>"). */
-type ExpandableKey =
-  | "world"
-  | "world.ungrouped"
-  | "world.characters"
-  | "outline"
-  | "outline.skeleton"
-  | "outline.volumes"
-  | "canon"
-  | "memory"
-  | "ledger"
-  | "workspace"
-  | "workspace.drafts"
-  | "workspace.material"
-  | "workspace.prep";
-
-const EXPANDABLE_KEYS: readonly ExpandableKey[] = [
-  "world",
-  "world.ungrouped",
-  "world.characters",
-  "outline",
-  "outline.skeleton",
-  "outline.volumes",
-  "canon",
-  "memory",
-  "ledger",
-  "workspace",
-  "workspace.drafts",
-  "workspace.material",
-  "workspace.prep",
-];
-
-const VOLUME_KEY_PREFIX = "volume:";
-const WORLD_GROUP_KEY_PREFIX = "world.group.";
-const CHAPTER_VERSION_KEY_PREFIX = "chapter.v.";
-
-/** The 草稿区 workspace (and its draft chapters) starts open — the primary
- * asset; everything else starts collapsed to keep the rail scannable. */
-const DEFAULT_EXPANDED: Readonly<Record<string, boolean>> = {
-  workspace: true,
-  "workspace.drafts": true,
+/** The folders that start open. The Runs folder stays closed (A2). */
+const DEFAULT_EXPANDED: Record<string, boolean> = {
+  "f:outline": true,
+  "f:chapters": true,
 };
 
-/** localStorage key so a novel's tree state survives remounts and reloads. */
-function expandStateKey(novelId: string) {
+function expandStateKey(novelId: string): string {
   return `novara:tree-expanded:${novelId}`;
 }
 
+/** Read the persisted collapse state. Only known folder ids are kept. */
 function loadExpandState(novelId: string): Record<string, boolean> {
-  const base: Record<string, boolean> = { ...DEFAULT_EXPANDED };
-  if (typeof window === "undefined") return base;
+  if (typeof window === "undefined") return {};
   try {
     const raw = window.localStorage.getItem(expandStateKey(novelId));
-    if (!raw) return base;
+    if (!raw) return {};
     const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const out: Record<string, boolean> = {};
     for (const [key, value] of Object.entries(parsed)) {
-      const known =
-        (EXPANDABLE_KEYS as readonly string[]).includes(key) ||
-        key.startsWith(VOLUME_KEY_PREFIX) ||
-        key.startsWith(WORLD_GROUP_KEY_PREFIX) ||
-        key.startsWith(CHAPTER_VERSION_KEY_PREFIX);
-      if (known && typeof value === "boolean") {
-        base[key] = value;
-      }
+      if (key.startsWith("f:") && typeof value === "boolean") out[key] = value;
     }
-    return base;
+    return out;
   } catch {
-    return base;
+    return {};
   }
 }
-
-/** 本书记忆 tree sub-rows (Phase 9): key is the store's memory deep-link
- * focus value ("all" | MemoryCategory), label is the Chinese sub-row name. */
-const MEMORY_TREE_ROWS: readonly { key: string; label: string; zh: string }[] = [
-  { key: "all", label: "Index", zh: "索引" },
-  { key: "decision", label: "Decisions", zh: "决策" },
-  { key: "dialogue", label: "Dialogue", zh: "对话" },
-  { key: "style", label: "Style", zh: "文风" },
-  { key: "inspiration", label: "Inspiration", zh: "灵感" },
-];
 
 interface AssetTreeProps {
   detail: NovelDetail;
   /** Live agent tasks (may be empty — no active run). */
   tasks: AgentTask[];
-  selectedChapterId: string | null;
-  selectedBeatId: string | null;
-  selectedCharacterId: string | null;
-  selectedWorldId: string | null;
-  /** Active volume row in 卷规划 — highlighted like a file. */
-  selectedVolumeId?: string | null;
-  /** Open chapter pack, key shape `${kind}:${chapterIndex}` (e.g. "material:9"). */
-  selectedPackKey?: string | null;
-  onOpenChapter: (chapterId: string) => void;
-  onOpenBeat: (beatId: string) => void;
-  onOpenCharacter: (characterId: string) => void;
-  onOpenWorld: (worldId: string) => void;
-  /** Opens the volume's plan document in the Outline artifact view. */
-  onOpenVolume: (volumeId: string) => void;
-  /** Opens a chapter pack document in the Packs artifact view. */
-  onOpenPack: (kind: ChapterPackKind, chapterIndex: number) => void;
-  /** Requests a new chapter pack of the given kind. */
-  onAddPack: (kind: ChapterPackKind) => void;
-  /** Opens a finalized chapter (canon read view). */
-  onOpenCanonChapter: (chapterId: string) => void;
-  onOpenArtifactTab: (tab: ArtifactTabId) => void;
+  /** This novel's agent runs (the Write-mode list). */
+  runs: AgentRun[];
+  /** The run list is still loading. */
+  runsLoading: boolean;
+  /** The document tree (Book mode). */
+  tree: Node[];
+  /** Open a document row. */
+  onOpenDoc: (node: DocNode) => void;
   onAddChapter: () => Promise<void>;
   onEditDetails: () => void;
   onExport: () => void;
@@ -337,11 +107,6 @@ interface AssetTreeProps {
   onOpenRun: (runId: string) => void;
   /** The run currently shown in the centre column — highlighted in the list. */
   currentRunId?: string | null;
-  /**
-   * STEP 65 — the run's status. A change re-fetches the rail's run list, so
-   * a run that finishes shows up without a manual reload.
-   */
-  runStatus?: AgentRunStatus | null;
   /** STEP 65 — the rail's gear button opens the settings dialog. */
   onOpenSettings: () => void;
 }
@@ -349,21 +114,10 @@ interface AssetTreeProps {
 export function AssetTree({
   detail,
   tasks,
-  selectedChapterId,
-  selectedBeatId,
-  selectedCharacterId,
-  selectedWorldId,
-  selectedVolumeId,
-  selectedPackKey,
-  onOpenChapter,
-  onOpenBeat,
-  onOpenCharacter,
-  onOpenWorld,
-  onOpenVolume,
-  onOpenPack,
-  onAddPack,
-  onOpenCanonChapter,
-  onOpenArtifactTab,
+  runs,
+  runsLoading,
+  tree,
+  onOpenDoc,
   onAddChapter,
   onEditDetails,
   onExport,
@@ -371,7 +125,6 @@ export function AssetTree({
   addingChapter = false,
   onOpenRun,
   currentRunId = null,
-  runStatus = null,
   onOpenSettings,
 }: AssetTreeProps) {
   const { novel } = detail;
@@ -379,57 +132,18 @@ export function AssetTree({
     tasks,
     detail.chapters.map((c) => c.index)
   );
-  // Deep-link focus writers (Phase 9): memory/ledger tree sub-rows preselect
-  // the target tab's category/kind before opening it.
-  const setMemoryFocus = useWriterStore((s) => s.setMemoryFocus);
-  const setLedgerKind = useWriterStore((s) => s.setLedgerKind);
 
   // STEP 65 — the rail has TWO modes instead of eight peers: "write" (this
-  // novel's agent runs) and "book" (the asset tree). The choice is per novel
+  // novel's agent runs) and "book" (the document tree). The choice is per novel
   // and persisted in the writer store; the default on first load is "book".
   const mode = useWriterStore((s) => s.railModeByNovel[novel.id] ?? "book");
   const setRailMode = useWriterStore((s) => s.setRailMode);
+  // The document the pane has open — the tree highlights it.
+  const activeDocId = useWriterStore((s) => s.activeDocByNovel[novel.id] ?? null);
 
-  // The rail's run list (Write mode). ONE shared client function with the
-  // conversation pane's history switcher — the server clamps the page size.
-  // The list is stored WITH the novel it belongs to, so switching novels
-  // shows "loading" instead of the previous novel's runs.
-  const [runsState, setRunsState] = useState<{
-    novelId: string;
-    runs: AgentRun[];
-  } | null>(null);
-  const runs = runsState?.novelId === novel.id ? runsState.runs : EMPTY_RUNS;
-  const runsLoading = mode === "write" && runsState?.novelId !== novel.id;
-
-  useEffect(() => {
-    if (mode !== "write") return;
-    let alive = true;
-    listNovelRuns(novel.id, RUN_LIST_LIMIT)
-      .then((body) => {
-        if (alive) {
-          setRunsState({
-            novelId: novel.id,
-            runs: Array.isArray(body.runs) ? body.runs : [],
-          });
-        }
-      })
-      .catch(() => {
-        if (alive) setRunsState({ novelId: novel.id, runs: [] });
-      });
-    return () => {
-      alive = false;
-    };
-  }, [novel.id, mode, runStatus]);
-
-  // STEP 65 — groups whose computed count is 0 collapse behind ONE
-  // "Show empty (N)" row at the bottom of Book mode.
-  const [showEmpty, setShowEmpty] = useState(false);
-
-  // Collapse state (file-explorer style). The 草稿区 workspace starts open —
-  // the primary asset; the rest start collapsed. The state persists per novel
-  // in localStorage so the explorer "stays as you left it" across remounts.
-  const [expanded, setExpandedState] = useState<Record<string, boolean>>(
-    () => loadExpandState(novel.id)
+  // Collapse state (file-explorer style), persisted per novel.
+  const [expanded, setExpandedState] = useState<Record<string, boolean>>(() =>
+    loadExpandState(novel.id)
   );
   const isExpanded = (key: string): boolean =>
     expanded[key] ?? DEFAULT_EXPANDED[key] ?? false;
@@ -445,363 +159,49 @@ export function AssetTree({
     setExpanded({ ...expanded, [key]: !isExpanded(key) });
 
   // Search — a derived view on top of the tree. While a query is active the
-  // groups render force-expanded, but `expanded` itself is never written, so
+  // folders render force-expanded, but `expanded` itself is never written, so
   // clearing the query restores the exact previous expand/collapse state.
   const [query, setQuery] = useState("");
   const q = query.trim().toLowerCase();
-  const searching = q.length > 0;
-  const matchesQuery = (text: string) => text.toLowerCase().includes(q);
-  // STEP 65.6a — a translated label keeps BOTH search terms: the new English
-  // label and its original Chinese string. Searching "Final" or "定稿" both work.
-  const matchesLabel = (english: string, chinese: string) =>
-    matchesQuery(english) || matchesQuery(chinese);
-
-  // Beat entries keep their original positional index so "NN" prefixes stay
-  // stable no matter how beats are grouped.
-  const beatEntries = detail.outlineBeats.map((beat, index) => ({ beat, index }));
-  const unsortedBeats = beatEntries.filter(({ beat }) => beat.volumeId === null);
-  const beatsByVolume = new Map<string, { beat: OutlineBeatDTO; index: number }[]>();
-  for (const entry of beatEntries) {
-    if (entry.beat.volumeId) {
-      const list = beatsByVolume.get(entry.beat.volumeId) ?? [];
-      list.push(entry);
-      beatsByVolume.set(entry.beat.volumeId, list);
-    }
-  }
-  const sortedVolumes = [...detail.volumes].sort((a, b) => a.index - b.index);
-
-  // 世界书 second-level groups (Phase 9): one sub-group per WorldGroupDTO,
-  // ordered, plus an 未分组 bucket for entries with groupId === null.
-  const sortedWorldGroups = [...detail.worldGroups].sort((a, b) => a.order - b.order);
-  const worldEntriesInGroup = (groupId: string) =>
-    detail.worldEntries.filter((w) => w.groupId === groupId);
-  const ungroupedWorldEntries = detail.worldEntries.filter(
-    (w) => w.groupId === null
-  );
-
-  // 稿N draft versions grouped per chapter — chapters with versions render as
-  // expandable rows whose children are the 稿N version files.
-  const versionsByChapter = new Map<string, ChapterVersionSummaryDTO[]>();
-  for (const version of detail.versions) {
-    const list = versionsByChapter.get(version.chapterId) ?? [];
-    list.push(version);
-    versionsByChapter.set(version.chapterId, list);
-  }
-  for (const list of versionsByChapter.values()) {
-    list.sort((a, b) => a.draftNo - b.draftNo);
-  }
-
-  const materialPacks = detail.packs
-    .filter((p) => p.kind === "material")
-    .sort((a, b) => a.chapterIndex - b.chapterIndex);
-  const prepPacks = detail.packs
-    .filter((p) => p.kind === "prep")
-    .sort((a, b) => a.chapterIndex - b.chapterIndex);
-  const finalChapters = detail.chapters.filter((ch) => ch.status === "final");
-  const canonLabel = (ch: ChapterDTO) =>
-    `${String(ch.index).padStart(4, "0")}-${ch.title}`;
-
-  // STEP 65 — the groups whose OWN displayed count is 0 collapse behind ONE
-  // "Show empty (N)" row at the bottom of Book mode. These are the SAME
-  // computed values the groups already render (no new counters, nothing
-  // stored): 世界书 = entries + characters, 大纲 = beats, 定稿 = finals.
-  const emptyGroups = {
-    world: detail.worldEntries.length + detail.characters.length === 0,
-    outline: detail.outlineBeats.length === 0,
-    canon: finalChapters.length === 0,
-  };
-  const emptyGroupCount = Object.values(emptyGroups).filter(Boolean).length;
-  const hideEmptyGroup = (key: keyof typeof emptyGroups) =>
-    emptyGroups[key] && !showEmpty;
-
-  // Search filtering — file rows match by label; matching a zone/group name
-  // (世界书/未分组/故事骨架/…) surfaces that zone's whole contents. Ledger and
-  // memory sub-row labels and 稿N version rows participate in the same logic.
-  const chapterVersionEntries = (ch: ChapterDTO) => {
-    const all = versionsByChapter.get(ch.id) ?? [];
-    if (!searching) return all;
-    return matchesQuery(ch.title) || matchesLabel("Draft", "草稿") || matchesLabel("Drafts", "草稿区")
-      ? all
-      : all.filter((v) => matchesLabel(`Draft ${v.draftNo}`, `稿${v.draftNo}`));
-  };
-  const visibleChapters = searching
-    ? detail.chapters.filter(
-        (ch) =>
-          matchesQuery(ch.title) ||
-          matchesLabel("Draft", "草稿") ||
-          matchesLabel("Drafts", "草稿区") ||
-          (versionsByChapter.get(ch.id) ?? []).some((v) =>
-            matchesLabel(`Draft ${v.draftNo}`, `稿${v.draftNo}`)
-          )
-      )
-    : detail.chapters;
-  const visibleUnsortedBeats = searching
-    ? unsortedBeats.filter(
-        ({ beat }) =>
-          matchesQuery(beat.title) || matchesLabel("Story skeleton", "故事骨架") || matchesLabel("Outline", "大纲")
-      )
-    : unsortedBeats;
-  const volumeMatchesQuery = (v: VolumeDTO) =>
-    matchesQuery(v.title) ||
-    matchesLabel("Volumes", "卷规划") ||
-    matchesLabel("Outline", "大纲") ||
-    (beatsByVolume.get(v.id) ?? []).some(({ beat }) => matchesQuery(beat.title));
-  const visibleVolumes = searching
-    ? sortedVolumes.filter((v) => volumeMatchesQuery(v))
-    : sortedVolumes;
-  const volumeBeatEntries = (v: VolumeDTO) => {
-    const all = beatsByVolume.get(v.id) ?? [];
-    if (!searching) return all;
-    return matchesQuery(v.title) || matchesLabel("Volumes", "卷规划") || matchesLabel("Outline", "大纲")
-      ? all
-      : all.filter(({ beat }) => matchesQuery(beat.title));
-  };
-  const visibleCharacters = searching
-    ? detail.characters.filter(
-        (c) =>
-          matchesQuery(c.name) || matchesLabel("Characters", "人物档案") || matchesLabel("World book", "世界书")
-      )
-    : detail.characters;
-  // World entries surface per group: a group-name hit exposes the whole group,
-  // otherwise entries match by title (matching the group label itself too).
-  const worldGroupMatchesQuery = (g: WorldGroupDTO) =>
-    matchesQuery(g.name) || matchesLabel("World book", "世界书");
-  const worldGroupVisibleEntries = (g: WorldGroupDTO): WorldEntryDTO[] => {
-    const entries = worldEntriesInGroup(g.id);
-    if (!searching) return entries;
-    return worldGroupMatchesQuery(g)
-      ? entries
-      : entries.filter((w) => matchesQuery(w.title));
-  };
-  const visibleUngroupedWorld = searching
-    ? matchesLabel("Ungrouped", "未分组") || matchesLabel("World book", "世界书")
-      ? ungroupedWorldEntries
-      : ungroupedWorldEntries.filter((w) => matchesQuery(w.title))
-    : ungroupedWorldEntries;
-  const visibleWorld = searching
-    ? [
-        ...sortedWorldGroups.flatMap((g) => worldGroupVisibleEntries(g)),
-        ...visibleUngroupedWorld,
-      ]
-    : detail.worldEntries;
-  const visibleMaterial = searching
-    ? materialPacks.filter(
-        (p) =>
-          matchesQuery(p.title) || matchesLabel("Materials", "材料包") || matchesLabel("Drafts", "草稿区")
-      )
-    : materialPacks;
-  const visiblePrep = searching
-    ? prepPacks.filter(
-        (p) =>
-          matchesQuery(p.title) || matchesLabel("Final prep", "定稿准备") || matchesLabel("Drafts", "草稿区")
-      )
-    : prepPacks;
-  const visibleFinals = searching
-    ? finalChapters.filter(
-        (ch) => matchesQuery(canonLabel(ch)) || matchesLabel("Final drafts", "定稿")
-      )
-    : finalChapters;
-
-  // STEP 65 — the Write mode's run list, filtered by the same search line.
-  // The order is the server's (newest first); the search only narrows it.
-  const visibleRuns = searching
-    ? runs.filter((run) => matchesQuery(run.goal))
-    : runs;
-
-  // Single document rows (作品契约/章摘要/构想/审核) — matched by their
-  // Chinese label or an English alias.
-  const contractMatch = matchesLabel("Book contract", "作品契约") || matchesQuery("contract");
-  const digestMatch = matchesLabel("Chapter digests", "章摘要") || matchesQuery("digest");
-  const memoryMatch = matchesLabel("Memory", "本书记忆") || matchesQuery("memory");
-  const conceptMatch = matchesLabel("Concepts", "构想") || matchesQuery("concept");
-  const ledgerMatch = matchesLabel("Ledger", "账本") || matchesQuery("ledger");
-  const reviewMatch = matchesLabel("Review", "审核") || matchesQuery("review");
-
-  // 账本 sub-rows — live counts from the five ledgers (Phase 9). Clicking a
-  // row writes the ledger deep-link focus, then opens the ledger tab.
-  const ledgerRows: { kind: string; label: string; zh: string; count: number }[] = [
-    { kind: "storyline", label: "Storylines", zh: "故事线", count: detail.ledger.storylines.length },
-    { kind: "timeline", label: "Timeline", zh: "时间线", count: detail.ledger.timeline.length },
-    { kind: "arc", label: "Character arcs", zh: "人物弧线", count: detail.ledger.arcs.length },
-    { kind: "promise", label: "Promises", zh: "承诺", count: detail.ledger.promises.length },
-    { kind: "clue", label: "Clues", zh: "线索", count: detail.ledger.clues.length },
-  ];
-
-  // Zone matches: the group label (本书记忆/账本) OR any of its sub-row labels.
-  const memoryZoneMatch =
-    memoryMatch || MEMORY_TREE_ROWS.some((row) => matchesLabel(row.label, row.zh));
-  const ledgerZoneMatch =
-    ledgerMatch || ledgerRows.some((row) => matchesLabel(row.label, row.zh));
-
-  const anyMatch =
-    visibleChapters.length > 0 ||
-    visibleUnsortedBeats.length > 0 ||
-    visibleVolumes.length > 0 ||
-    visibleCharacters.length > 0 ||
-    visibleWorld.length > 0 ||
-    visibleMaterial.length > 0 ||
-    visiblePrep.length > 0 ||
-    visibleFinals.length > 0 ||
-    contractMatch ||
-    digestMatch ||
-    memoryZoneMatch ||
-    conceptMatch ||
-    ledgerZoneMatch ||
-    reviewMatch;
 
   const totalWords = detail.chapters.reduce((s, c) => s + c.wordCount, 0);
   const pct = novel.targetWords
     ? Math.min(100, Math.round((totalWords / novel.targetWords) * 100))
     : 0;
 
+  // The search line filters the run list in Write mode (the tree filter lives
+  // in the tree panel itself).
+  const visibleRuns = q
+    ? runs.filter((run) => run.goal.toLowerCase().includes(q))
+    : runs;
+
   const novelBadges = badges.get("novel");
 
-  // Shared row renderers -----------------------------------------------------
-
-  /** Leading Lock glyph for canon-locked (status "final") asset files. */
-  const canonLockIcon = (locked: boolean): React.ReactNode =>
-    locked ? (
-      <Lock className="h-3 w-3 shrink-0 text-muted-foreground" aria-hidden="true" />
-    ) : undefined;
-
-  const renderWorldFile = (w: WorldEntryDTO) => (
-    <TreeFile
-      key={w.id}
-      label={w.title}
-      icon={canonLockIcon(w.status === "final")}
-      selected={w.id === selectedWorldId}
-      onClick={() => onOpenWorld(w.id)}
-      badges={badges.get(`world:${w.id}`)}
-    />
-  );
-
-  const renderBeatFile = ({ beat, index }: { beat: OutlineBeatDTO; index: number }) => (
-    <TreeFile
-      key={beat.id}
-      label={beat.title}
-      prefix={String(index + 1).padStart(2, "0")}
-      icon={canonLockIcon(beat.status === "final")}
-      selected={beat.id === selectedBeatId}
-      onClick={() => onOpenBeat(beat.id)}
-      badges={badges.get(`beat:${beat.id}`)}
-    />
-  );
-
-  /** Status-dot + word-count trailing for draft chapter rows (shared by the
-   * plain file row and the expandable 稿N node). */
-  const chapterTrailing = (ch: ChapterDTO) => (
-    <>
-      {ch.wordCount > 0 && (
-        <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
-          {formatWordCount(ch.wordCount)}
-        </span>
-      )}
-      {ch.status !== "draft" && (
-        <span
-          className={cn(
-            "h-1.5 w-1.5 shrink-0 rounded-full",
-            ch.status === "final" ? "bg-emerald-600" : "bg-amber-500"
-          )}
-          aria-label={ch.status}
-        />
-      )}
-    </>
-  );
-
-  const renderChapterFile = (ch: ChapterDTO) => (
-    <TreeFile
-      key={ch.id}
-      label={ch.title}
-      prefix={String(ch.index).padStart(2, "0")}
-      selected={ch.id === selectedChapterId}
-      onClick={() => onOpenChapter(ch.id)}
-      badges={badges.get(`chapter:${ch.index}`)}
-      trailing={chapterTrailing(ch)}
-    />
-  );
-
-  /** Draft chapter row: plain file when versionless, otherwise an expandable
-   * node listing 稿N version files (children open the chapter's draft view,
-   * which hosts the version history). */
-  const renderChapterRow = (ch: ChapterDTO) => {
-    const versions = chapterVersionEntries(ch);
-    if (versions.length === 0) return renderChapterFile(ch);
-    return (
-      <TreeChapterNode
-        key={ch.id}
-        index={ch.index}
-        label={ch.title}
-        count={(versionsByChapter.get(ch.id) ?? []).length}
-        selected={ch.id === selectedChapterId}
-        expanded={searching ? true : isExpanded(`${CHAPTER_VERSION_KEY_PREFIX}${ch.id}`)}
-        onToggle={
-          searching
-            ? undefined
-            : () => toggle(`${CHAPTER_VERSION_KEY_PREFIX}${ch.id}`)
-        }
-        onOpen={() => onOpenChapter(ch.id)}
-        badges={badges.get(`chapter:${ch.index}`)}
-        trailing={chapterTrailing(ch)}
-      >
-        {versions.map((v) => (
-          <TreeFile
-            key={v.id}
-            label={`Draft ${v.draftNo}`}
-            onClick={() => onOpenChapter(ch.id)}
-            trailing={
-              <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
-                {formatWordCount(v.wordCount)}
-                {v.createdBy === "agent" ? " AI" : ""}
-              </span>
-            }
-          />
-        ))}
-      </TreeChapterNode>
-    );
-  };
-
-  const renderPackFile = (kind: ChapterPackKind) => (pack: ChapterPackDTO) => (
-    <TreeFile
-      key={pack.id}
-      label={pack.title}
-      selected={selectedPackKey === `${kind}:${pack.chapterIndex}`}
-      onClick={() => onOpenPack(kind, pack.chapterIndex)}
-      trailing={
-        <span className="shrink-0 text-[11px] text-muted-foreground">
-          Chapter {pack.chapterIndex}
-        </span>
+  // Live task badges, keyed by the node's asset identity (not its row id).
+  const chapterIndexById = new Map(detail.chapters.map((c) => [c.id, c.index]));
+  const badgeKeysFor = (node: Node): string[] => {
+    if (node.kind === "folder") {
+      if (node.id === "f:chapters") return ["group:drafts"];
+      if (node.id === "f:characters") return ["group:world.characters"];
+      if (node.id === "f:world.ungrouped") return ["group:world.ungrouped"];
+      if (node.id === "f:outline") return ["group:outline"];
+      return [];
+    }
+    switch (node.doc) {
+      case "chapter": {
+        const index = chapterIndexById.get(node.ref);
+        return index === undefined ? [] : [`chapter:${index}`];
       }
-    />
-  );
-
-  const addChapterButton = (
-    <Button
-      variant="ghost"
-      size="sm"
-      className="h-6 w-6 p-0"
-      onClick={() => void onAddChapter()}
-      disabled={addingChapter}
-      aria-label="Add chapter"
-    >
-      {addingChapter ? (
-        <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
-      ) : (
-        <Plus className="h-3.5 w-3.5" aria-hidden="true" />
-      )}
-    </Button>
-  );
-
-  const addPackButton = (kind: ChapterPackKind, label: string) => (
-    <Button
-      variant="ghost"
-      size="sm"
-      className="h-6 w-6 p-0"
-      onClick={() => onAddPack(kind)}
-      aria-label={label}
-    >
-      <Plus className="h-3.5 w-3.5" aria-hidden="true" />
-    </Button>
-  );
+      case "character":
+        return [`character:${node.ref}`];
+      case "world_entry":
+        return [`world:${node.ref}`];
+      case "beat":
+        return [`beat:${node.ref}`];
+      default:
+        return [];
+    }
+  };
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -948,7 +348,7 @@ export function AssetTree({
         </Button>
       </div>
 
-      {/* The scroll area — the asset tree (Book) or the run list (Write). */}
+      {/* The scroll area — the document tree (Book) or the run list (Write). */}
       <nav
         aria-label={mode === "book" ? "Novel assets" : "Novel runs"}
         className="nice-scroll min-h-0 flex-1 overflow-y-auto px-2 pb-2"
@@ -959,9 +359,9 @@ export function AssetTree({
               <li className="px-2 py-1.5 text-[13px] text-muted-foreground">
                 Loading runs…
               </li>
-            ) : runs.length === 0 ? (
+            ) : visibleRuns.length === 0 ? (
               <li className="px-2 py-1.5 text-[13px] text-muted-foreground">
-                No runs yet for this novel.
+                {q ? "No runs match your search." : "No runs yet for this novel."}
               </li>
             ) : (
               visibleRuns.map((run) => (
@@ -981,363 +381,17 @@ export function AssetTree({
             )}
           </ul>
         ) : (
-          <>
-        <ul className="space-y-0.5">
-          {/* While searching, matching groups render force-expanded with no
-              toggle, so the `expanded` map is never mutated by a search. */}
-
-          {/* 世界书 — dynamic world groups + 未分组 + character files */}
-          {(!hideEmptyGroup("world") && (!searching || visibleWorld.length > 0 || visibleCharacters.length > 0)) && (
-            <TreeGroup
-              icon={<Globe2 className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />}
-              label="World book"
-              count={detail.worldEntries.length + detail.characters.length}
-              expanded={searching ? true : isExpanded("world")}
-              onToggle={searching ? undefined : () => toggle("world")}
-            >
-              {/* One sub-group per 世界书 group, in defined order. A group-name
-                  hit while searching exposes the whole group; otherwise its
-                  entries match by title. Empty groups render when idle. */}
-              {sortedWorldGroups.map((g) => {
-                const entries = worldGroupVisibleEntries(g);
-                const expandKey = `${WORLD_GROUP_KEY_PREFIX}${g.id}`;
-                if (searching && entries.length === 0) return null;
-                return (
-                  <TreeSubGroup
-                    key={g.id}
-                    label={g.name}
-                    count={worldEntriesInGroup(g.id).length}
-                    expanded={searching ? true : isExpanded(expandKey)}
-                    onToggle={searching ? undefined : () => toggle(expandKey)}
-                  >
-                    {entries.length > 0 ? (
-                      entries.map(renderWorldFile)
-                    ) : (
-                      !searching && <TreeEmptyRow />
-                    )}
-                  </TreeSubGroup>
-                );
-              })}
-              {/* 未分组 — ungrouped entries; hidden entirely until one exists
-                  (also hosts the agent world_entry fallback badge). */}
-              {ungroupedWorldEntries.length > 0 &&
-                (!searching || visibleUngroupedWorld.length > 0) && (
-                  <TreeSubGroup
-                    label="Ungrouped"
-                    count={ungroupedWorldEntries.length}
-                    badges={badges.get("group:world.ungrouped")}
-                    expanded={searching ? true : isExpanded("world.ungrouped")}
-                    onToggle={searching ? undefined : () => toggle("world.ungrouped")}
-                  >
-                    {visibleUngroupedWorld.map(renderWorldFile)}
-                  </TreeSubGroup>
-                )}
-              {(!searching || visibleCharacters.length > 0) && (
-                <TreeSubGroup
-                  label="Characters"
-                  count={detail.characters.length}
-                  expanded={searching ? true : isExpanded("world.characters")}
-                  onToggle={searching ? undefined : () => toggle("world.characters")}
-                >
-                  {visibleCharacters.length > 0 ? (
-                    visibleCharacters.map((c) => (
-                      <TreeFile
-                        key={c.id}
-                        label={c.name}
-                        icon={canonLockIcon(c.status === "final")}
-                        selected={c.id === selectedCharacterId}
-                        onClick={() => onOpenCharacter(c.id)}
-                        badges={badges.get(`character:${c.id}`)}
-                        trailing={
-                          c.role ? (
-                            <span className="max-w-24 shrink-0 truncate text-[11px] text-muted-foreground">
-                              {c.role}
-                            </span>
-                          ) : undefined
-                        }
-                      />
-                    ))
-                  ) : (
-                    !searching && <TreeEmptyRow />
-                  )}
-                </TreeSubGroup>
-              )}
-            </TreeGroup>
-          )}
-
-          {/* 作品契约 — single document row → contract tab */}
-          {(!searching || contractMatch) && (
-            <TreeDocRow
-              icon={<ScrollText className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />}
-              label="Book contract"
-              subtitle={detail.contract ? "Written" : "Empty"}
-              onClick={() => onOpenArtifactTab("contract")}
-            />
-          )}
-
-          {/* 大纲 — story skeleton + volume plans + chapter digests */}
-          {(!hideEmptyGroup("outline") && (!searching ||
-            visibleUnsortedBeats.length > 0 ||
-            visibleVolumes.length > 0 ||
-            digestMatch)) && (
-            <TreeGroup
-              icon={<ListTree className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />}
-              label="Outline"
-              count={detail.outlineBeats.length}
-              badges={badges.get("group:outline")}
-              expanded={searching ? true : isExpanded("outline")}
-              onToggle={searching ? undefined : () => toggle("outline")}
-            >
-              {(!searching || visibleUnsortedBeats.length > 0) && (
-                <TreeSubGroup
-                  label="Story skeleton"
-                  count={unsortedBeats.length}
-                  expanded={searching ? true : isExpanded("outline.skeleton")}
-                  onToggle={searching ? undefined : () => toggle("outline.skeleton")}
-                >
-                  {visibleUnsortedBeats.length > 0 ? (
-                    visibleUnsortedBeats.map(renderBeatFile)
-                  ) : (
-                    !searching && <TreeEmptyRow />
-                  )}
-                </TreeSubGroup>
-              )}
-              {(!searching || visibleVolumes.length > 0) && (
-                <TreeSubGroup
-                  label="Volumes"
-                  count={detail.volumes.length}
-                  expanded={searching ? true : isExpanded("outline.volumes")}
-                  onToggle={searching ? undefined : () => toggle("outline.volumes")}
-                >
-                  {visibleVolumes.length > 0 ? (
-                    visibleVolumes.map((v) => {
-                      const beats = volumeBeatEntries(v);
-                      return (
-                        <TreeVolumeNode
-                          key={v.id}
-                          volume={v}
-                          count={(beatsByVolume.get(v.id) ?? []).length}
-                          icon={canonLockIcon(v.status === "final")}
-                          selected={v.id === selectedVolumeId}
-                          expanded={searching ? true : isExpanded(`volume:${v.id}`)}
-                          onToggle={
-                            searching ? undefined : () => toggle(`volume:${v.id}`)
-                          }
-                          onOpen={() => onOpenVolume(v.id)}
-                        >
-                          {beats.length > 0 ? (
-                            beats.map(renderBeatFile)
-                          ) : (
-                            !searching && <TreeEmptyRow />
-                          )}
-                        </TreeVolumeNode>
-                      );
-                    })
-                  ) : (
-                    !searching && <TreeEmptyRow />
-                  )}
-                </TreeSubGroup>
-              )}
-              {(!searching || digestMatch) && (
-                <TreeDocRow
-                  icon={<NotebookPen className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />}
-                  label="Chapter digests"
-                  onClick={() => onOpenArtifactTab("outline")}
-                />
-              )}
-            </TreeGroup>
-          )}
-
-          {/* 定稿 — zero-padded final chapter files (hidden while empty; an
-              empty group lives behind the "Show empty (N)" row) */}
-          {!hideEmptyGroup("canon") &&
-            finalChapters.length > 0 &&
-            (!searching || visibleFinals.length > 0) && (
-              <TreeGroup
-                icon={<Lock className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />}
-                label="Final drafts"
-                count={finalChapters.length}
-                expanded={searching ? true : isExpanded("canon")}
-                onToggle={searching ? undefined : () => toggle("canon")}
-              >
-                {visibleFinals.map((ch) => (
-                  <TreeFile
-                    key={ch.id}
-                    label={canonLabel(ch)}
-                    icon={
-                      <Lock
-                        className="h-3 w-3 shrink-0 text-muted-foreground"
-                        aria-hidden="true"
-                      />
-                    }
-                    muted
-                    selected={ch.id === selectedChapterId}
-                    onClick={() => onOpenCanonChapter(ch.id)}
-                  />
-                ))}
-              </TreeGroup>
-            )}
-
-          {/* 本书记忆 — expandable group: 索引/决策/对话/文风/灵感 sub-rows.
-              Clicking a row writes the store's memory deep-link focus, then
-              opens the memory tab with that category preselected. */}
-          {(!searching || memoryZoneMatch) && (
-            <TreeGroup
-              icon={<Brain className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />}
-              label="Memory"
-              expanded={searching ? true : isExpanded("memory")}
-              onToggle={searching ? undefined : () => toggle("memory")}
-            >
-              {MEMORY_TREE_ROWS.filter(
-                (row) => !searching || memoryMatch || matchesLabel(row.label, row.zh)
-              ).map((row) => (
-                <TreeFile
-                  key={row.key}
-                  label={row.label}
-                  onClick={() => {
-                    setMemoryFocus(novel.id, row.key);
-                    onOpenArtifactTab("memory");
-                  }}
-                />
-              ))}
-            </TreeGroup>
-          )}
-
-          {/* 构想 — single document row → contract tab (hosts 契约 + 快照) */}
-          {(!searching || conceptMatch) && (
-            <TreeDocRow
-              icon={<Lightbulb className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />}
-              label="Concepts"
-              subtitle={novel.conceptSnapshot ? "Snapshot" : "None"}
-              onClick={() => onOpenArtifactTab("contract")}
-            />
-          )}
-
-          {/* 账本 — expandable group: 故事线/时间线/人物弧线/承诺/线索 sub-rows
-              with live counts. Clicking writes the ledger deep-link focus,
-              then opens the ledger tab with that kind preselected. */}
-          {(!searching || ledgerZoneMatch) && (
-            <TreeGroup
-              icon={<NotebookPen className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />}
-              label="Ledger"
-              expanded={searching ? true : isExpanded("ledger")}
-              onToggle={searching ? undefined : () => toggle("ledger")}
-            >
-              {ledgerRows.filter(
-                (row) => !searching || ledgerMatch || matchesLabel(row.label, row.zh)
-              ).map((row) => (
-                <TreeFile
-                  key={row.kind}
-                  label={row.label}
-                  onClick={() => {
-                    setLedgerKind(novel.id, row.kind);
-                    onOpenArtifactTab("ledger");
-                  }}
-                  trailing={
-                    <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
-                      {row.count}
-                    </span>
-                  }
-                />
-              ))}
-            </TreeGroup>
-          )}
-
-          {/* 草稿区 — drafts + packs + review */}
-          <TreeGroup
-            icon={<PenLine className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />}
-            label="Drafts"
-            expanded={searching ? true : isExpanded("workspace")}
-            onToggle={searching ? undefined : () => toggle("workspace")}
-          >
-            {(!searching || visibleChapters.length > 0) && (
-              <TreeSubGroup
-                label="Draft"
-                count={detail.chapters.length}
-                badges={badges.get("group:drafts")}
-                expanded={searching ? true : isExpanded("workspace.drafts")}
-                onToggle={searching ? undefined : () => toggle("workspace.drafts")}
-                action={addChapterButton}
-              >
-                {visibleChapters.length > 0 ? (
-                  visibleChapters.map(renderChapterRow)
-                ) : (
-                  !searching && <TreeEmptyRow />
-                )}
-              </TreeSubGroup>
-            )}
-            {(!searching || visibleMaterial.length > 0) && (
-              <TreeSubGroup
-                label="Materials"
-                count={materialPacks.length}
-                expanded={searching ? true : isExpanded("workspace.material")}
-                onToggle={searching ? undefined : () => toggle("workspace.material")}
-                action={addPackButton("material", "Add material pack")}
-              >
-                {visibleMaterial.length > 0 ? (
-                  visibleMaterial.map(renderPackFile("material"))
-                ) : (
-                  !searching && <TreeEmptyRow />
-                )}
-              </TreeSubGroup>
-            )}
-            {(!searching || visiblePrep.length > 0) && (
-              <TreeSubGroup
-                label="Final prep"
-                count={prepPacks.length}
-                expanded={searching ? true : isExpanded("workspace.prep")}
-                onToggle={searching ? undefined : () => toggle("workspace.prep")}
-                action={addPackButton("prep", "Add prep pack")}
-              >
-                {visiblePrep.length > 0 ? (
-                  visiblePrep.map(renderPackFile("prep"))
-                ) : (
-                  !searching && <TreeEmptyRow />
-                )}
-              </TreeSubGroup>
-            )}
-            {(!searching || reviewMatch) && (
-              <TreeDocRow
-                icon={<FileSearch className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />}
-                label="Review"
-                onClick={() => onOpenArtifactTab("review")}
-              />
-            )}
-          </TreeGroup>
-
-          {/* STEP 65 — the groups whose computed count is 0 collapse behind
-              ONE row at the bottom of Book mode. The counts are the SAME
-              computed values (no new counters). */}
-          {emptyGroupCount > 0 && (
-            <li>
-              <button
-                type="button"
-                onClick={() => setShowEmpty((v) => !v)}
-                aria-expanded={showEmpty}
-                className="flex h-[30px] w-full items-center gap-1.5 rounded-md px-2 text-left text-[13px] text-muted-foreground transition-colors hover:bg-accent/50"
-              >
-                <ChevronRight
-                  className={cn(
-                    "h-3.5 w-3.5 shrink-0 transition-transform",
-                    showEmpty && "rotate-90"
-                  )}
-                  aria-hidden="true"
-                />
-                <span className="min-w-0 flex-1 truncate">Show empty</span>
-                <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
-                  {emptyGroupCount}
-                </span>
-              </button>
-            </li>
-          )}
-        </ul>
-
-        {searching && !anyMatch && (
-          <p className="mt-4 px-2 text-center text-xs text-muted-foreground">
-            No files match your search.
-          </p>
-        )}
-          </>
+          <DocTreePanel
+            novelId={novel.id}
+            nodes={tree}
+            query={q}
+            expanded={{ ...DEFAULT_EXPANDED, ...expanded }}
+            onToggle={toggle}
+            onOpenDoc={onOpenDoc}
+            activeDocId={activeDocId}
+            badges={badges}
+            badgeKeysFor={badgeKeysFor}
+          />
         )}
       </nav>
     </div>
@@ -1345,213 +399,18 @@ export function AssetTree({
 }
 
 // ---------------------------------------------------------------------------
-// Group row — expandable groups toggle collapse via chevron or label click
-// ---------------------------------------------------------------------------
-
-function TreeGroup({
-  icon,
-  label,
-  count,
-  badges,
-  expanded,
-  onToggle,
-  action,
-  children,
-}: {
-  icon: React.ReactNode;
-  label: string;
-  count?: number;
-  badges?: NodeBadge[];
-  /** Presence of onToggle makes the group expandable: both the chevron and
-   * the label toggle collapse. While searching, onToggle is omitted and
-   * expanded is forced true (never written back to state). */
-  expanded?: boolean;
-  onToggle?: () => void;
-  /** Extra trailing control (e.g. the chapter add button). */
-  action?: React.ReactNode;
-  children?: React.ReactNode;
-}) {
-  const expandable = typeof expanded === "boolean" && !!onToggle;
-  return (
-    <li>
-      <div
-        className={cn(
-          "flex h-[30px] items-center gap-1.5 rounded-md px-2 transition-colors",
-          "hover:bg-accent/50"
-        )}
-      >
-        {expandable ? (
-          <button
-            type="button"
-            onClick={onToggle}
-            aria-expanded={expanded}
-            aria-label={`${label} — expand or collapse`}
-            className="flex h-[30px] w-4 shrink-0 items-center justify-center rounded text-muted-foreground hover:text-foreground"
-          >
-            <ChevronRight
-              className={cn("h-3.5 w-3.5 transition-transform", expanded && "rotate-90")}
-              aria-hidden="true"
-            />
-          </button>
-        ) : (
-          <span className="h-[30px] w-4 shrink-0" aria-hidden="true" />
-        )}
-        <button
-          type="button"
-          onClick={expandable ? onToggle : undefined}
-          aria-expanded={expandable ? expanded : undefined}
-          className="flex h-[30px] min-w-0 flex-1 items-center gap-1.5 text-left"
-        >
-          {icon}
-          <span className="min-w-0 flex-1 truncate text-[13px] font-medium">
-            {label}
-          </span>
-          {typeof count === "number" && (
-            <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
-              {count}
-            </span>
-          )}
-          <BadgeIcons badges={badges} />
-        </button>
-        {action}
-      </div>
-      {expanded && children != null && <ul className="ml-3 border-l pl-2">{children}</ul>}
-    </li>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Sub-group row — nested one level inside a group: small caps label, its own
-// chevron collapse, and optional trailing action (e.g. "+" add buttons).
-// ---------------------------------------------------------------------------
-
-function TreeSubGroup({
-  label,
-  count,
-  badges,
-  expanded,
-  onToggle,
-  action,
-  children,
-}: {
-  label: string;
-  count?: number;
-  badges?: NodeBadge[];
-  expanded?: boolean;
-  onToggle?: () => void;
-  action?: React.ReactNode;
-  children?: React.ReactNode;
-}) {
-  const expandable = typeof expanded === "boolean" && !!onToggle;
-  return (
-    <li>
-      <div
-        className={cn(
-          "flex h-[30px] items-center gap-1.5 rounded-md px-2 transition-colors",
-          "hover:bg-accent/50"
-        )}
-      >
-        {expandable ? (
-          <button
-            type="button"
-            onClick={onToggle}
-            aria-expanded={expanded}
-            aria-label={`${label} — expand or collapse`}
-            className="flex h-[30px] w-4 shrink-0 items-center justify-center rounded text-muted-foreground hover:text-foreground"
-          >
-            <ChevronRight
-              className={cn("h-3.5 w-3.5 transition-transform", expanded && "rotate-90")}
-              aria-hidden="true"
-            />
-          </button>
-        ) : (
-          <span className="h-[30px] w-4 shrink-0" aria-hidden="true" />
-        )}
-        <button
-          type="button"
-          onClick={expandable ? onToggle : undefined}
-          aria-expanded={expandable ? expanded : undefined}
-          className="flex h-[30px] min-w-0 flex-1 items-center gap-1.5 text-left"
-        >
-          <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-muted-foreground">
-            {label}
-          </span>
-          {typeof count === "number" && (
-            <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
-              {count}
-            </span>
-          )}
-          <BadgeIcons badges={badges} />
-        </button>
-        {action}
-      </div>
-      {expanded && children != null && <ul className="ml-2 border-l pl-1.5">{children}</ul>}
-    </li>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Document row — a single clickable file that opens an artifact view
-// (作品契约 / 章摘要 / 构想 / 审核)
-// ---------------------------------------------------------------------------
-
-function TreeDocRow({
-  icon,
-  label,
-  subtitle,
-  onClick,
-}: {
-  icon: React.ReactNode;
-  label: string;
-  /** Small trailing status text, e.g. "已写入" / "未快照". */
-  subtitle?: string;
-  onClick: () => void;
-}) {
-  return (
-    <li>
-      <button
-        type="button"
-        onClick={onClick}
-        className={cn(
-          "flex h-[30px] w-full items-center gap-1.5 rounded-md px-2 text-left transition-colors",
-          "hover:bg-accent/50"
-        )}
-      >
-        {icon}
-        <span className="min-w-0 flex-1 truncate text-[13px]">{label}</span>
-        {subtitle && (
-          <span className="shrink-0 text-[11px] text-muted-foreground">{subtitle}</span>
-        )}
-      </button>
-    </li>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// File row — a clickable child asset (chapter / beat / character / world /
-// pack / canon file)
+// File row — a clickable row (the run list).
 // ---------------------------------------------------------------------------
 
 function TreeFile({
   label,
-  prefix,
-  icon,
   selected,
-  muted,
   onClick,
-  badges,
   trailing,
 }: {
   label: string;
-  /** Mono index prefix, e.g. "03". */
-  prefix?: string;
-  /** Optional leading glyph (e.g. the Lock on 定稿 files). */
-  icon?: React.ReactNode;
   selected?: boolean;
-  /** Dimmed label styling (定稿 rows are read-only archive files). */
-  muted?: boolean;
   onClick: () => void;
-  badges?: NodeBadge[];
   trailing?: React.ReactNode;
 }) {
   return (
@@ -1565,190 +424,9 @@ function TreeFile({
           selected ? "bg-accent" : "hover:bg-accent/50"
         )}
       >
-        {icon}
-        {prefix && (
-          <span className="shrink-0 font-mono text-[11px] text-muted-foreground">
-            {prefix}
-          </span>
-        )}
-        <span
-          className={cn(
-            "min-w-0 flex-1 truncate text-[13px]",
-            muted && "text-muted-foreground"
-          )}
-        >
-          {label}
-        </span>
+        <span className="min-w-0 flex-1 truncate text-[13px]">{label}</span>
         {trailing}
-        <BadgeIcons badges={badges} />
       </button>
-    </li>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Volume node — a volume row inside 卷规划 (P1). Clicking the row opens the
-// volume plan document; the chevron collapses its beat files.
-// ---------------------------------------------------------------------------
-
-function TreeVolumeNode({
-  volume,
-  count,
-  selected,
-  expanded,
-  onToggle,
-  onOpen,
-  icon,
-  children,
-}: {
-  volume: VolumeDTO;
-  count: number;
-  selected?: boolean;
-  expanded?: boolean;
-  onToggle?: () => void;
-  onOpen: () => void;
-  /** Optional leading glyph (e.g. the canon Lock on final volumes). */
-  icon?: React.ReactNode;
-  children?: React.ReactNode;
-}) {
-  const expandable = typeof expanded === "boolean" && !!onToggle;
-  return (
-    <li>
-      <div
-        className={cn(
-          "flex h-[30px] items-center gap-1.5 rounded-md px-2 transition-colors",
-          selected ? "bg-accent" : "hover:bg-accent/50"
-        )}
-      >
-        {expandable ? (
-          <button
-            type="button"
-            onClick={onToggle}
-            aria-expanded={expanded}
-            aria-label={`${volume.title} — expand or collapse beats`}
-            className="flex h-[30px] w-4 shrink-0 items-center justify-center rounded text-muted-foreground hover:text-foreground"
-          >
-            <ChevronRight
-              className={cn("h-3.5 w-3.5 transition-transform", expanded && "rotate-90")}
-              aria-hidden="true"
-            />
-          </button>
-        ) : (
-          <span className="h-[30px] w-4 shrink-0" aria-hidden="true" />
-        )}
-        <button
-          type="button"
-          onClick={onOpen}
-          aria-current={selected ? "true" : undefined}
-          className="flex h-[30px] min-w-0 flex-1 items-center gap-1.5 text-left"
-        >
-          {icon}
-          <span className="shrink-0 font-mono text-[11px] text-muted-foreground">
-            V{String(volume.index).padStart(2, "0")}
-          </span>
-          <span className="min-w-0 flex-1 truncate text-[13px] font-medium">
-            {volume.title}
-          </span>
-          <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
-            {count}
-          </span>
-        </button>
-      </div>
-      {expanded && children != null && <ul className="ml-3 border-l pl-2">{children}</ul>}
-    </li>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Chapter node — a draft chapter row inside 草稿 that owns 稿N version files
-// (Phase 9). Modeled after TreeVolumeNode: the chevron collapses the version
-// list, clicking the row opens the chapter. Chapters without versions render
-// as plain TreeFile rows instead.
-// ---------------------------------------------------------------------------
-
-function TreeChapterNode({
-  index,
-  label,
-  count,
-  selected,
-  expanded,
-  onToggle,
-  onOpen,
-  badges,
-  trailing,
-  children,
-}: {
-  index: number;
-  label: string;
-  /** Number of 稿N versions under this chapter. */
-  count: number;
-  selected?: boolean;
-  expanded?: boolean;
-  onToggle?: () => void;
-  onOpen: () => void;
-  badges?: NodeBadge[];
-  trailing?: React.ReactNode;
-  children?: React.ReactNode;
-}) {
-  const expandable = typeof expanded === "boolean" && !!onToggle;
-  return (
-    <li>
-      <div
-        className={cn(
-          "flex h-[30px] items-center gap-1.5 rounded-md px-2 transition-colors",
-          selected ? "bg-accent" : "hover:bg-accent/50"
-        )}
-      >
-        {expandable ? (
-          <button
-            type="button"
-            onClick={onToggle}
-            aria-expanded={expanded}
-            aria-label={`${label} — expand or collapse draft versions`}
-            className="flex h-[30px] w-4 shrink-0 items-center justify-center rounded text-muted-foreground hover:text-foreground"
-          >
-            <ChevronRight
-              className={cn("h-3.5 w-3.5 transition-transform", expanded && "rotate-90")}
-              aria-hidden="true"
-            />
-          </button>
-        ) : (
-          <span className="h-[30px] w-4 shrink-0" aria-hidden="true" />
-        )}
-        <button
-          type="button"
-          onClick={onOpen}
-          aria-current={selected ? "true" : undefined}
-          className="flex h-[30px] min-w-0 flex-1 items-center gap-1.5 text-left"
-        >
-          <span className="shrink-0 font-mono text-[11px] text-muted-foreground">
-            {String(index).padStart(2, "0")}
-          </span>
-          <span className="min-w-0 flex-1 truncate text-[13px]">{label}</span>
-          <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
-            {count}
-          </span>
-          {trailing}
-          <BadgeIcons badges={badges} />
-        </button>
-      </div>
-      {expanded && children != null && <ul className="ml-3 border-l pl-2">{children}</ul>}
-    </li>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Empty row — muted placeholder shown when an expanded group has no children
-// (the 定稿 group hides entirely instead).
-// ---------------------------------------------------------------------------
-
-function TreeEmptyRow() {
-  return (
-    <li
-      className="px-2 py-1.5 text-[13px] text-muted-foreground"
-      aria-label="empty"
-    >
-      empty
     </li>
   );
 }

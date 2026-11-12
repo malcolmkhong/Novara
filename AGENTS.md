@@ -55,10 +55,9 @@ src/
       versions.ts / export.ts / backup-schema.ts
       wizard-parse.ts           # 向导文本解析（cast/world/beats，容错式）
   components/novara/
-    writer/asset-tree.tsx       # 左树 = 7 区仓库视图（世界书二级分组/契约/大纲/定稿/
-                                #   本书记忆/构想/账本/草稿区+稿N+材料包+定稿准备+审核）
-    writer/artifact-pane.tsx    # 十标签工件区：Draft/Packs/Outline/Canon/Bible/
-                                #   Contract/Ledger/Memory/Review/QC
+    writer/asset-tree.tsx       # 左树外壳（身份块 + Write|Book 切换 + 搜索行 + 运行列表）
+    writer/doc-tree-panel.tsx   # 左树主体 = 文档树渲染器（文件夹/文档两种行）
+    writer/doc-pane.tsx         # 右侧文档区（打开的文档标签 + 只读投影 + Document/Markdown）
     writer/conversation-pane.tsx# 对话第一界面 + Pin-to-Chat + 运行历史
 agent/                          # Agent 内容层（提示词即代码）
   system/{atlas,sage,prism,nova,forge}.md
@@ -99,7 +98,7 @@ db/custom.db                    # 数据库文件
 
 **加一个 API**：参考 `src/app/api/packs/[id]/route.ts` 的形态——`parseBody` + zod + canon 检查（若该资产有 status 字段，final 时 409/reopen 语义必须对齐 asset-gate）。
 
-**加一个左树分区/行**：`asset-tree.tsx` 的分区渲染与搜索过滤（`matchesQuery` 族）要同步；空分区按现有约定处理（如定稿区无 final 章时隐藏，账本/记忆恒显示）。
+**加一个左树分区/行**：左树只有两种行——文件夹（展开）与文档（打开）。新行先加进 `lib/novara/doc-tree.ts` 的 `buildDocTree`（文件夹 id 固定 `f:<name>`，文档 id 固定 `<DocKind>:<ref>`），再在 `lib/novara/doc-markdown.ts` 注册同名渲染器（`DOC_RENDERERS`），最后跑 `bun scripts/check-doc-tree.ts`（校验 id 唯一、每个文档都有渲染器、空文件夹必须带 badge）。渲染与搜索过滤在 `components/novara/writer/doc-tree-panel.tsx`。
 
 **加一个向导 section**：`/api/ai/wizard` 的 zod enum + switch 加分支 → `api.ts` 的 `WizardSection` → 向导 UI 加 textarea + GenerateButton → 需要结构化落库则加 `wizard-parse.ts` 解析器（容错式：解析不出的行不能静默丢弃）。
 

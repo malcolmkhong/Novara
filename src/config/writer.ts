@@ -121,47 +121,6 @@ export type CenterView = "chat" | "board";
  */
 export type RailMode = "write" | "book";
 
-/** Right pane artifact views. */
-export type ArtifactTabId =
-  // workspace + plan zones
-  | "draft"
-  | "packs"
-  | "outline"
-  | "canon"
-  // information zones
-  | "bible"
-  | "contract"
-  | "ledger"
-  | "memory"
-  // verification zones
-  | "review"
-  | "qc";
-
-export interface ArtifactTabDef {
-  id: ArtifactTabId;
-  label: string;
-  /** Badge shown next to the label, e.g. roadmap phase marker. */
-  phaseTag?: string;
-}
-
-/**
- * Tab order mirrors the repository zones (Phase 8): workspace (Draft/Packs),
- * plan (Outline/Canon), information (Bible/Contract/Ledger/Memory), then
- * verification (Review/QC). The strip scrolls horizontally on narrow panes.
- */
-export const ARTIFACT_TABS: ArtifactTabDef[] = [
-  { id: "draft", label: "Draft" },
-  { id: "packs", label: "Packs" },
-  { id: "outline", label: "Outline" },
-  { id: "canon", label: "Canon" },
-  { id: "bible", label: "Bible" },
-  { id: "contract", label: "Contract" },
-  { id: "ledger", label: "Ledger" },
-  { id: "memory", label: "Memory" },
-  { id: "review", label: "Review" },
-  { id: "qc", label: "QC" },
-];
-
 // ---------------------------------------------------------------------------
 // Mock budgets (placeholder for agent/config/budgets.yaml, plan §2.10)
 // ---------------------------------------------------------------------------

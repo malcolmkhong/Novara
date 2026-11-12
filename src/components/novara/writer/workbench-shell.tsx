@@ -3,14 +3,14 @@
 // ---------------------------------------------------------------------------
 // Novara AI — Workbench shell: the three-pane Agent Workbench (plan §4.1).
 //
-//   left   AssetTree        — novel header + asset tree + live agent badges
+//   left   AssetTree        — novel header + the DOCUMENT TREE + live badges
 //   center ConversationPane — D1 task board in the chat flow + D2 gates
-//   right  ArtifactPane     — draft / outline / bible / review / memory
+//   right  DocPane          — the open documents (read-only projections)
 //
 // Responsive contract:
 //   ≥ xl (1280px) : three panes side by side
-//   lg – xl       : tree + conversation; artifacts open in an overlay sheet
-//   < lg (1024px) : single pane with a bottom switcher; artifacts via sheet
+//   lg – xl       : tree + conversation; documents open in an overlay sheet
+//   < lg (1024px) : single pane with a bottom switcher; documents via sheet
 //
 // All domain CRUD lives here (migrated from the retired 7-tab workspace) and
 // flows down to the panes; the agent run instance is owned once, here.
@@ -47,41 +47,23 @@ import { useAgentRun } from "@/hooks/use-agent-run";
 import { useWriterStore } from "@/hooks/use-writer-store";
 import {
   addChapter,
-  addCharacter,
-  addOutlineBeat,
-  addWorldEntry,
   deleteChapter,
-  deleteCharacter,
-  deleteOutlineBeat,
-  deletePack,
-  deleteVolume,
-  deleteWorldEntry,
+  listNovelRuns,
   requestAiDraft,
   updateChapter,
-  updateCharacter,
   updateNovel,
-  updateOutlineBeat,
-  updatePack,
-  updateVolume,
-  updateWorldEntry,
-  upsertPack,
 } from "@/lib/novara/api";
 import type {
   AiDraftResult,
   ChapterDTO,
-  ChapterPackDTO,
-  ChapterPackKind,
   ChapterStatus,
-  CharacterDTO,
   NovelDetail,
-  OutlineBeatDTO,
-  VolumeDTO,
-  WorldEntryDTO,
 } from "@/lib/novara/types";
-import type { ArtifactTabId } from "@/config/writer";
+import type { AgentRun } from "@/lib/novara/agent-types";
+import { buildDocTree, type DocNode } from "@/lib/novara/doc-tree";
 import { cn } from "@/lib/utils";
-import { ArtifactPane } from "./artifact-pane";
 import { AssetTree } from "./asset-tree";
+import { DocPane } from "./doc-pane";
 import { UserMenu, type UserMenuHandle } from "@/components/novara/user-menu";
 import { ConversationPane } from "./conversation-pane";
 import { ExportDialog } from "./import-export";
@@ -91,6 +73,12 @@ import { ConfirmDialog } from "./ui-bits";
 type MobileView = "chat" | "assets";
 
 const XL_QUERY = "(min-width: 1280px)";
+
+/** How many runs the shell asks for. The server clamps to 1..50. */
+const RUN_LIST_LIMIT = 50;
+
+/** Stable empty list — keeps the run rows' referential identity stable. */
+const EMPTY_RUNS: AgentRun[] = [];
 
 interface WorkbenchShellProps {
   detail: NovelDetail;
@@ -132,18 +120,47 @@ export function WorkbenchShell({
 
   // Pin-to-Chat menu source — rebuilt when the novel detail refreshes.
   const pinOptions = useMemo(() => buildPinOptions(detail), [detail]);
-  const selectedBeatId = useWriterStore((s) => s.selectedBeatByNovel[novel.id] ?? null);
-  const selectedCharacterId = useWriterStore((s) => s.selectedCharacterByNovel[novel.id] ?? null);
-  const selectedWorldId = useWriterStore((s) => s.selectedWorldByNovel[novel.id] ?? null);
-  const selectedVolumeId = useWriterStore((s) => s.selectedVolumeByNovel[novel.id] ?? null);
-  const selectedPackKey = useWriterStore((s) => s.selectedPackKeyByNovel[novel.id] ?? null);
   const selectChapter = useWriterStore((s) => s.selectChapter);
-  const selectBeat = useWriterStore((s) => s.selectBeat);
-  const selectCharacter = useWriterStore((s) => s.selectCharacter);
-  const selectWorld = useWriterStore((s) => s.selectWorld);
-  const selectVolume = useWriterStore((s) => s.selectVolume);
-  const selectPack = useWriterStore((s) => s.selectPack);
-  const setArtifactTab = useWriterStore((s) => s.setArtifactTab);
+  const openDoc = useWriterStore((s) => s.openDoc);
+  const setMemoryFocus = useWriterStore((s) => s.setMemoryFocus);
+  const setLedgerKind = useWriterStore((s) => s.setLedgerKind);
+  const railCollapsed = useWriterStore((s) => s.railCollapsedByNovel[novel.id] ?? false);
+
+  // STEP 76 — the document tree carries the novel's runs (the Runs folder),
+  // so the run list lives here and is handed to BOTH the rail (Write mode)
+  // and the document pane (the run document). A run that settles re-fetches
+  // the list, so a finished run shows up without a manual reload.
+  const [runsState, setRunsState] = useState<{
+    novelId: string;
+    runs: AgentRun[];
+  } | null>(null);
+  const runs = runsState?.novelId === novel.id ? runsState.runs : EMPTY_RUNS;
+  const runsLoading = runsState?.novelId !== novel.id;
+
+  useEffect(() => {
+    let alive = true;
+    listNovelRuns(novel.id, RUN_LIST_LIMIT)
+      .then((body) => {
+        if (alive) {
+          setRunsState({
+            novelId: novel.id,
+            runs: Array.isArray(body.runs) ? body.runs : [],
+          });
+        }
+      })
+      .catch(() => {
+        if (alive) setRunsState({ novelId: novel.id, runs: [] });
+      });
+    return () => {
+      alive = false;
+    };
+  }, [novel.id, runStatus]);
+
+  // The document tree — ONE source for the rail's rows and the pane's tabs.
+  const tree = useMemo(
+    () => buildDocTree(detail, runs, detail.reviews ?? []),
+    [detail, runs]
+  );
 
   const [mobileView, setMobileView] = useState<MobileView>("chat");
   const [previewOpen, setPreviewOpen] = useState(false);
@@ -196,100 +213,119 @@ export function WorkbenchShell({
     [refresh, toast]
   );
 
+  // ---- document handlers ----
+  //
+  // STEP 76 — a tree row opens a DOCUMENT. Every handler opens the document
+  // in the pane and surfaces the pane below xl. The document ids are the
+  // tree's own ids ("<DocKind>:<ref>").
+
   const handleOpenChapter = useCallback(
     (chapterId: string) => {
       selectChapter(novel.id, chapterId);
-      setArtifactTab(novel.id, "draft");
+      openDoc(novel.id, `chapter:${chapterId}`);
       revealArtifacts();
     },
-    [novel.id, revealArtifacts, selectChapter, setArtifactTab]
+    [novel.id, openDoc, revealArtifacts, selectChapter]
   );
 
-  const handleOpenArtifactTab = useCallback(
-    (tab: ArtifactTabId) => {
-      setArtifactTab(novel.id, tab);
-      revealArtifacts();
-    },
-    [novel.id, revealArtifacts, setArtifactTab]
-  );
-
-  /** Tree file → open the owning tab with that asset focused. */
+  /** Tree beat row → the beat's document. */
   const handleOpenBeat = useCallback(
     (beatId: string) => {
-      selectBeat(novel.id, beatId);
-      setArtifactTab(novel.id, "outline");
+      openDoc(novel.id, `beat:${beatId}`);
       revealArtifacts();
     },
-    [novel.id, revealArtifacts, selectBeat, setArtifactTab]
+    [novel.id, openDoc, revealArtifacts]
   );
 
+  /** Tree character row → the character's document. */
   const handleOpenCharacter = useCallback(
     (characterId: string) => {
-      selectCharacter(novel.id, characterId);
-      setArtifactTab(novel.id, "bible");
+      openDoc(novel.id, `character:${characterId}`);
       revealArtifacts();
     },
-    [novel.id, revealArtifacts, selectCharacter, setArtifactTab]
+    [novel.id, openDoc, revealArtifacts]
   );
 
+  /** Tree world entry row → the entry's document. */
   const handleOpenWorld = useCallback(
     (worldId: string) => {
-      selectWorld(novel.id, worldId);
-      setArtifactTab(novel.id, "bible");
+      openDoc(novel.id, `world_entry:${worldId}`);
       revealArtifacts();
     },
-    [novel.id, revealArtifacts, selectWorld, setArtifactTab]
+    [novel.id, openDoc, revealArtifacts]
   );
 
-  /** Tree volume row → the volume plan document in the Outline view. */
-  const handleOpenVolume = useCallback(
-    (volumeId: string) => {
-      selectVolume(novel.id, volumeId);
-      setArtifactTab(novel.id, "outline");
-      revealArtifacts();
-    },
-    [novel.id, revealArtifacts, selectVolume, setArtifactTab]
-  );
-
-  /** Tree canon row → the read-only final-chapter document (定稿区). */
-  const handleOpenCanonChapter = useCallback(
-    (chapterId: string) => {
-      selectChapter(novel.id, chapterId);
-      setArtifactTab(novel.id, "canon");
-      revealArtifacts();
-    },
-    [novel.id, revealArtifacts, selectChapter, setArtifactTab]
-  );
-
-  /** Tree pack row → the focused pack document in the Packs view. */
+  /** Tree pack row → the pack's document. */
   const handleOpenPack = useCallback(
-    (kind: ChapterPackKind, chapterIndex: number) => {
-      selectPack(novel.id, `${kind}:${chapterIndex}`);
-      setArtifactTab(novel.id, "packs");
+    (packId: string) => {
+      openDoc(novel.id, `pack:${packId}`);
       revealArtifacts();
     },
-    [novel.id, revealArtifacts, selectPack, setArtifactTab]
+    [novel.id, openDoc, revealArtifacts]
   );
 
-  /** Tree "+" button in a pack group → create/replace a pack for the next chapter. */
-  const handleAddPack = useCallback(
-    async (kind: ChapterPackKind) => {
-      const nextIndex = detail.chapters.length + 1;
-      const ok = await wrap(() =>
-        upsertPack(novel.id, {
-          kind,
-          chapterIndex: nextIndex,
-          title: `Chapter ${nextIndex}`,
-        })
-      );
-      if (ok) {
-        selectPack(novel.id, `${kind}:${nextIndex}`);
-        setArtifactTab(novel.id, "packs");
-        revealArtifacts();
+  /** Every document row of the tree → the pane. */
+  const handleOpenDoc = useCallback(
+    (node: DocNode) => {
+      switch (node.doc) {
+        case "chapter":
+          handleOpenChapter(node.ref);
+          return;
+        case "beat":
+          handleOpenBeat(node.ref);
+          return;
+        case "character":
+          handleOpenCharacter(node.ref);
+          return;
+        case "world_entry":
+          handleOpenWorld(node.ref);
+          return;
+        case "pack":
+          handleOpenPack(node.ref);
+          return;
+        case "memory_index":
+          setMemoryFocus(novel.id, "all");
+          break;
+        case "memory_category":
+          setMemoryFocus(novel.id, node.ref);
+          break;
+        case "ledger_storylines":
+          setLedgerKind(novel.id, "storyline");
+          break;
+        case "ledger_timeline":
+          setLedgerKind(novel.id, "timeline");
+          break;
+        case "ledger_arcs":
+          setLedgerKind(novel.id, "arc");
+          break;
+        case "ledger_promises":
+          setLedgerKind(novel.id, "promise");
+          break;
+        case "ledger_clues":
+          setLedgerKind(novel.id, "clue");
+          break;
+        case "run":
+          void run.viewRun(node.ref);
+          break;
+        default:
+          break;
       }
+      openDoc(novel.id, node.id);
+      revealArtifacts();
     },
-    // wrap is stable enough (recreated each render but cheap); deps kept minimal
-    [detail.chapters.length, novel.id, revealArtifacts, selectPack, setArtifactTab, wrap]
+    [
+      handleOpenBeat,
+      handleOpenChapter,
+      handleOpenCharacter,
+      handleOpenPack,
+      handleOpenWorld,
+      novel.id,
+      openDoc,
+      revealArtifacts,
+      run,
+      setLedgerKind,
+      setMemoryFocus,
+    ]
   );
 
   // ---- chapter handlers ----
@@ -427,100 +463,28 @@ export function WorkbenchShell({
     );
   };
 
-  // ---- shared handler bundle for artifact panes ----
-
-  const artifactHandlers = {
-    selectedChapterId,
-    onSelectChapter: (id: string) => selectChapter(novel.id, id),
-    focusBeatId: selectedBeatId,
-    focusCharacterId: selectedCharacterId,
-    focusWorldId: selectedWorldId,
-    onClearCharacter: () => selectCharacter(novel.id, null),
-    onClearWorld: () => selectWorld(novel.id, null),
-    onClearBeat: () => selectBeat(novel.id, null),
-    onAddChapter: handleAddChapter,
-    onDeleteChapter: handleDeleteChapter,
-    onSaveChapter: handleSaveChapter,
-    onAiDraft: handleAiDraft,
-    onAddCharacter: (input: { name: string; role?: string; description?: string }) =>
-      wrap(() => addCharacter(novel.id, input), "Character added"),
-    onUpdateCharacter: (id: string, patch: Partial<{ name: string; role?: string; aliases?: string; description?: string }>) =>
-      wrap(() => updateCharacter(id, patch), "Character saved"),
-    onDeleteCharacter: (c: CharacterDTO) =>
-      wrap(() => deleteCharacter(c.id)).then(() => undefined),
-    onAddWorldEntry: (input: { title: string; category?: WorldEntryDTO["category"]; content?: string }) =>
-      wrap(() => addWorldEntry(novel.id, input), "World entry added"),
-    onUpdateWorldEntry: (id: string, patch: Partial<{ title: string; category?: WorldEntryDTO["category"]; content?: string }>) =>
-      wrap(() => updateWorldEntry(id, patch), "World entry saved"),
-    onDeleteWorldEntry: (w: WorldEntryDTO) =>
-      wrap(() => deleteWorldEntry(w.id)).then(() => undefined),
-    onAddBeat: (input: { title: string; summary?: string }) =>
-      wrap(() => addOutlineBeat(novel.id, input), "Beat added"),
-    onUpdateBeat: (id: string, patch: Partial<{ title: string; summary?: string; volumeId?: string | null }>) =>
-      wrap(() => updateOutlineBeat(id, patch), "Beat saved"),
-    onDeleteBeat: (b: OutlineBeatDTO) =>
-      wrap(() => deleteOutlineBeat(b.id)).then(() => undefined),
-    selectedVolumeId,
-    onOpenVolume: handleOpenVolume,
-    onClearVolume: () => selectVolume(novel.id, null),
-    onUpdateVolume: (id: string, patch: { title?: string; synopsis?: string }) =>
-      wrap(() => updateVolume(id, patch), "Volume saved"),
-    onDeleteVolume: (v: VolumeDTO) =>
-      wrap(() => deleteVolume(v.id)).then(() => undefined),
-    onRefresh: refresh,
-    // ---- Phase 8: packs ----
-    selectedPackKey,
-    onSelectPack: (key: string | null) => selectPack(novel.id, key),
-    onUpsertPack: (kind: ChapterPackKind, chapterIndex: number) =>
-      wrap(() => upsertPack(novel.id, { kind, chapterIndex }), "Pack created"),
-    onUpdatePack: (id: string, patch: { title?: string; content?: string }) =>
-      wrap(() => updatePack(id, patch), "Pack saved"),
-    onDeletePack: (p: ChapterPackDTO) =>
-      wrap(() => deletePack(p.id)).then(() => undefined),
-    // ---- Phase 8: contract + concept documents ----
-    onSaveContract: (content: string) =>
-      wrap(() => updateNovel(novel.id, { contract: content }), "Story contract saved"),
-    onSaveConcept: (content: string) =>
-      wrap(() => updateNovel(novel.id, { conceptSnapshot: content }), "Concept snapshot saved"),
-    // ---- Phase 8: canon ----
-    onOpenChapterInEditor: (chapterId: string) => {
-      selectChapter(novel.id, chapterId);
-      setArtifactTab(novel.id, "draft");
-      revealArtifacts();
-    },
-  };
-
-  const events = run.detail?.events ?? [];
   const tasks = run.detail?.tasks ?? [];
 
   return (
     <div className="flex h-full min-h-0 w-full border-t pb-[3.25rem] lg:pb-0">
-      {/* Left rail — asset tree */}
+      {/* Left rail — the document tree */}
       <aside
         aria-label="Asset tree"
         className={cn(
           "min-h-0 shrink-0 flex-col border-r bg-card/40 lg:flex lg:w-[256px]",
+          // STEP 76 — the pane's ▤ button collapses the rail (the pane's
+          // fullscreen button is the one that takes over the screen).
+          railCollapsed && "lg:hidden",
           mobileView === "assets" ? "flex w-full" : "hidden"
         )}
       >
         <AssetTree
           detail={detail}
           tasks={tasks}
-          selectedChapterId={selectedChapterId}
-          selectedBeatId={selectedBeatId}
-          selectedCharacterId={selectedCharacterId}
-          selectedWorldId={selectedWorldId}
-          selectedVolumeId={selectedVolumeId}
-          selectedPackKey={selectedPackKey}
-          onOpenChapter={handleOpenChapter}
-          onOpenBeat={handleOpenBeat}
-          onOpenCharacter={handleOpenCharacter}
-          onOpenWorld={handleOpenWorld}
-          onOpenVolume={handleOpenVolume}
-          onOpenPack={handleOpenPack}
-          onAddPack={handleAddPack}
-          onOpenCanonChapter={handleOpenCanonChapter}
-          onOpenArtifactTab={handleOpenArtifactTab}
+          runs={runs}
+          runsLoading={runsLoading}
+          tree={tree}
+          onOpenDoc={handleOpenDoc}
           onAddChapter={handleAddChapter}
           onEditDetails={() => setEditOpen(true)}
           onExport={() => setExportOpen(true)}
@@ -530,7 +494,6 @@ export function WorkbenchShell({
           // viewRun path the centre column's history switcher uses.
           onOpenRun={(runId) => void run.viewRun(runId)}
           currentRunId={runId}
-          runStatus={runStatus ?? null}
           onOpenSettings={() => userMenuRef.current?.openSettings("account")}
         />
         {/* Step 62 — the user menu is pinned to the BOTTOM of the rail
@@ -551,27 +514,51 @@ export function WorkbenchShell({
         />
       </section>
 
-      {/* Right — artifacts (docked at ≥ xl) */}
+      {/* Right — the documents (docked at ≥ xl) */}
       <aside
-        aria-label="Artifact pane"
+        aria-label="Document pane"
         className="hidden min-h-0 w-[400px] shrink-0 flex-col border-l xl:flex"
       >
-        <ArtifactPane detail={detail} events={events} tasks={tasks} handlers={artifactHandlers} />
+        <DocPane
+          detail={detail}
+          tree={tree}
+          runs={runs}
+          chapters={{
+            selectedId: selectedChapterId,
+            onSelect: (id: string) => selectChapter(novel.id, id),
+            onAdd: handleAddChapter,
+            onDelete: handleDeleteChapter,
+            onSave: handleSaveChapter,
+            onAiDraft: handleAiDraft,
+          }}
+        />
       </aside>
 
-      {/* Right — artifacts (overlay below xl) */}
+      {/* Right — the documents (overlay below xl) */}
       <Sheet open={previewOpen} onOpenChange={setPreviewOpen}>
         <SheetContent
           side="right"
           className="flex w-full flex-col gap-0 p-0 sm:max-w-lg lg:max-w-xl"
         >
           <SheetHeader className="sr-only">
-            <SheetTitle>Artifacts</SheetTitle>
+            <SheetTitle>Documents</SheetTitle>
             <SheetDescription>
-              Draft, outline, story bible, review and memory views.
+              The open documents — read-only projections of the novel.
             </SheetDescription>
           </SheetHeader>
-          <ArtifactPane detail={detail} events={events} tasks={tasks} handlers={artifactHandlers} />
+          <DocPane
+            detail={detail}
+            tree={tree}
+            runs={runs}
+            chapters={{
+              selectedId: selectedChapterId,
+              onSelect: (id: string) => selectChapter(novel.id, id),
+              onAdd: handleAddChapter,
+              onDelete: handleDeleteChapter,
+              onSave: handleSaveChapter,
+              onAiDraft: handleAiDraft,
+            }}
+          />
         </SheetContent>
       </Sheet>
 
@@ -606,7 +593,7 @@ export function WorkbenchShell({
           className="flex min-h-11 flex-1 flex-col items-center justify-center gap-0.5 py-1.5 text-[10px] text-muted-foreground transition-colors"
         >
           <PanelRight className="h-4 w-4" aria-hidden="true" />
-          Artifacts
+          Documents
         </button>
       </nav>
 

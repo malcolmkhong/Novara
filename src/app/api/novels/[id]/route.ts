@@ -5,6 +5,7 @@ import { toSummary } from "@/lib/novara/summary";
 import type {
   ChapterDTO,
   ChapterPackDTO,
+  ChapterReviewSummaryDTO,
   ChapterVersionSummaryDTO,
   CharacterDTO,
   DigestDTO,
@@ -65,6 +66,34 @@ export async function GET(_req: Request, { params }: Params) {
       createdAt: true,
     },
   });
+
+  // STEP 76 — the latest review verdict per chapter. The E2 gate reads the
+  // SAME rows (lib/novara/qc.ts evaluateFinalize), so the review document in
+  // the tree can never disagree with the gate.
+  const reviewRows = await db.chapterReview.findMany({
+    where: { novelId: id },
+    orderBy: { createdAt: "desc" },
+    select: {
+      chapterId: true,
+      issueCount: true,
+      blockingCount: true,
+      createdAt: true,
+    },
+  });
+  const latestReviewByChapter = new Map<string, (typeof reviewRows)[number]>();
+  for (const row of reviewRows) {
+    if (!latestReviewByChapter.has(row.chapterId)) {
+      latestReviewByChapter.set(row.chapterId, row);
+    }
+  }
+  const reviews: ChapterReviewSummaryDTO[] = [...latestReviewByChapter.values()].map(
+    (row): ChapterReviewSummaryDTO => ({
+      chapterId: row.chapterId,
+      issueCount: row.issueCount,
+      blockingCount: row.blockingCount,
+      reviewedAt: row.createdAt.toISOString(),
+    })
+  );
 
   const chapterIndexById = new Map(
     novel.chapters.map((c): [string, number] => [c.id, c.index])
@@ -245,6 +274,7 @@ export async function GET(_req: Request, { params }: Params) {
       })
     ),
     ledger,
+    reviews,
   };
   return Response.json(detail);
 }

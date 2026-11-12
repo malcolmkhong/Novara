@@ -217,6 +217,20 @@ export interface LedgerView {
   clues: StoryClueDTO[];
 }
 
+/**
+ * The latest persisted review of one chapter (STEP 76 — the review document).
+ * The E2 finalization gate reads the same rows, so the document and the gate
+ * always agree on whether a chapter is clean or blocked.
+ */
+export interface ChapterReviewSummaryDTO {
+  chapterId: string;
+  /** Every issue the review found. */
+  issueCount: number;
+  /** The issues that block the finalization gate (critical severity). */
+  blockingCount: number;
+  reviewedAt: string;
+}
+
 export interface NovelDetail {
   novel: NovelMeta;
   chapters: ChapterDTO[];
@@ -238,6 +252,8 @@ export interface NovelDetail {
   versions: ChapterVersionSummaryDTO[];
   /** 账本 five ledgers — tree-visible sub-rows (Phase 9). */
   ledger: LedgerView;
+  /** The latest review verdict per chapter (STEP 76 — the review document). */
+  reviews: ChapterReviewSummaryDTO[];
 }
 
 // ---------------------------------------------------------------------------

@@ -3,10 +3,10 @@
 // ---------------------------------------------------------------------------
 // Novara AI — writer UI state (zustand).
 // Holds cross-pane UI state that survives pane switches and novel switches in
-// the Workbench shell: the center view (chat/board), the active artifact tab,
-// the selected chapter, the last execution mode the author chose, and the
-// Phase 9 deep-link focus (preselected memory category / ledger kind) that
-// asset-tree rows write before opening their artifact tab.
+// the Workbench shell: the center view (chat/board), the selected chapter, the
+// open document tabs of the right pane, the last execution mode the author
+// chose, and the Phase 9 deep-link focus (preselected memory category /
+// ledger kind) that the document tree writes before opening a document.
 // Domain data stays in component state + API; this store is UI-only.
 //
 // P1 persistence: the per-novel run-mode preference (lastModeByNovel) is the
@@ -15,42 +15,34 @@
 // (writer-app) after mount, so the first client render always matches SSR.
 // STEP 65 adds two more durable per-novel slices: the model selection and the
 // rail mode (Write | Book).
+// STEP 76 — the artifact-tab model and the per-asset selection slices are
+// GONE: the right pane now shows DOCUMENTS (read-only projections), and the
+// selected chapter is the only asset selection that is still read (the
+// chapter editor). The open/active/view-mode document tabs replaced them.
 // ---------------------------------------------------------------------------
 
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 import type { AgentRunMode, PinnedRef } from "@/lib/novara/agent-types";
 import type { ModelSelection } from "@/lib/novara/models";
-import type { ArtifactTabId, CenterView, RailMode } from "@/config/writer";
+import type { CenterView, RailMode } from "@/config/writer";
+
+/** STEP 76 — the two views a document can be shown in (the pane's toggle). */
+export type DocViewMode = "document" | "markdown";
 
 interface WriterState {
   /** Center pane view per novel id (chat flow vs Todos board). */
   centerViewByNovel: Record<string, CenterView>;
-  /** Active right-pane artifact tab per novel id. */
-  artifactTabByNovel: Record<string, ArtifactTabId>;
-  /** Selected chapter per novel id (opened in the Draft artifact view). */
+  /** Selected chapter per novel id (the open document in the right pane). */
   selectedChapterByNovel: Record<string, string | null>;
-  /** Tree-opened outline beat per novel id (focused card in the Outline view). */
-  selectedBeatByNovel: Record<string, string | null>;
-  /** Tree-opened character per novel id (focused card in the Bible view). */
-  selectedCharacterByNovel: Record<string, string | null>;
-  /** Tree-opened world entry per novel id (focused card in the Bible view). */
-  selectedWorldByNovel: Record<string, string | null>;
-  /** Tree-opened volume per novel id (focused plan in the Outline view). */
-  selectedVolumeByNovel: Record<string, string | null>;
-  /**
-   * Tree-opened chapter pack per novel id (focused document in the Packs
-   * view). Key shape: `${kind}:${chapterIndex}` (e.g. "material:9").
-   */
-  selectedPackKeyByNovel: Record<string, string | null>;
   /**
    * Pinned context refs per novel id (Phase 8 Pin-to-Chat) — shown as chips
    * in the conversation composer and resolved server-side at run start.
    */
   pinnedByNovel: Record<string, PinnedRef[]>;
-  /** Deep-link focus (Phase 9): memory tab preselected category ("all" | MemoryCategory | null) per novel. */
+  /** Deep-link focus (Phase 9): memory category focus ("all" | MemoryCategory | null) per novel. */
   memoryFocusByNovel: Record<string, string | null>;
-  /** Deep-link focus: ledger tab preselected kind ("storyline" | "timeline" | "arc" | "promise" | "clue" | null) per novel. */
+  /** Deep-link focus: ledger kind focus ("storyline" | "timeline" | "arc" | "promise" | "clue" | null) per novel. */
   ledgerKindByNovel: Record<string, string | null>;
   /**
    * Last execution mode chosen by the author per novel id (D2 default:
@@ -70,71 +62,67 @@ interface WriterState {
    * author's choice across reloads and novel switches. Default: "book".
    */
   railModeByNovel: Record<string, RailMode>;
+  /**
+   * STEP 76 — the open document tabs of the right pane, per novel id, in the
+   * order the author opened them. A document id is "<DocKind>:<ref>" (see
+   * `src/lib/novara/doc-tree.ts`).
+   */
+  openDocsByNovel: Record<string, string[]>;
+  /** STEP 76 — the active document tab of the right pane, per novel id. */
+  activeDocByNovel: Record<string, string | null>;
+  /**
+   * STEP 76 — the view mode of every open document, per novel id. "document"
+   * renders the projection, "markdown" shows the raw source.
+   */
+  docViewByNovel: Record<string, Record<string, DocViewMode>>;
+  /** STEP 76 — the left rail collapsed, per novel id. */
+  railCollapsedByNovel: Record<string, boolean>;
   setCenterView: (novelId: string, view: CenterView) => void;
-  setArtifactTab: (novelId: string, tab: ArtifactTabId) => void;
   selectChapter: (novelId: string, chapterId: string | null) => void;
-  selectBeat: (novelId: string, beatId: string | null) => void;
-  selectCharacter: (novelId: string, characterId: string | null) => void;
-  selectWorld: (novelId: string, worldId: string | null) => void;
-  selectVolume: (novelId: string, volumeId: string | null) => void;
-  selectPack: (novelId: string, key: string | null) => void;
   togglePin: (novelId: string, ref: PinnedRef) => void;
   clearPins: (novelId: string) => void;
-  /** Deep-link focus (Phase 9): preselect a memory tab category, null clears. */
+  /** Deep-link focus (Phase 9): preselect a memory category, null clears. */
   setMemoryFocus: (novelId: string, category: string | null) => void;
-  /** Deep-link focus (Phase 9): preselect a ledger tab kind, null clears. */
+  /** Deep-link focus (Phase 9): preselect a ledger kind, null clears. */
   setLedgerKind: (novelId: string, kind: string | null) => void;
   setLastMode: (novelId: string, mode: AgentRunMode) => void;
   setLastModel: (novelId: string, selection: ModelSelection) => void;
   /** STEP 65 — switch the rail between the run list ("write") and the asset
    * tree ("book") for one novel. */
   setRailMode: (novelId: string, mode: RailMode) => void;
+  /** STEP 76 — open a document in the right pane (activates it). */
+  openDoc: (novelId: string, docId: string) => void;
+  /** STEP 76 — close a document tab; the active tab falls back to its left
+   * neighbour. */
+  closeDoc: (novelId: string, docId: string) => void;
+  /** STEP 76 — activate an already open document tab. */
+  activateDoc: (novelId: string, docId: string) => void;
+  /** STEP 76 — switch one document between the document and the markdown view. */
+  setDocView: (novelId: string, docId: string, mode: DocViewMode) => void;
+  /** STEP 76 — collapse or expand the left rail. */
+  setRailCollapsed: (novelId: string, collapsed: boolean) => void;
 }
 
 export const useWriterStore = create<WriterState>()(
   persist(
     (set) => ({
   centerViewByNovel: {},
-  artifactTabByNovel: {},
   selectedChapterByNovel: {},
-  selectedBeatByNovel: {},
-  selectedCharacterByNovel: {},
-  selectedWorldByNovel: {},
-  selectedVolumeByNovel: {},
-  selectedPackKeyByNovel: {},
   pinnedByNovel: {},
   memoryFocusByNovel: {},
   ledgerKindByNovel: {},
   lastModeByNovel: {},
   lastModelByNovel: {},
   railModeByNovel: {},
+  openDocsByNovel: {},
+  activeDocByNovel: {},
+  docViewByNovel: {},
+  railCollapsedByNovel: {},
   setCenterView: (novelId, view) =>
     set((s) => ({ centerViewByNovel: { ...s.centerViewByNovel, [novelId]: view } })),
-  setArtifactTab: (novelId, tab) =>
-    set((s) => ({ artifactTabByNovel: { ...s.artifactTabByNovel, [novelId]: tab } })),
   selectChapter: (novelId, chapterId) =>
     set((s) => ({
       selectedChapterByNovel: { ...s.selectedChapterByNovel, [novelId]: chapterId },
-    })),
-  selectBeat: (novelId, beatId) =>
-    set((s) => ({
-      selectedBeatByNovel: { ...s.selectedBeatByNovel, [novelId]: beatId },
-    })),
-  selectCharacter: (novelId, characterId) =>
-    set((s) => ({
-      selectedCharacterByNovel: { ...s.selectedCharacterByNovel, [novelId]: characterId },
-    })),
-  selectWorld: (novelId, worldId) =>
-    set((s) => ({
-      selectedWorldByNovel: { ...s.selectedWorldByNovel, [novelId]: worldId },
-    })),
-  selectVolume: (novelId, volumeId) =>
-    set((s) => ({
-      selectedVolumeByNovel: { ...s.selectedVolumeByNovel, [novelId]: volumeId },
-    })),
-  selectPack: (novelId, key) =>
-    set((s) => ({
-      selectedPackKeyByNovel: { ...s.selectedPackKeyByNovel, [novelId]: key },
     })),
   togglePin: (novelId, ref) =>
     set((s) => {
@@ -166,6 +154,50 @@ export const useWriterStore = create<WriterState>()(
   setRailMode: (novelId, mode) =>
     set((s) => ({
       railModeByNovel: { ...s.railModeByNovel, [novelId]: mode },
+    })),
+  openDoc: (novelId, docId) =>
+    set((s) => {
+      const open = s.openDocsByNovel[novelId] ?? [];
+      return {
+        openDocsByNovel: {
+          ...s.openDocsByNovel,
+          [novelId]: open.includes(docId) ? open : [...open, docId],
+        },
+        activeDocByNovel: { ...s.activeDocByNovel, [novelId]: docId },
+      };
+    }),
+  closeDoc: (novelId, docId) =>
+    set((s) => {
+      const open = s.openDocsByNovel[novelId] ?? [];
+      const at = open.indexOf(docId);
+      if (at < 0) return {};
+      const next = open.filter((id) => id !== docId);
+      const active = s.activeDocByNovel[novelId];
+      // Closing the active tab activates its LEFT neighbour; closing a
+      // background tab leaves the active one alone.
+      const nextActive =
+        active === docId
+          ? next.length === 0
+            ? null
+            : next[Math.max(0, at - 1)]
+          : active ?? null;
+      return {
+        openDocsByNovel: { ...s.openDocsByNovel, [novelId]: next },
+        activeDocByNovel: { ...s.activeDocByNovel, [novelId]: nextActive },
+      };
+    }),
+  activateDoc: (novelId, docId) =>
+    set((s) => ({ activeDocByNovel: { ...s.activeDocByNovel, [novelId]: docId } })),
+  setDocView: (novelId, docId, mode) =>
+    set((s) => ({
+      docViewByNovel: {
+        ...s.docViewByNovel,
+        [novelId]: { ...(s.docViewByNovel[novelId] ?? {}), [docId]: mode },
+      },
+    })),
+  setRailCollapsed: (novelId, collapsed) =>
+    set((s) => ({
+      railCollapsedByNovel: { ...s.railCollapsedByNovel, [novelId]: collapsed },
     })),
     }),
     {
