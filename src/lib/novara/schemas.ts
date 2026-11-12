@@ -98,7 +98,10 @@ export const characterArcSchema = z.object({
 
 export const promiseSchema = z.object({
   content: z.string().trim().min(1).max(10000),
-  status: z.enum(["open", "fulfilled", "broken"]).optional(),
+  // STEP 70 — "advanced" is the middle step of the promise lifecycle
+  // (open → advanced → fulfilled), mirroring the clue machine and the
+  // foreshadow ledger.
+  status: z.enum(["open", "advanced", "fulfilled", "broken"]).optional(),
   madeChapter: z.number().int().min(1).nullable().optional(),
   dueChapter: z.number().int().min(1).nullable().optional(),
 });

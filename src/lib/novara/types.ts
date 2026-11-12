@@ -115,7 +115,7 @@ export type StorylineStatus = "active" | "dormant" | "resolved";
 
 // ---- Phase 8: ledger completion (承诺 / 线索) ------------------------------
 
-export type PromiseStatus = "open" | "fulfilled" | "broken";
+export type PromiseStatus = "open" | "advanced" | "fulfilled" | "broken";
 
 export interface StoryPromiseDTO {
   id: string;

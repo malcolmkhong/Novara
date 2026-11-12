@@ -65,6 +65,23 @@ export const toolActionSchema = z.discriminatedUnion("action", [
   }),
   // Phase 5: Forge's manuscript build (real generation, feed-reported).
   z.object({ action: z.literal("export_markdown") }),
+  // STEP 70 — the open-loop ledger. Two narrow actions:
+  //   read_promises  — what is still open (promises + clues) for this novel.
+  //   update_ledger  — move ONE promise or clue forward (never backwards).
+  // Only "promise" and "clue" are writable; the storyline / timeline / arc
+  // ledgers stay author-owned.
+  z.object({ action: z.literal("read_promises") }),
+  z.object({
+    action: z.literal("update_ledger"),
+    kind: z.enum(["promise", "clue"]),
+    id: z.string().trim().min(1).max(64),
+    // The lifecycle of each kind is its own: a promise is open | advanced |
+    // paid, a clue is planted | surfaced | revealed. The runtime accepts the
+    // forward steps of the matching machine and refuses the rest.
+    status: z.string().trim().min(1).max(24),
+    /** Why the loop moved — recorded on the row's existing fields. */
+    note: z.string().trim().max(400).optional(),
+  }),
   z.object({
     action: z.literal("create_chapter"),
     title: z.string().trim().min(1).max(200),

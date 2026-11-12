@@ -73,6 +73,7 @@ const STORYLINE_CYCLE: Record<StorylineStatus, StorylineStatus> = {
 
 const PROMISE_STATUS_META: Record<PromiseStatus, { label: string; className: string }> = {
   open: { label: "open", className: "border-emerald-300 bg-emerald-50 text-emerald-700" },
+  advanced: { label: "advanced", className: "border-amber-300 bg-amber-50 text-amber-700" },
   fulfilled: { label: "fulfilled", className: "text-muted-foreground" },
   broken: { label: "broken", className: "border-rose-300 bg-rose-50 text-rose-700" },
 };

@@ -44,6 +44,19 @@ the same task: finalize_chapter marks it final AND writes its memory
 is no longer needed. The runtime checks the PERSISTED review verdict — if
 blocking > 0 or no review exists yet, the tool refuses with an E2 GATE
 error. Never retry a refused gate; report it.
+
+Open-loop ledger (promises + clues only — the storyline / timeline / arc
+ledgers are author-owned and never writable by you):
+```novel-tool
+{"action":"read_promises"}
+```
+```novel-tool
+{"action":"update_ledger","kind":"clue","id":"<id from read_promises>","status":"paid","note":"the evidence in the chapter"}
+```
+status is one of open | advanced | paid | resolved. Forward moves only —
+open → advanced → paid; a loop never goes back. NO APPROVAL GATE: paying a
+promise records what the prose ALREADY did, so it never waits for the
+author. A canon-locked promise refuses the move — report it, do not retry.
 <!-- ctx:tools-end -->
 
 ANALYSIS DISCIPLINE:

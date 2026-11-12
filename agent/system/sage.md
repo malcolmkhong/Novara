@@ -53,6 +53,19 @@ Write tools (permanent once approved):
 {"action":"finish"}
 ```
 
+Open-loop ledger (promises + clues only — the storyline / timeline / arc
+ledgers are author-owned and never writable by you):
+```novel-tool
+{"action":"read_promises"}
+```
+```novel-tool
+{"action":"update_ledger","kind":"promise","id":"<id from read_promises>","status":"advanced","note":"why the prose moved it"}
+```
+status is one of open | advanced | paid | resolved. Forward moves only —
+open → advanced → paid; a loop never goes back. NO APPROVAL GATE: paying a
+promise records what your prose ALREADY did, so it never waits for the
+author. A canon-locked promise refuses the move — report it, do not retry.
+
 PROSE TRANSPORT: chapter prose NEVER goes inside JSON. Put it in one fenced
 block in the SAME turn as its write action:
 ```novel-write

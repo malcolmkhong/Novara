@@ -28,6 +28,11 @@ export interface StorySnapshotData {
   cast: { name: string; role: string; aliases: string }[];
   world: { title: string; category: string; contentPreview: string }[];
   openForeshadows: { id: string; status: string; content: string; plantChapter: number }[];
+  /** STEP 70 — the open-loop ledger (promises + clues), as separate sections
+   *  like the foreshadow ledger. Never inside the scored memory block.
+   *  Optional so the offline snapshot scripts keep their shape. */
+  openPromises?: { id: string; status: string; content: string; dueChapter: number | null }[];
+  openClues?: { id: string; status: string; content: string; revealChapter: number | null }[];
   lastDigest: { chapterIndex: number; summary: string } | null;
   /** Phase 4: scored story memory + recent digests, rendered prompt-ready. */
   memoryBlock: string | null;
@@ -65,6 +70,21 @@ export async function loadStorySnapshot(novelId: string): Promise<StorySnapshotD
         orderBy: { createdAt: "asc" },
         take: 30,
         select: { id: true, status: true, content: true, plantChapter: true },
+      },
+      // STEP 70 — the open-loop ledger. Promises: open + advanced; clues:
+      // planted + surfaced (both are still open). Separate sections, never
+      // inside the scored memory block — the memory budget stays untouched.
+      promises: {
+        where: { status: { in: ["open", "advanced"] } },
+        orderBy: { createdAt: "asc" },
+        take: 12,
+        select: { id: true, status: true, content: true, dueChapter: true },
+      },
+      clues: {
+        where: { status: { in: ["planted", "surfaced"] } },
+        orderBy: { createdAt: "asc" },
+        take: 12,
+        select: { id: true, status: true, content: true, revealChapter: true },
       },
       digests: {
         orderBy: { updatedAt: "desc" },
@@ -149,6 +169,18 @@ export async function loadStorySnapshot(novelId: string): Promise<StorySnapshotD
       status: f.status,
       content: f.content,
       plantChapter: f.plantChapter,
+    })),
+    openPromises: novel.promises.map((p) => ({
+      id: p.id,
+      status: p.status,
+      content: p.content,
+      dueChapter: p.dueChapter,
+    })),
+    openClues: novel.clues.map((c) => ({
+      id: c.id,
+      status: c.status,
+      content: c.content,
+      revealChapter: c.revealChapter,
     })),
     lastDigest: novel.digests[0]
       ? { chapterIndex: novel.digests[0].chapter.index, summary: novel.digests[0].summary }
@@ -247,6 +279,22 @@ export function renderSnapshot(s: StorySnapshotData): string {
     lines.push(
       `OPEN FORESHADOW LEDGER:\n${s.openForeshadows
         .map((f) => `- [${f.id}] (${f.status}, planted ch${f.plantChapter}) ${f.content.slice(0, 200)}`)
+        .join("\n")}`
+    );
+  }
+  // STEP 70 — the open loops. Same shape as the foreshadow ledger: a
+  // separate section, so the scored memory block's budget never moves.
+  if ((s.openPromises?.length ?? 0) > 0) {
+    lines.push(
+      `OPEN PROMISES (promises this book owes the reader — close one when the prose pays it):\n${(s.openPromises ?? [])
+        .map((p) => `- [${p.id}] (${p.status}, due ch${p.dueChapter ?? "?"}) ${p.content.slice(0, 160)}`)
+        .join("\n")}`
+    );
+  }
+  if ((s.openClues?.length ?? 0) > 0) {
+    lines.push(
+      `OPEN CLUES (evidence threads — reveal one when the prose reveals it):\n${(s.openClues ?? [])
+        .map((c) => `- [${c.id}] (${c.status}, reveal ch${c.revealChapter ?? "?"}) ${c.content.slice(0, 160)}`)
         .join("\n")}`
     );
   }

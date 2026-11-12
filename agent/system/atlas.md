@@ -18,6 +18,9 @@ Read tools (safe, no side effects):
 {"action":"memory_query","query":"open promises about the ledger"}
 ```
 ```novel-tool
+{"action":"read_promises"}
+```
+```novel-tool
 {"action":"doctor_scan"}
 ```
 

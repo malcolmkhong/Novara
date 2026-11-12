@@ -70,6 +70,12 @@ import {
   queryMemory,
 } from "@/lib/novara/memory";
 import {
+  applyLoopTransition,
+  findDanglingLoops,
+  isKnownStep,
+  listOpenLoops,
+} from "@/lib/novara/open-loops";
+import {
   auditReport,
   evaluateFinalize,
   evaluateRepair,
@@ -1342,15 +1348,21 @@ const READ_ACTIONS = new Set([
   "read_outline",
   "read_foreshadows",
   "memory_query",
+  // STEP 70 — reading the open loops is safe for every role.
+  "read_promises",
 ]);
 
 const MEMBER_TOOLS: Record<AgentRoleId, string[]> = {
   atlas: [...READ_ACTIONS, "doctor_scan"],
-  sage: [...READ_ACTIONS, "doctor_scan", "create_chapter", "update_chapter", "update_outline_beat", "finish"],
+  sage: [...READ_ACTIONS, "doctor_scan", "create_chapter", "update_chapter", "update_outline_beat", "update_ledger", "finish"],
   nova: [...READ_ACTIONS],
-  prism: [...READ_ACTIONS, "doctor_scan", "review_chapter", "finalize_chapter", "settle_chapter", "finish"],
+  prism: [...READ_ACTIONS, "doctor_scan", "review_chapter", "finalize_chapter", "settle_chapter", "update_ledger", "finish"],
   forge: [...READ_ACTIONS, "doctor_scan", "export_markdown", "finish"],
 };
+
+/** STEP 70 — a promise/clue older than this many chapters, never advanced,
+ *  is a dangling loop (the doctor's warning line). */
+const DANGLING_LOOP_MAX_AGE = 20;
 
 function toolAllowedFor(actor: AgentRoleId, action: string): boolean {
   return MEMBER_TOOLS[actor]?.includes(action) ?? false;
@@ -2903,6 +2915,76 @@ export async function executeTool(params: ExecuteToolParams): Promise<ToolResult
         feed: `memory_query("${truncate(action.query, 60)}") → ok (${items.length} items)\n${formatMemoryLines(items).join("\n")}`,
       };
     }
+    case "read_promises": {
+      // STEP 70 — what is still open: the promise and clue ledgers. The
+      // storyline / timeline / arc ledgers are author-owned and never listed.
+      const loops = await listOpenLoops(params.novelId, { limit: 12 });
+      const lines = [
+        ...loops.promises.map(
+          (p) =>
+            `- [promise ${p.id}] ${p.title.slice(0, 160)} · ${p.status} · planned ch${p.plannedAt ?? "?"} · made ch${p.plantedIn ?? "?"} · age ${p.age ?? "?"} ch`
+        ),
+        ...loops.clues.map(
+          (c) =>
+            `- [clue ${c.id}] ${c.title.slice(0, 160)} · ${c.status} · planned ch${c.plannedAt ?? "?"} · planted ch${c.plantedIn ?? "?"} · age ${c.age ?? "?"} ch`
+        ),
+      ];
+      return {
+        ok: true,
+        feed:
+          `read_promises → ok (${loops.promises.length} open promise(s), ${loops.clues.length} open clue(s))\n` +
+          `${lines.join("\n") || "(none — every promise and clue is closed)"}`,
+      };
+    }
+    case "update_ledger": {
+      // STEP 70 — move ONE promise or clue forward. No approval gate: paying
+      // a promise records what the prose already did (the STEP 69 reasoning).
+      // Forward transitions only, one-way, exactly like the foreshadow
+      // ledger. The storyline / timeline / arc ledgers stay author-owned.
+      const kind = String(action.kind ?? "").trim();
+      if (kind !== "promise" && kind !== "clue") {
+        return {
+          ok: false,
+          feed: `update_ledger → error: kind must be "promise" or "clue" — storylines, timeline and arcs are author-owned and the agent never writes them.`,
+        };
+      }
+      const step = String(action.status ?? "").trim().toLowerCase();
+      if (!isKnownStep(step)) {
+        return {
+          ok: false,
+          feed: `update_ledger → error: status must be one of open, advanced, paid, resolved — got "${truncate(step, 40)}".`,
+        };
+      }
+      const chapter = await db.chapter.findFirst({
+        where: { novelId: params.novelId },
+        orderBy: { index: "desc" },
+        select: { index: true },
+      });
+      const result = await applyLoopTransition({
+        novelId: params.novelId,
+        kind,
+        id: action.id,
+        step,
+        note: action.note,
+        actor: "agent",
+        chapterIndex: chapter?.index ?? null,
+      });
+      if (!result.ok) {
+        return { ok: false, feed: `update_ledger(${kind}, ${action.id}) → error: ${result.error}` };
+      }
+      await emitEvent({
+        runId: params.runId,
+        taskId: params.taskId,
+        actor,
+        kind: "write",
+        summary: `${kind === "promise" ? "Promise" : "Clue"} "${truncate(result.title ?? "", 50)}" moved ${result.from} → ${result.to}${action.note ? ` — ${truncate(action.note, 120)}` : ""} (verified in DB).`,
+        payload: { artifact: kind, ledgerId: action.id, from: result.from, to: result.to, op: "update_ledger" },
+      });
+      return {
+        ok: true,
+        feed: `update_ledger(${kind}, ${action.id}) → ok: ${kind} "${truncate(result.title ?? "", 60)}" ${result.from} → ${result.to} (verified in DB).`,
+      };
+    }
     case "doctor_scan": {
       // Deterministic consistency checks (bible/ledger/coverage/cast).
       const view = await buildMemoryView(params.novelId);
@@ -2921,11 +3003,20 @@ export async function executeTool(params: ExecuteToolParams): Promise<ToolResult
         sync.summary.unsynced > 0
           ? `\n${sync.summary.unsynced} finalised chapter(s) have NO projected memory (${sync.summary.unsyncedIndexes.join(", ")}) — settle them before trusting the story bible.`
           : "";
+      // STEP 70 — the dangling-loop warning: a promise/clue that was never
+      // advanced and is older than 20 chapters.
+      const dangling = await findDanglingLoops(params.novelId, DANGLING_LOOP_MAX_AGE);
+      const danglingLine =
+        dangling.length > 0
+          ? `\n- [WARN] dangling loops: ${dangling.length} open promise/clue(s) older than ${DANGLING_LOOP_MAX_AGE} chapters with no advance — ${dangling
+              .map((d) => `${d.kind} "${d.title.slice(0, 60)}" (${d.age} ch old)`)
+              .join("; ")}`
+          : "";
       return {
         ok: true,
         feed:
           `doctor_scan → ok (${view.doctor.filter((d) => d.status !== "pass").length} finding(s))\n${lines.join("\n")}\n` +
-          `MEMORY SYNC (per chapter):\n${syncLines.join("\n") || "(no chapters)"}${unsyncedNote}`,
+          `MEMORY SYNC (per chapter):\n${syncLines.join("\n") || "(no chapters)"}${unsyncedNote}${danglingLine}`,
       };
     }
     case "review_chapter": {

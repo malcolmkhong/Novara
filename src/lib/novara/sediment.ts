@@ -18,6 +18,7 @@
 import { db } from "@/lib/db";
 import { getBudgets } from "@/lib/novara/content";
 import { chatCompletion } from "@/lib/ai/chat";
+import { closePaidLoops, listOpenLoops } from "@/lib/novara/open-loops";
 
 /**
  * The transaction client the ownership-extended db hands to $transaction.
@@ -45,9 +46,10 @@ STATE: <角色名> | <本章结束时的状态/处境/认知>
 PLANT: <本章新埋的伏笔，需要日后回收>
 ADVANCE: <台账中伏笔的 id>
 PAID: <本章兑现了承诺的伏笔 id>
+PAID_LOOP: <本章兑现的承诺或线索 id> | <本章兑现的证据>
 category 只能取：world_rule / character_state / relationship / story_fact / open_loop / decision / style / dialogue / inspiration
   world_rule=世界与背景的硬规则；character_state=角色的处境变化；relationship=人物关系变化；story_fact=剧情事实；open_loop=未了结的悬念/承诺；decision=本章做出的影响后续走向的关键决策（选了什么、放弃什么）；style=本章确立或遵循的文风/叙事规则（节奏、视角、句式偏好）；dialogue=角色说话方式的约束（口癖、语气、称呼）；inspiration=值得日后记住的点子。
-规则：facts 每条都要能独立被 AI 日后引用（含上下文，不要代词指代）；只记录本章确立或变化的事实；ADVANCE/PAID 只能引用上面台账里存在的 id；没有就省略该行。`;
+规则：facts 每条都要能独立被 AI 日后引用（含上下文，不要代词指代）；只记录本章确立或变化的事实；ADVANCE/PAID 只能引用上面台账里存在的 id；PAID_LOOP 只能引用上面「未兑现承诺」列表里存在的 id（可以带 promise/clue 前缀），且只在本章正文确实兑现了它时才写；没有就省略该行。`;
 const SEDIMENT_SPEC_EN = `Output format: plain text lines, one record per line, strictly (no JSON, no markdown, never use the | pipe character inside text, use single quotes for quotations):
 SUMMARY: chapter summary in one line, 100-200 words
 FACT: <category> | <one standalone, self-contained fact>
@@ -55,9 +57,10 @@ STATE: <character name> | <their situation/knowledge at chapter end>
 PLANT: <a new hook deliberately planted, needs future payoff>
 ADVANCE: <id of a ledger foreshadow advanced this chapter>
 PAID: <id of a ledger foreshadow whose promise was fulfilled>
+PAID_LOOP: <id of an open promise or clue this chapter visibly paid> | <the evidence in this chapter>
 category must be one of: world_rule / character_state / relationship / story_fact / open_loop / decision / style / dialogue / inspiration
   world_rule=hard world/background rules; character_state=a character's situation shift; relationship=relationship changes; story_fact=plot facts; open_loop=unresolved suspense/promises; decision=key choices made this chapter that steer what follows (what was chosen, what was abandoned); style=narrative/style rules established or followed (pacing, POV, sentence habits); dialogue=speech constraints for characters (verbal tics, tone, forms of address); inspiration=ideas worth remembering later.
-Rules: each fact must be independently quotable later (no pronoun references); record only facts established or changed here; ADVANCE/PAID must reference ids from the ledger above; omit lines when there is nothing.`;
+Rules: each fact must be independently quotable later (no pronoun references); record only facts established or changed here; ADVANCE/PAID must reference ids from the ledger above; PAID_LOOP must reference an id from the OPEN LOOPS list above (bare id, or with its promise/clue prefix) and only when this chapter's prose actually paid it; omit lines when there is nothing.`;
 
 export interface ParsedSediment {
   summary: string;
@@ -66,9 +69,13 @@ export interface ParsedSediment {
   plants: { content: string }[];
   advanceIds: string[];
   paidIds: string[];
+  /** STEP 70 — the open promise/clue ids the chapter visibly PAID, with the
+   *  evidence the model cites. Never inferred by keyword matching: the model
+   *  states it. */
+  paidPromises: { id: string; evidence: string }[];
 }
 
-export const SEDIMENT_LINE = /^(SUMMARY|FACT|STATE|PLANT|ADVANCE|PAID)\s*[:：]\s*(.*)$/i;
+export const SEDIMENT_LINE = /^(SUMMARY|FACT|STATE|PLANT|ADVANCE|PAID|PAID_LOOP)\s*[:：]\s*(.*)$/i;
 
 export function parseSedimentLines(text: string): ParsedSediment {
   const summary: string[] = [];
@@ -77,6 +84,7 @@ export function parseSedimentLines(text: string): ParsedSediment {
   const plants: { content: string }[] = [];
   const advanceIds: string[] = [];
   const paidIds: string[] = [];
+  const paidPromises: { id: string; evidence: string }[] = [];
 
   for (const raw of text.split("\n")) {
     const line = raw.trim().replace(/^[-*•\d.)\s]+/, "");
@@ -112,6 +120,20 @@ export function parseSedimentLines(text: string): ParsedSediment {
       advanceIds.push(rest);
     } else if (type === "PAID") {
       paidIds.push(rest);
+    } else if (type === "PAID_LOOP") {
+      // STEP 70 — <id> | <evidence>. The id must be an open promise or clue
+      // of this novel; the evidence is archived with the transition. The
+      // model may write the bare id or the id with its kind prefix
+      // ("promise cmw…" / "clue cmw…") — both are accepted.
+      const sep = rest.search(/\s*\|\s*/);
+      if (sep <= 0) continue;
+      const id = rest
+        .slice(0, sep)
+        .trim()
+        .replace(/^(?:promise|clue)\s+/i, "")
+        .trim();
+      const evidence = rest.slice(sep).replace(/^\s*\|\s*/, "").trim();
+      if (id) paidPromises.push({ id, evidence });
     }
   }
 
@@ -122,6 +144,7 @@ export function parseSedimentLines(text: string): ParsedSediment {
     plants: plants.slice(0, 12),
     advanceIds: advanceIds.slice(0, 12),
     paidIds: paidIds.slice(0, 12),
+    paidPromises: paidPromises.slice(0, 12),
   };
 }
 
@@ -133,6 +156,8 @@ export interface SedimentOutcome {
   plantsCreated: number;
   advanced: number;
   paid: number;
+  /** STEP 70 — open promises / clues this settle closed (the model paid them). */
+  loopsPaid: number;
 }
 
 /**
@@ -186,6 +211,9 @@ export interface SedimentRecords {
   /** Foreshadow ids this settle may advance / pay (validated against the ledger). */
   validAdvance: string[];
   validPaid: string[];
+  /** STEP 70 — the open promise/clue ids the model says this chapter paid,
+   *  with its evidence. Only ids that exist as open loops of this novel. */
+  paidPromises: { id: string; evidence: string }[];
 }
 
 /**
@@ -213,6 +241,10 @@ export async function extractSediment(chapterId: string): Promise<SedimentRecord
     take: 30,
     select: { id: true, content: true, status: true, plantChapter: true },
   });
+  // STEP 70 — the open loops (promises + clues) go into the prompt so the
+  // model can STATE which one this chapter paid (PAID_LOOP). Without the ids
+  // it could not name them, and we never guess by keyword matching.
+  const openLoops = await listOpenLoops(novel.id, { limit: 12 });
 
   const isChinese = /[\u4e00-\u9fff]/.test(`${novel.title}\n${novel.synopsis}`);
   const system = isChinese
@@ -230,9 +262,21 @@ export async function extractSediment(chapterId: string): Promise<SedimentRecord
         .join("\n")}`
     );
   }
+  if (openLoops.promises.length > 0 || openLoops.clues.length > 0) {
+    const loopLines = [
+      ...openLoops.promises.map(
+        (p) => `- promise ${p.id} — ${p.status} — ${p.title.slice(0, 200)}`
+      ),
+      ...openLoops.clues.map(
+        (c) => `- clue ${c.id} — ${c.status} — ${c.title.slice(0, 200)}`
+      ),
+    ];
+    parts.push(
+      `${isChinese ? "未兑现承诺（OPEN LOOPS）" : "OPEN LOOPS"} (id — status — content):\n${loopLines.join("\n")}`
+    );
+  }
   parts.push(`CHAPTER ${chapter.index} TEXT:\n${chapter.content.slice(0, budgets.ai.chapterContextChars)}`);
   parts.push(isChinese ? SEDIMENT_SPEC_ZH : SEDIMENT_SPEC_EN);
-
   const { text: raw } = await chatCompletion({
     messages: [
       { role: "assistant", content: system },
@@ -264,6 +308,14 @@ export async function extractSediment(chapterId: string): Promise<SedimentRecord
   const validAdvance = parsed.advanceIds.filter((fid) => ledgerIds.has(fid));
   const validPaid = parsed.paidIds.filter((fid) => ledgerIds.has(fid));
 
+  // STEP 70 — keep only the paid-loop ids that are real open loops of this
+  // novel. The model STATES them; we never infer by keyword matching.
+  const loopIds = new Set([
+    ...openLoops.promises.map((p) => p.id),
+    ...openLoops.clues.map((c) => c.id),
+  ]);
+  const paidPromises = parsed.paidPromises.filter((p) => loopIds.has(p.id));
+
   return {
     chapterId: chapter.id,
     novelId: novel.id,
@@ -274,6 +326,7 @@ export async function extractSediment(chapterId: string): Promise<SedimentRecord
     plants: parsed.plants,
     validAdvance,
     validPaid,
+    paidPromises,
   };
 }
 
@@ -301,6 +354,7 @@ export async function writeSedimentProjection(
     plants,
     validAdvance,
     validPaid,
+    paidPromises,
   } = records;
 
   // 1. Digest — upsert by unique chapterId.
@@ -408,6 +462,19 @@ export async function writeSedimentProjection(
     paid = r.count;
   }
 
+  // 6. STEP 70 — the open-loop ledger: the promises / clues this chapter
+  // visibly PAID, as the model stated them. Same one-way machine, same
+  // transaction: the chapter's memory and the loops it closes commit
+  // together.
+  const loops = await closePaidLoops({
+    novelId,
+    paid: paidPromises,
+    actor: "agent",
+    chapterIndex,
+    tx,
+  });
+  const loopsPaid = loops.closed.length;
+
   return {
     digestSummary: digest.summary,
     factsCreated,
@@ -416,6 +483,7 @@ export async function writeSedimentProjection(
     plantsCreated,
     advanced,
     paid,
+    loopsPaid,
   } satisfies SedimentOutcome;
 }
 

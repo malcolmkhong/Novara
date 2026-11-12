@@ -380,7 +380,9 @@ model StoryPromise {
   id          String   @id @default(cuid())
   novelId     String
   content     String
-  // open | fulfilled | broken
+  // open | advanced | fulfilled | broken (STEP 70 — "advanced" is the middle
+  // step of the lifecycle, mirroring the clue machine and the foreshadow
+  // ledger: open → advanced → fulfilled, never backwards)
   status      String   @default("open")
   // Canon status layer (Phase 9): draft | final — lock, not lifecycle.
   lock        String   @default("draft")

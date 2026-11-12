@@ -58,7 +58,15 @@ export function buildAssetSnapshot(
   return lines.join("\n");
 }
 
-async function archiveAssetVersion(input: {
+/**
+ * Archive a labeled snapshot of an asset's state.
+ *
+ * reason "reopen" | "finalize" preserve canon; reason "manual" records a
+ * change that is neither — the agent moving a promise forward, for example.
+ * createdBy carries WHO (author | agent) and the snapshot text carries the
+ * WHY, so the trail is self-contained without inventing a column.
+ */
+export async function archiveAssetVersion(input: {
   novelId: string;
   assetType: AssetType;
   assetId: string;
@@ -66,8 +74,26 @@ async function archiveAssetVersion(input: {
   reason: "reopen" | "finalize" | "manual";
   snapshot: string;
   createdBy?: string;
+  /** Optional transaction client — the base client would need a second
+   *  connection inside an interactive transaction (connection_limit=1). */
+  tx?: {
+    assetVersion: {
+      create(args: {
+        data: {
+          novelId: string;
+          assetType: string;
+          assetId: string;
+          assetLabel: string;
+          reason: string;
+          snapshot: string;
+          createdBy: string;
+        };
+      }): Promise<unknown>;
+    };
+  };
 }): Promise<void> {
-  await db.assetVersion.create({
+  const client = input.tx ?? db;
+  await client.assetVersion.create({
     data: {
       novelId: input.novelId,
       assetType: input.assetType,
