@@ -1,116 +1,391 @@
-# AGENTS.md — AI Agent 工作指南
+# AGENTS.md — working guide for AI agents in this repository
 
-> 本文件是给在本仓库工作的 AI 编码代理（以及新加入的人类开发者）的速查守则。
-> 项目背景与完整演进史见 `NOVARA_AI_DEVELOPMENT_PLAN.md`；本文只讲"必须遵守的法则 + 上手地图"。
+This file tells you how the code actually works today and what you must not break. It is
+written against the current implementation, not against an earlier design. When the code
+and this file disagree, the code wins — fix this file in the same change.
 
-## 1. 这是什么项目
+The product summary lives in `README.md`. Keep the two consistent.
 
-**Novara AI** — AI 小说创作系统。核心哲学：
+---
 
-- **结构化数据库是真源**（Prisma/SQLite），磁盘 `.md` 只是可选导出形态
-- **用户负责提出创作意图，AI Agent 团队负责理解、分析、规划、修改、维护和验证整个小说系统**
-- **已定稿 = Immutable Canon**（代码强制锁），未定稿 = 可编辑工作区
-- 人机共享同一套写闸（write-gate），没有旁路
+## 1. What this project is
 
-## 2. 不可协商的法则（改代码前先读这段）
+Novara is an AI novel-writing studio: a Next.js 16 app (one page route, hash-routed) over
+Postgres/Neon via Prisma, with Firebase Auth and a five-role agent team (Atlas, Sage,
+Prism, Nova, Forge) that plans, writes, reviews, projects memory and exports a novel.
 
-1. **定稿锁是代码强制，不是 UI 提示**
-   - `Chapter.status === 'final'` 时，PATCH 返回 409，除非显式 `reopen: true`（reopen 强制降级为 `revised`，绝不借道重定稿）
-   - Agent runtime 在审批通过后的 commit 时刻**再查一次 final**（防审批窗口期被定稿）— `src/lib/agent/runtime.ts`
-   - 替换非空正文必须显式 `overwrite: true`（防误覆盖）
-2. **非正文资产同法**：Character / WorldEntry / OutlineBeat / Volume / 账本五表 / 契约都有 `status: draft|final` + `finalizedAt`；final 的修订走 reopen，原版先归档进 **AssetVersion**（`src/lib/novara/asset-gate.ts`）
-3. **每次提交正文都留版本**：`ChapterVersion`（稿1~稿N，`createdBy: author|agent`）在作者保存、Agent 写入、审批提交、导入时都会快照 — 保留不重写
-4. **E2 定稿闸**：定稿前要求最新持久化审读 0 blocking（`ChapterReview` 由 `src/lib/novara/review.ts` 独家写入，UI 与 Agent 共用同一条管线）
-5. **诚实规则**：task `done` 只在验证写入数据库后翻转；`finalReport` 强制 claimed vs verified 对照，虚报会被数字审计标红。不要引入任何"模型自报即事实"的路径
-6. **wordCount 服务端重算**，永不信任客户端传值
-7. **SQLite + Prisma：禁止 JSON 列**，一切关系建规范表；schema 原始类型不能是 list
-8. **z-ai-web-dev-sdk 只能在后端用**（`src/lib/novara/glm.ts` 是唯一直连点：全局并发信号量 maxConcurrent=2 + 429/5xx 指数退避）。客户端一律走自家 `/api/*`
-9. **只有 `/` 一个用户可见路由**（hash 路由切官网/Writer），不要新增 page 路由
-10. **全部走 API，不用 server action**；API 写法参考 `src/app/api/` 现有模式（`parseBody` + zod schema + `jsonError`）
+The spine of the system is:
 
-## 3. 架构地图
+```
+contract → CHAPTER_COMMIT → derived projections (state, index, summary, memory) → doctor
+```
+
+The commit is the only way to make canon, and the commit is where the projection is
+written. The original port dropped the commit and made settling an optional tool call;
+that was restored — a chapter cannot be final without its memory projection.
+
+---
+
+## 2. Non-negotiable integrity rules
+
+These are enforced in code. Do not "simplify" them away.
+
+1. **Final is immutable canon.** `Chapter.status === "final"` cannot be edited without an
+   explicit `reopen`, and a reopen downgrades to `revised` — it can never re-finalize
+   (`src/app/api/chapters/[id]/route.ts:43-92`). The same rule covers the non-body assets
+   handled by `src/lib/novara/asset-gate.ts` (`Character`, `WorldEntry`, `OutlineBeat`,
+   `Volume`, the five ledgers, the contract): reopening archives the old version into
+   `AssetVersion`.
+2. **The projection rides along with the commit.** `finalize_chapter` runs the AI
+   extraction **outside** the transaction and then, **inside one transaction**, flips
+   `Chapter.status` to `final` and calls `writeSedimentProjection`
+   (`src/lib/agent/runtime.ts:3112-3139`). If the extraction fails, the chapter stays a
+   draft. Never split the status flip from the projection.
+3. **One review writer.** `src/lib/novara/review.ts` is the only module that writes
+   `ChapterReview`. A critical-severity issue is blocking; the finalize gate uses the
+   persisted `blockingCount` of the latest review (`evaluateFinalize`, `evaluateSettle`
+   in `src/lib/novara/qc.ts:30-88`).
+4. **Overwriting prose is explicit.** Replacing non-empty prose requires
+   `overwrite: true` (`assessOverwrite`, `src/lib/novara/write-gate.ts:23`). The same
+   check pauses the agent even in `full_access` mode.
+5. **Word counts are computed server-side.** `countWords` / `chineseWordCount`
+   (`src/lib/novara/words.ts:9,31`). Never trust a client-supplied count.
+6. **Counters are verified, not believed.** The model's `run-report` numbers are compared
+   with counters rebuilt from the persisted event log (`deriveMeasuredFromEvents`,
+   `src/lib/agent/runtime.ts:870-925`; `auditReport`, `src/lib/novara/qc.ts:128-144`).
+   Mismatches become blocking issues in the final report. Do not add a path where a
+   model's claim becomes a fact.
+7. **Every provider call is metered.** All AI calls go through `src/lib/ai/chat.ts`,
+   which takes a credit hold (`beginCharge`) and settles it against measured usage.
+   `bun scripts/check-credit-coverage.ts` fails the build if a provider call can happen
+   without a charge path.
+8. **Ownership fails closed.** The Prisma extension in `src/lib/db.ts:367-373` filters
+   every query by the caller's identity and throws for any model without an ownership
+   rule: `ownership: model "<x>" has no ownership rule — refusing to run unfiltered.`
+   Do not hand-write `where` filters to "replace" it, and do not add a model to
+   `UNFILTERED_MODELS`.
+9. **One page route.** `/` is the only user-visible route (`src/app/page.tsx`).
+   Everything else is an API route under `src/app/api/**`. No new page routes, no server
+   actions — use an API route with `parseBody` + zod + `jsonError`.
+10. **No AI SDK in the client.** The browser may call Novara's own `/api/*` endpoints;
+    provider SDKs and keys stay server-side.
+
+---
+
+## 3. Architecture map
 
 ```
 src/
   app/
-    page.tsx                    # 唯一路由：官网 + #/writer 工作台（hash 路由）
-    api/
-      novels/[id]/...           # 小说 CRUD + characters/world-entries/world-groups/
-                                # volumes/outline-beats/ledger/packs/memory/export
-      chapters/[id]/...         # CRUD + versions + review + sediment
-      agent/runs/...            # 运行生命周期（create/detail/approve/cancel/mode + SSE events）
-      ai/wizard, ai/draft       # GLM 薄封装（向导 6 个 section / 行内续写）
-      import/                   # 备份导入（integrity 校验）
+    page.tsx                 the only page route → <NovaraApp/>
+    api/                     44 route files (see §7)
+    globals.css              Tailwind v4 theme tokens
+  components/
+    novara/                  marketing pages, navbar/footer, settings, user menu
+      writer/                rail (asset-tree), document tree, document pane,
+                             conversation pane, composer, task board, chapter editor
+    ui/                      shadcn/ui primitives
+  hooks/                     use-writer-store (persisted UI state), use-agent-run
+                             (SSE), use-credits, use-hash-route
   lib/
-    agent/runtime.ts            # Agent 编排核心（Atlas 主控循环、门、审批、核验）
-    agent/tool-protocol.ts      # 工具行协议（novel-tool / novel-write / team-delegate 等）
-    agent/snapshot.ts           # loadStorySnapshot：前情摘要+记忆层+账本+契约 注入写作上下文
-    novara/
-      write-gate.ts             # 正文写闸（人机共享，保留不重写）
-      asset-gate.ts             # 非正文资产 canon 状态机（reopen 归档 AssetVersion）
-      review.ts                 # 审读核心（唯一可写 ChapterReview）
-      sediment.ts               # 沉淀管线（审读 0 blocking 后写入记忆四表）
-      memory.ts / summary.ts    # 记忆检索（打分召回）与前情摘要
-      qc.ts / qc-evals.ts       # QC 纯函数门族 + 24 行为探针
-      versions.ts / export.ts / backup-schema.ts
-      wizard-parse.ts           # 向导文本解析（cast/world/beats，容错式）
-  components/novara/
-    writer/asset-tree.tsx       # 左树外壳（身份块 + Write|Book 切换 + 搜索行 + 运行列表）
-    writer/doc-tree-panel.tsx   # 左树主体 = 文档树渲染器（文件夹/文档两种行）
-    writer/doc-pane.tsx         # 右侧文档区（打开的文档标签 + 只读投影 + Document/Markdown）
-    writer/conversation-pane.tsx# 对话第一界面 + Pin-to-Chat + 运行历史
-agent/                          # Agent 内容层（提示词即代码）
-  system/{atlas,sage,prism,nova,forge}.md
-  skills/**                     # 角色技能卡（team.yaml 白名单注入）
-  config/{team.yaml,skills.yaml,budgets.yaml}   # 角色注册/技能/魔法数收编
-prisma/schema.prisma            # 26 models（SQLite）
-db/custom.db                    # 数据库文件
+    agent/
+      runtime.ts             the orchestrator: leases, roles, tool loop, gates, report
+      tool-protocol.ts       tool catalogue + wire formats
+      snapshot.ts            loadStorySnapshot: the state a task sees
+      snapshot-slice.ts      slicing for large contexts
+      context-meter.ts       context budget accounting
+      wire.ts / messages.ts  provider wire formats, message persistence, lease constants
+    ai/
+      chat.ts                THE choke point: semaphore, credit hold, retry
+      router.ts              provider selection
+      providers/*.ts         gemini (Vertex ADC), deepseek, minimax, openai, anthropic
+      writing.ts             prose-draft helpers
+    novara/                  the domain layer (see below)
+      qc.ts                  pure gates: evaluateFinalize/Settle/Repair, auditReport
+      review.ts              the only writer of ChapterReview
+      sediment.ts            extractSediment + writeSedimentProjection
+      sediment-windows.ts    overlapping extraction windows
+      memory.ts              scoring, retrieval, buildMemoryView, buildMemorySyncReport
+      open-loops.ts          forward-only promise/clue transitions
+      write-gate.ts          overwrite gate
+      asset-gate.ts          canon lock for non-body assets
+      versions.ts            ChapterVersion snapshots (max 30 per chapter)
+      doc-tree.ts / doc-markdown.ts   the document tree model and its renderers
+      content.ts             loads agent/ (cards, skills, budgets)
+      api.ts / api-helpers.ts / schemas.ts / types.ts   client + server contracts
+      export.ts / backup-schema.ts / import helpers
+      words.ts / models.ts / settings.ts / wizard-parse.ts / quota.ts
+    credits/                 charge.ts (holds, settles, caps), ledger.ts
+    usage/                   pricing.ts, usage-store.ts, retention.ts, usage-shapes.ts
+    db.ts                    Prisma client + ownership extension + identity helpers
+  middleware.ts              Firebase token verification for every API route
+agent/                       the prompt content layer
+  system/{atlas,sage,prism,nova,forge}.md    role cards
+  skills/**                  11 skill files
+  config/{team,skills,budgets}.yaml
+prisma/schema.prisma         40 Postgres models
+scripts/                     checks, proofs, backfills, standalone assembly
+deploy/                      legacy VM deployment scripts (SQLite-era; unmaintained)
 ```
 
-## 4. 数据模型速记（26 models）
+---
 
-| 分区 | 模型 |
+## 4. Data model in one page
+
+`prisma/schema.prisma` — Postgres, 40 models, no JSON columns (JSON is a `String`), no
+enums (statuses are `String` fields with inline comments).
+
+| Area | Models |
 |---|---|
-| 正文 | `Novel` · `Chapter`（含 brief 章细纲）· `ChapterVersion`（稿N 快照）· `ChapterReview` |
-| 世界书 | `WorldGroup`（二级分组）· `WorldEntry` |
-| 人物 | `Character`（含 aliases）· `CharacterState`（沉淀）· `CharacterArc`（账本） |
-| 大纲 | `Volume`（卷规划）· `OutlineBeat`（故事骨架） |
-| 契约/构想 | `NovelContract` · `Novel.conceptSnapshot`（创建时由向导写入） |
-| 账本（5 本） | `Storyline` · `TimelineEntry` · `CharacterArc` · `StoryPromise`（承诺）· `StoryClue`（线索） |
-| 记忆沉淀 | `ChapterDigest` · `StoryFact`（9 类 category）· `CharacterState` · `Foreshadow` |
-| 草稿区 | `ChapterPack`（kind: material 材料包 / prep 定稿准备，按 chapterIndex 键控） |
-| Agent | `AgentRun` · `AgentTask` · `AgentEvent` · `SkillInvocation` |
-| 不可变层 | `AssetVersion`（非正文资产 reopen/finalize/manual 快照） |
+| Identity | `User` (Firebase subject; the app never writes it) |
+| Body | `Novel` · `Chapter` (`draft` / `revised` / `final`) · `ChapterVersion` · `ChapterReview` |
+| Bible | `Character` · `WorldGroup` · `WorldEntry` |
+| Outline | `Volume` · `OutlineBeat` |
+| Contract | `NovelContract` (+ `Novel.conceptSnapshot`) |
+| Ledgers | `Storyline` · `TimelineEntry` · `CharacterArc` · `StoryPromise` · `StoryClue` |
+| Memory | `ChapterDigest` · `StoryFact` · `CharacterState` · `Foreshadow` |
+| Draft area | `ChapterPack` (`material` / `prep`) |
+| Agent | `AgentRun` · `AgentTask` · `AgentEvent` · `AgentMessage` · `ContextSummary` · `SkillInvocation` |
+| Immutable layer | `AssetVersion` |
+| Usage/credits | `UsageCall` · `UsageProvenance` · `UsageDaily` · `UsageInvoice` · `CreditAccount` · `CreditLedger` |
+| Legacy | `TeamAgent` · `TeamConversation` · `TeamMessage` · `TeamTask` · `TeamTaskLog` · `TeamTurnLog` — no route, UI or runtime code uses them |
 
- canon 状态约定：正文用 `draft|revised|final`；非正文资产用 `draft|final`（账本两表叫 `lock`，避免与线程生命周期 `status` 混淆）。
+Ownership rules, in the order the extension applies them (`src/lib/db.ts`):
 
-## 5. Agent 运行时速记
+1. a model with a scalar `userId` → filtered by `userId`;
+2. a model with a scalar `novelId` → filtered by the caller's owned novel ids;
+3. indirect models (`AgentTask`, `AgentEvent`, `AgentMessage`, `ContextSummary`,
+   `SkillInvocation`, `TeamMessage`, `TeamTaskLog`) → filtered through their run;
+4. `UNFILTERED_MODELS = ["User", "TeamAgent"]` are exempt;
+5. anything else → **fail closed**.
 
-- **五角色**：Atlas（leader/策划）· Sage（执笔）· Prism（审读）· Nova（查询/研究）· Forge（库卫生/导出）；注册表 `agent/config/team.yaml`，工具面白名单在 runtime 的 `MEMBER_TOOLS`
-- **流程**：作者在对话框下 goal（可 Pin 上下文）→ 章节被 Pin 时自动先跑 **Task 0 影响评估**（只读）→ Atlas 拆解派单（CODE 派单，verified 结果回灌）→ 成员执行（bounded 工具循环）→ 写入门 → 审批门（approval 模式暂停，批准由**代码**提交）→ 写后核验（修复轮 ≤2）→ 终报核验
-- **双模式**：`approval`（默认，写操作等作者批准）/ `full_access`（连续执行，仍受写闸与核验约束）
-- **流式**：`GET /api/agent/runs/[id]/events`（SSE），前端 `use-agent-run.ts`
-- 改 runtime 提示词行为时，**先改 `agent/` 内容层，不要硬编码进 runtime**；魔法数进 `budgets.yaml`
+Creates are stamped with the caller's `userId` and require an identity. Scripts and
+background jobs use `withUser(uid, isAdmin, fn)`.
 
-## 6. 常见任务配方
+---
 
-**加一个 schema 字段**：改 `prisma/schema.prisma` → `bun run db:push`（全增量，别删列）→ 同步 `src/lib/novara/types.ts` + `schemas.ts`（zod）→ 需要进备份的话补 `backup-schema.ts`。
+## 5. The agent runtime
 
-**加一个 API**：参考 `src/app/api/packs/[id]/route.ts` 的形态——`parseBody` + zod + canon 检查（若该资产有 status 字段，final 时 409/reopen 语义必须对齐 asset-gate）。
+`src/lib/agent/runtime.ts` (3582 lines) is the orchestrator. The content layer lives in
+`agent/` and is loaded by `src/lib/novara/content.ts`.
 
-**加一个左树分区/行**：左树只有两种行——文件夹（展开）与文档（打开）。新行先加进 `lib/novara/doc-tree.ts` 的 `buildDocTree`（文件夹 id 固定 `f:<name>`，文档 id 固定 `<DocKind>:<ref>`），再在 `lib/novara/doc-markdown.ts` 注册同名渲染器（`DOC_RENDERERS`），最后跑 `bun scripts/check-doc-tree.ts`（校验 id 唯一、每个文档都有渲染器、空文件夹必须带 badge）。渲染与搜索过滤在 `components/novara/writer/doc-tree-panel.tsx`。
+### 5.1 Roles and tools
 
-**加一个向导 section**：`/api/ai/wizard` 的 zod enum + switch 加分支 → `api.ts` 的 `WizardSection` → 向导 UI 加 textarea + GenerateButton → 需要结构化落库则加 `wizard-parse.ts` 解析器（容错式：解析不出的行不能静默丢弃）。
+`MEMBER_TOOLS` (`runtime.ts:1355-1361`) is the allow-list; `toolAllowedFor`
+(`runtime.ts:1367`) rejects a call **before** it has any effect, so the gate cannot be
+bypassed by a prompt.
 
-**动写闸/审读/QC 之前**：先读对应文件头注释里的设计契约；这三块是全系统的诚信底座，改动必须跑 `bun run lint` + 浏览器 E2E（走一遍 审批→写入→审读→定稿）。
+| Role | Tools |
+|---|---|
+| **atlas** | `read_novel`, `read_chapter`, `read_outline`, `read_foreshadows`, `read_promises`, `memory_query`, `doctor_scan` |
+| **sage** | the read tools, `doctor_scan`, `create_chapter`, `update_chapter`, `update_outline_beat`, `update_ledger`, `finish` |
+| **nova** | the read tools only |
+| **prism** | the read tools, `doctor_scan`, `review_chapter`, `finalize_chapter`, `settle_chapter`, `update_ledger`, `finish` |
+| **forge** | the read tools, `doctor_scan`, `export_markdown`, `finish` |
 
-## 7. 命令与红线
+Full tool catalogue (16): `read_novel`, `read_chapter`, `read_outline`,
+`read_foreshadows`, `read_promises`, `memory_query`, `doctor_scan`, `update_ledger`,
+`review_chapter`, `finalize_chapter`, `settle_chapter`, `export_markdown`,
+`create_chapter`, `update_chapter`, `update_outline_beat`, `finish`.
+
+`settle_chapter` is idempotent and stays callable, but it is **not** load-bearing:
+`finalize_chapter` already settles. The Atlas skill card still mentions `settle_chapter`
+— that text is stale.
+
+### 5.2 Run lifecycle
+
+1. `POST /api/agent/runs` — validates the goal (3–2000 chars), the mode
+   (`approval | full_access`), the model and the thinking level, checks the credit
+   balance, and starts the executor out of band.
+2. **Lease**: the executor claims `leaseOwner` + `leaseEpoch` and renews it every 10 s;
+   losing the lease aborts the run without further writes (`runtime.ts:1244-1308`).
+3. Atlas plans, emits ` ```team-delegate ` orders; each order becomes an `AgentTask`
+   executed **sequentially**.
+4. Each member runs a bounded tool loop (≤ 3 turns, ≤ 3 actions per turn) and must end
+   with a ` ```run-report ` block (`agent/skills/shared/output-contract.md`).
+5. Writes pause for approval. `decideApproval` (`runtime.ts:617-733`) **commits in code**,
+   re-checks the final lock at commit time and creates the `ChapterVersion`; the paused
+   executor re-verifies the database instead of trusting the handler.
+6. After the write: verify, then up to 2 repair rounds (`runtime.ts:2654-2712`). A task
+   whose write cannot be verified is `failed`.
+7. The final report compares claimed vs measured counters and lists mismatches as
+   blocking issues.
+
+SSE: `GET /api/agent/runs/[id]/events` — a snapshot every 1200 ms, a heartbeat every 15 s. The browser opens it with `fetch()` + a bearer token (not `EventSource`) and falls back to 2 s polling (`src/lib/novara/agent-client.ts:143`).
+
+### 5.3 Budgets
+
+Runtime limits live in `agent/config/budgets.yaml` (schema and fallbacks in
+`src/lib/novara/content.ts:50-198`); the lease-renewal interval is the exception — `LEASE_RENEW_MS = 10_000` in `src/lib/agent/messages.ts:48`. Values: `maxTurns: 3`, `leaderMaxTurns: 22`,
+`planMaxTasks: 44`, `chapterContextChars: 24000`, `repairRounds: 2`,
+`sedimentWindowChars: 4000` with `sedimentWindowOverlapChars: 800`,
+`memory.topK: 14` with `contextBudgetChars: 2600`, `qc.approvalWaitMs: 1800000`,
+`prompt.systemPromptCapChars: 8000`. `team.yaml` and `skills.yaml` are fail-fast;
+`budgets.yaml` degrades to defaults. A few declared keys are never read
+(`ai.routeMaxDuration`, `ai.chapterTailChars`, `ai.snapshotFactsLimit`,
+`client.fallbackPollMs`) — do not rely on them.
+
+---
+
+## 6. Coding conventions
+
+- **TypeScript, strict.** The build is the type gate: `next.config.ts` deliberately has
+  no `typescript.ignoreBuildErrors`. Run `npx tsc --noEmit` before you claim done.
+- **Styling**: Tailwind v4 utility classes, `cn()` from `src/lib/utils.ts` for
+  conditional classes, shadcn/ui primitives from `src/components/ui/`. No CSS-in-JS, no
+  new component library.
+- **API routes**: `parseBody` + a zod schema + `jsonError`; ownership comes from the
+  Prisma extension; canon checks call the gate helpers (`write-gate.ts`, `asset-gate.ts`)
+  instead of testing `status` inline.
+- **Database**: use `db` from `src/lib/db.ts`; interactive transactions with
+  `db.$transaction(async (tx) => …)`; call `await warmIdentity()` **before** opening an
+  interactive transaction (see §9).
+- **AI**: one call site — `src/lib/ai/chat.ts`. It needs an identity for the credit
+  ledger, enforces the provider allowlist and retries with backoff. Provider adapters
+  live in `src/lib/ai/providers/`; the model registry is
+  `src/lib/ai/providers/registry.ts` + `src/lib/novara/models.ts`.
+- **Comments and reports in English.** The `agent/` content layer is English (Chinese
+  appears only inside quoted example prose).
+- **Files**: UTF-8, CRLF in the working tree (`core.autocrlf=true`). Never round-trip a
+  source file through PowerShell `Get-Content`/`WriteAllLines` without `-Encoding UTF8` —
+  that silently corrupts every non-ASCII character. Use the editor tools.
+
+---
+
+## 7. Task recipes
+
+### Add a schema field
+
+1. Edit `prisma/schema.prisma` (additive only; never drop a column).
+2. `bun run db:generate`, then `bun run db:push` (or a migration when `DIRECT_URL` is
+   available: `bun run db:migrate:new`).
+3. Update `src/lib/novara/types.ts` and `src/lib/novara/schemas.ts` (zod) and the
+   backup schema if the field must survive an export.
+4. Re-check ownership: a new model needs an ownership rule, otherwise every query on it
+   throws. `bun run db:check:ownership`.
+
+### Add an API route
+
+Follow `src/app/api/novels/[id]/route.ts`: `parseBody` + zod + `jsonError`; read through
+`db` (ownership is automatic); never expose a `userId` from the client; if the route
+mutates canon, call the gate helper.
+
+### Add a row to the document tree
+
+The tree has exactly two row kinds: a folder (`id: f:<name>`) and a document
+(`id: <DocKind>:<ref>`).
+
+1. Add the row in `src/lib/novara/doc-tree.ts` (`buildDocTree`).
+2. Register the renderer in `src/lib/novara/doc-markdown.ts` (`DOC_RENDERERS`) — a
+   document without a renderer is a bug the tree check catches.
+3. Run `bun scripts/check-doc-tree.ts` (unique ids, renderer per document, no
+   unexplained empty folder).
+
+### Add a wizard section
+
+`src/app/api/ai/wizard` (zod enum) → `src/lib/novara/api.ts` (`WizardSection`) → the
+wizard UI in `src/components/novara/writer/create-wizard.tsx`. A parsed field may not be
+silently dropped (`src/lib/novara/wizard-parse.ts`).
+
+### Add or change an agent tool
+
+1. Declare it in `src/lib/agent/tool-protocol.ts`.
+2. Implement it in `executeTool` (`src/lib/agent/runtime.ts:2849`) and add it to the
+   role allow-lists in `MEMBER_TOOLS` — a tool no role may call is dead.
+3. If it writes, it must respect the write gate, the canon lock and the credit path.
+4. If it changes a counter, update `Measured` **and** `deriveMeasuredFromEvents` so the
+   audit can rebuild it from the event log.
+
+### Change agent behaviour
+
+Change the content layer (`agent/system/*.md`, `agent/skills/**`), not the runtime. Magic
+numbers belong in `agent/config/budgets.yaml`.
+
+### Add a check
+
+Put it in `scripts/` as a `*.ts` script that exits non-zero on failure, and wire it into
+`package.json` if it must run in CI. The Cloud Build lint step (`cloudbuild.run.yaml`) is
+the only gate that blocks a deploy today.
+
+---
+
+## 8. Commands
 
 ```bash
-bun run dev        # 开发服务器（固定 3000 端口，日志 tee 到 dev.log）
-bun run lint       # ESLint，提交前必须全绿
-bun run db:push    # schema 增量推送（本项目用 push，不用 migrate dev）
-bun run db:generate
+bun run dev                  # dev server on :3000
+bun run lint                 # eslint . — must be green before a commit
+npx tsc --noEmit             # type check (the build also type-checks)
+bun run db:generate          # prisma generate
+bun run db:push              # prisma db push (additive)
+bun run db:check:ownership   # every model has exactly one ownership rule
+bun run check:credits        # every provider call has a charge path
+bun scripts/check-doc-tree.ts # document-tree invariants
+bun run verify:auth          # authFetch: token attach, 401 refresh, signed-out
 ```
 
-红线：不要 `next build`（本环境只跑 dev）；不要把 AI SDK 用进客户端；不要新增 page 路由；不要绕过写闸新开写入口；不要让树/Memory 面板出现"数据存在但看不见"的分区（宁显未分组，不藏数据）。
+Run only the checks the project defines, once each, at the end of a change.
+
+---
+
+## 9. Edge cases that bite
+
+- **P2028 "Transaction already closed"** — the identity cache is empty when the
+  transaction starts, so the first query inside it uses a pooled connection that Neon
+  (pooler `connection_limit=1`) cannot serve concurrently. Call `await warmIdentity()`
+  **before** `db.$transaction`.
+- **Never call the model inside a transaction.** The sediment extraction is the classic
+  case: extract first (outside), then write (inside). An interactive transaction has a
+  5 s default timeout and holds a pooled connection.
+- **The middleware deletes client headers.** `x-novara-uid` and `x-novara-admin` sent by
+  a browser are stripped; the verified Firebase uid is injected instead. A route that
+  trusts those headers is a security hole.
+- **Creates need an identity.** A create outside a request (script, cron) has no
+  `userId` to stamp — wrap it in `withUser(uid, isAdmin, fn)`.
+- **`finish` is in the role allow-lists** even though the Atlas comment says writes are
+  Sage-only; the allow-list is the source of truth.
+- **The mock agent never runs**: `src/lib/novara/agent-client.ts` keeps it as a rollback
+  adapter, but `AGENT_BACKEND` is the hard-coded constant `"live"`, so the mock path is
+  never exercised.
+- **The dark palette is unreachable** — nothing adds the `dark` class and
+  `src/components/ui/sonner.tsx` (the only `next-themes` consumer) is never imported.
+- **`deploy/` and `cloudbuild.yaml` are the legacy SQLite-era path**
+  (`DATABASE_URL=file:/data/custom.db`, `sqlite3 .backup`) and contradict the Postgres
+  schema. The live path is `cloudbuild.run.yaml` → Cloud Run `novara`
+  (`asia-southeast1`). Do not copy the legacy scripts' database assumptions.
+- **The import path validates only `integrity.chapterCount` and `totalWords`** — a
+  hand-edited backup with a correct integrity block is not detected.
+- **`ChapterReview` is append-only**; the gates always read the latest review for a
+  chapter.
+- **Memory projection write rules are not symmetric**: digests upsert by chapter,
+  character states are replaced per chapter index, facts dedupe on
+  (novelId, category, content) and only move `lastSeenChapter`, foreshadows dedupe on
+  (content, plantChapter). A "changed" fact becomes a new row; there is no supersede
+  field.
+- **The author's `PATCH /api/chapters/[id]` can still set `status: "final"`** without a
+  projection. Only the runtime couples them. If you touch that route, think about it
+  explicitly rather than copying the pattern.
+- **Some `src/lib/novara/api.ts` helpers and API routes have no UI caller** (the manual
+  editors for characters, world entries, beats, volumes, ledger rows and packs lost
+  their entry point when the artifact pane became the document pane). Before deleting
+  such a helper, grep for it; before adding a UI for it, remember the document tree's
+  "read-only projection" rule.
+
+---
+
+## 10. Where the truth lives
+
+| Question | Source of truth |
+|---|---|
+| What a role may do | `MEMBER_TOOLS` in `src/lib/agent/runtime.ts` |
+| What the model is told | `agent/system/*.md`, `agent/skills/**`, loaded by `src/lib/novara/content.ts` |
+| What the numbers are | `agent/config/budgets.yaml` + the fallbacks in `content.ts` |
+| Whether a chapter may be finalized | `src/lib/novara/qc.ts` + the persisted `ChapterReview` |
+| How memory is written | `src/lib/novara/sediment.ts` |
+| How memory is recalled | `src/lib/novara/memory.ts` |
+| Who may read what | `src/lib/db.ts` (the ownership extension) |
+| What the database contains | `prisma/schema.prisma` |
+| How it is deployed | `cloudbuild.run.yaml`, `Dockerfile` |
+| How it looks and works | `README.md` + the UI code under `src/components/novara/` |
+
+Do not create additional Markdown files for notes; `README.md` and `AGENTS.md` are the
+documentation of record.
