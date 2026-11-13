@@ -186,6 +186,16 @@ export interface SedimentOutcome {
   factsTouched: number;
   /** STEP 72 — live rows retired (superseded by a newer subject, or a paid loop). */
   factsRetired: number;
+  /**
+   * STEP 80 — the chapter's OWN facts retired at the start of the projection
+   * (the replacement rule: a re-finalize replaces, it never adds).
+   */
+  factsRetiredBySource: number;
+  /**
+   * STEP 80 — retired own rows brought back to live by the extraction (the
+   * same fact, re-used instead of duplicated).
+   */
+  factsReused: number;
   /** STEP 72 — character_state facts NOT written (the CharacterState table has them). */
   characterStateFactsSkipped: number;
   /** STEP 72 — rot-prone facts with no subject: they stay live (no guess). */
@@ -611,6 +621,33 @@ export async function writeSedimentProjection(
   let factsRetired = 0;
   let characterStateFactsSkipped = 0;
   let subjectlessFacts = 0;
+
+  // STEP 80 — REPLACEMENT, NOT ADDITION.
+  //
+  // Re-finalizing a chapter must not leave its old facts live next to the
+  // new ones: STEP 79's own probe showed a no-op re-finalize growing the
+  // pool by 24% (25 → 31 rows for one chapter with no text change).
+  //
+  // Every live fact whose SOURCE is this chapter is retired HERE, inside the
+  // caller's transaction — the finalize path flips the status, retires and
+  // writes in one atomic unit, so a crash can never leave a chapter final
+  // with its old facts retired and its new facts missing. A failed model
+  // call never reaches this point at all (the extraction runs before the
+  // transaction), so a failed settle writes nothing.
+  //
+  // The retired rows are not thrown away: they are the REUSE POOL below.
+  // The extraction re-uses the row that carries the same fact (exact
+  // content) or the row that is a near-duplicate of it (the STEP 72
+  // token-overlap rule), so an identical re-finalize leaves the live count
+  // exactly where it was instead of doubling it.
+  const ownFacts = await retireOwnFacts(tx, novelId, chapterIndex);
+  const factsRetiredBySource = ownFacts.count;
+  let factsReused = 0;
+  const reusePool = new Map<string, (typeof ownFacts.rows)[number]>();
+  for (const row of ownFacts.rows) {
+    reusePool.set(ownFactKey(row.category, row.content), row);
+  }
+
   for (const fact of facts) {
     if (fact.category === "character_state") {
       // The STATE lines carry this; the CharacterState table holds it.
@@ -657,6 +694,38 @@ export async function writeSedimentProjection(
       continue;
     }
 
+    // STEP 80 — the row THIS CHAPTER wrote last time, retired by the
+    // replacement above. If the extraction says the SAME thing, the row
+    // comes back to life instead of a second copy being written.
+    const poolKey = ownFactKey(fact.category, fact.content);
+    const pooled = reusePool.get(poolKey);
+    if (pooled) {
+      reusePool.delete(poolKey);
+      await tx.storyFact.update({
+        where: { id: pooled.id },
+        data: {
+          retiredAt: null,
+          lastSeenAt: new Date(),
+          lastSeenChapter: chapterIndex,
+          // The model named the subject now — adopt it (an old row written
+          // before the subject existed gets one).
+          ...(subject && !pooled.subject ? { subject } : {}),
+        },
+      });
+      factsReused += 1;
+      factsTouched += 1;
+      // The row we just brought back is the live line for this subject.
+      if (subject && rotProne) {
+        factsRetired += await retireSuperseded(tx, {
+          novelId,
+          category: fact.category,
+          subject,
+          keepId: pooled.id,
+        });
+      }
+      continue;
+    }
+
     // STEP 72 — the NEAR-DUPLICATE reinforcement (rot-prone categories).
     //
     // The same fact, reworded by a later extraction, must not become a
@@ -670,15 +739,23 @@ export async function writeSedimentProjection(
     if (rotProne) {
       const candidates = await tx.storyFact.findMany({
         where: { novelId, category: fact.category, retiredAt: null },
-        select: { id: true, content: true, subject: true },
+        select: { id: true, category: true, content: true, subject: true },
       });
-      const near = candidates.filter(
+      // STEP 80 — the chapter's own retired rows join the candidate list: a
+      // fact the model REWORDED must merge into the row this chapter already
+      // owns, not become a third copy.
+      const poolCandidates = [...reusePool.values()].filter(
+        (r) => r.category === fact.category
+      );
+      const poolIds = new Set(poolCandidates.map((r) => r.id));
+      const near = [...candidates, ...poolCandidates].filter(
         (c) => similarity(c.content, fact.content) >= NEAR_DUPLICATE_THRESHOLD
       );
       if (near.length > 0) {
         let best = near[0];
         for (const c of near) if (c.content.length > best.content.length) best = c;
         const keepNew = fact.content.length > best.content.length;
+        const fromPool = poolIds.has(best.id);
         await tx.storyFact.update({
           where: { id: best.id },
           data: {
@@ -687,10 +764,19 @@ export async function writeSedimentProjection(
             lastSeenChapter: chapterIndex,
             // The newer extraction's name for the thing wins the grouping.
             ...(subject ? { subject } : {}),
+            // STEP 80 — the row comes back to live: the replacement.
+            ...(fromPool ? { retiredAt: null } : {}),
           },
         });
+        if (fromPool) {
+          reusePool.delete(ownFactKey(best.category, best.content));
+          factsReused += 1;
+        }
         for (const c of near) {
           if (c.id === best.id) continue;
+          // STEP 80 — a pool row is already retired; retiring it again would
+          // count it twice.
+          if (poolIds.has(c.id)) continue;
           await tx.storyFact.update({
             where: { id: c.id },
             data: { retiredAt: new Date() },
@@ -823,11 +909,18 @@ export async function writeSedimentProjection(
   // the rot this rule removes. Retired, not deleted — the trail stays.
   factsRetired += await retireCategory(tx, novelId, "character_state");
 
+  // STEP 80 — the net effect of the replacement: the rows that were retired
+  // by source and did NOT come back. A row that came back and was retired
+  // again in the same projection is counted by the counter that retired it.
+  factsRetired += factsRetiredBySource - factsReused;
+
   return {
     digestSummary: digest.summary,
     factsCreated,
     factsTouched,
     factsRetired,
+    factsRetiredBySource,
+    factsReused,
     characterStateFactsSkipped,
     subjectlessFacts,
     characterStates: characterStates.length,
@@ -884,6 +977,45 @@ export async function retireSuperseded(
     data: { retiredAt: new Date() },
   });
   return rows.length;
+}
+
+/**
+ * STEP 80 — the replacement rule: retire every LIVE fact whose SOURCE is
+ * this chapter, and hand the retired rows back so the projection can re-use
+ * them instead of writing a second copy.
+ *
+ * The source column is the chapter INDEX (StoryFact.sourceChapter). Only
+ * facts this chapter wrote are touched — a fact sourced from another chapter
+ * is never retired here, so the STEP 72 supersede (by category + subject)
+ * keeps working across chapters.
+ *
+ * Called INSIDE the caller's transaction: with the finalize path it is the
+ * same transaction that flips the status, so the chapter can never become
+ * final with its old facts retired and its new facts missing.
+ */
+export async function retireOwnFacts(
+  tx: SedimentTx,
+  novelId: string,
+  chapterIndex: number
+): Promise<{
+  rows: { id: string; category: string; content: string; subject: string | null }[];
+  count: number;
+}> {
+  const rows = await tx.storyFact.findMany({
+    where: { novelId, sourceChapter: chapterIndex, retiredAt: null },
+    select: { id: true, category: true, content: true, subject: true },
+  });
+  if (rows.length === 0) return { rows: [], count: 0 };
+  await tx.storyFact.updateMany({
+    where: { id: { in: rows.map((r) => r.id) } },
+    data: { retiredAt: new Date() },
+  });
+  return { rows, count: rows.length };
+}
+
+/** STEP 80 — the reuse-pool key: one fact is (category, content). */
+function ownFactKey(category: string, content: string): string {
+  return `${category}\u0000${content}`;
 }
 
 /**

@@ -27,6 +27,10 @@
 
 import { db } from "@/lib/db";
 import { getBudgets } from "@/lib/novara/content";
+import {
+  NEAR_DUPLICATE_THRESHOLD,
+  similarityTokens,
+} from "@/lib/novara/sediment-windows";
 import type { MemoryCategory, MemoryItem } from "@/lib/novara/agent-types";
 
 // Category weights — plot-critical memory floats to the top.
@@ -652,8 +656,72 @@ export interface NovelMemorySyncReport {
     unsynced: number;
     /** Indexes of the unsynced final chapters, ascending. */
     unsyncedIndexes: number[];
+    /**
+     * STEP 80 — the live facts of the novel (retiredAt === null).
+     */
+    liveFacts: number;
+    /** STEP 80 — the retired facts of the novel (the trail of the replacements). */
+    retiredFacts: number;
+    /**
+     * STEP 80 — live facts with NO source chapter: they cannot be attributed
+     * to a chapter, so a chapter's replacement can never reach them.
+     */
+    unlinkedFacts: number;
+    /**
+     * STEP 80 — the share of LIVE facts that are a near-duplicate of another
+     * live fact (same category, token overlap >= NEAR_DUPLICATE_THRESHOLD —
+     * the STEP 72 rule). 0 = every live fact is distinct.
+     */
+    duplicateRate: number;
+    /** STEP 80 — live facts per FINAL chapter (0 when nothing is final). */
+    factsPerFinalizedChapter: number;
   };
   generatedAt: string;
+}
+
+/**
+ * STEP 80 — the share of live facts that are a near-duplicate of ANOTHER live
+ * fact.
+ *
+ * The rule is the STEP 72 one, unchanged: same category, token overlap >=
+ * NEAR_DUPLICATE_THRESHOLD (CJK character bigrams + lowercased latin words,
+ * the overlap coefficient — the same function the projection merges with).
+ * Facts of different categories are never compared: a decision and a world
+ * rule are different kinds of fact, not duplicates.
+ *
+ * The token sets are computed once per fact (the comparison is quadratic in
+ * the live pool, but the pool is small — the agent reads the top 14 anyway).
+ */
+function duplicateRateOf(
+  rows: { id: string; category: string; content: string }[]
+): number {
+  if (rows.length === 0) return 0;
+  const byCategory = new Map<string, typeof rows>();
+  for (const row of rows) {
+    const list = byCategory.get(row.category) ?? [];
+    list.push(row);
+    byCategory.set(row.category, list);
+  }
+  const duplicateIds = new Set<string>();
+  for (const list of byCategory.values()) {
+    if (list.length < 2) continue;
+    const tokens = list.map((row) => similarityTokens(row.content));
+    for (let i = 0; i < list.length; i += 1) {
+      for (let j = i + 1; j < list.length; j += 1) {
+        const a = tokens[i];
+        const b = tokens[j];
+        if (a.size === 0 || b.size === 0) continue;
+        let shared = 0;
+        for (const token of a) if (b.has(token)) shared += 1;
+        const overlap = shared / Math.min(a.size, b.size);
+        if (overlap >= NEAR_DUPLICATE_THRESHOLD) {
+          duplicateIds.add(list[i].id);
+          duplicateIds.add(list[j].id);
+        }
+      }
+    }
+  }
+  return duplicateIds.size / rows.length;
 }
 
 /**
@@ -671,7 +739,7 @@ export async function buildMemorySyncReport(
     select: { id: true, index: true, status: true },
   });
 
-  const [digestRows, factGroups, stateGroups, plantGroups] = await Promise.all([
+  const [digestRows, factGroups, stateGroups, plantGroups, liveFactRows] = await Promise.all([
     // One row per settled chapter (chapterId is @unique).
     db.chapterDigest.findMany({
       where: { novelId },
@@ -695,7 +763,18 @@ export async function buildMemorySyncReport(
       where: { novelId },
       _count: { _all: true },
     }),
+    // STEP 80 — the live facts themselves: the health metrics are computed
+    // over the LIVE pool (the retired rows are the trail, not the memory).
+    db.storyFact.findMany({
+      where: { novelId, retiredAt: null },
+      select: { id: true, category: true, content: true, sourceChapter: true },
+    }),
   ]);
+
+  // STEP 80 — the retired rows (the trail of every replacement).
+  const retiredFactCount = await db.storyFact.count({
+    where: { novelId, retiredAt: { not: null } },
+  });
 
   const digestChapterIds = new Set<string>(digestRows.map((d) => d.chapterId));
 
@@ -745,6 +824,11 @@ export async function buildMemorySyncReport(
   const finalRows = rows.filter((row) => row.status === "final");
   const unsyncedFinalRows = finalRows.filter((row) => !row.synced);
 
+  // STEP 80 — the memory-health metrics.
+  const liveFacts = liveFactRows.length;
+  const unlinkedFacts = liveFactRows.filter((f) => f.sourceChapter === null).length;
+  const duplicateRate = duplicateRateOf(liveFactRows);
+
   return {
     novelId,
     chapters: rows,
@@ -756,6 +840,12 @@ export async function buildMemorySyncReport(
       unsyncedIndexes: unsyncedFinalRows
         .map((row) => row.index)
         .sort((a, b) => a - b),
+      liveFacts,
+      retiredFacts: retiredFactCount,
+      unlinkedFacts,
+      duplicateRate,
+      factsPerFinalizedChapter:
+        finalRows.length === 0 ? 0 : liveFacts / finalRows.length,
     },
     generatedAt: new Date().toISOString(),
   };

@@ -219,7 +219,7 @@ script or background job uses `withUser(uid, isAdmin, fn)`.
 |---|---|
 | `ChapterDigest` | upsert by `chapterId` |
 | `CharacterState` | delete + recreate per `chapterIndex` |
-| `StoryFact` | dedupe on (novelId, category, content); near-duplicates (similarity ≥ 0.45) are merged and the losers retired; rot-prone categories are reinforced instead of duplicated |
+| `StoryFact` | a re-finalize **replaces** the chapter's own facts: every live fact with `sourceChapter === chapterIndex` is retired, then the chapter's own rows are reused (exact content, or a ≥ 0.45 near-duplicate) instead of inserted again; facts sourced from other chapters are untouched; on top of that facts dedupe on (novelId, category, content) and rot-prone categories are reinforced instead of duplicated |
 | `Foreshadow` | dedupe on (content, plantChapter) |
 
 Long chapters are extracted in overlapping, sentence-aligned windows
@@ -227,13 +227,22 @@ Long chapters are extracted in overlapping, sentence-aligned windows
 before the single projection. Promise/clue transitions are forward-only
 (`src/lib/novara/open-loops.ts`).
 
+Re-finalizing a chapter therefore **replaces** its facts instead of accumulating them. The
+retirement sits inside the same transaction as the status flip
+(`src/lib/novara/lifecycle.ts` → `writeSedimentProjection`), so a chapter can never be
+final with its old facts retired and its new facts missing; the rows that the extraction
+reproduces are un-retired and reused, so the live count does not grow.
+
 ### 5.3 Memory retrieval
 
 `src/lib/novara/memory.ts` scores the settled pool —
 `score = category weight × relevance × recency` — and renders a budgeted prompt block
 ("STORY MEMORY" + "STORY FAR"), capped at `topK` items and `contextBudgetChars`.
 `buildMemoryView` also produces the deterministic doctor findings; `buildMemorySyncReport`
-produces the per-chapter sync rows served by `GET /api/novels/[id]/memory/status`.
+produces the per-chapter sync rows served by `GET /api/novels/[id]/memory/status`, together
+with the pool health counters `liveFacts`, `retiredFacts`, `unlinkedFacts`, `duplicateRate`
+(the share of live facts that are a ≥ 0.45 near-duplicate of another live fact, compared
+within a category) and `factsPerFinalizedChapter`.
 
 ---
 

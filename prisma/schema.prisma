@@ -505,6 +505,9 @@ model StoryFact {
 
   @@index([novelId, category])
   @@index([novelId, subject])
+  // STEP 80 — the replacement rule retires a chapter's own facts by source
+  // chapter; this index is the query that finds them.
+  @@index([novelId, sourceChapter])
 }
 
 model CharacterState {

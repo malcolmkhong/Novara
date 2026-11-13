@@ -374,6 +374,11 @@ Run only the checks the project defines, once each, at the end of a change.
   the status and writes the transition row. A finalize is the only move that writes
   memory: a chapter finalize projects it (the extraction runs outside the transaction),
   a canon finalize retires the facts that name it by `(category, subject)`.
+- **A re-finalize REPLACES a chapter's facts, it does not accumulate them.** The
+  projection retires every live fact whose `sourceChapter` is that chapter and reuses the
+  chapter's own rows (exact content, or a ≥ 0.45 near-duplicate) instead of inserting new
+  ones — the retirement runs inside the finalize transaction, next to the status flip.
+  Facts sourced from other chapters are never touched by it.
 - **Some `src/lib/novara/api.ts` helpers and API routes have no UI caller** (the manual
   editors for characters, world entries, beats, volumes, ledger rows and packs lost
   their entry point when the artifact pane became the document pane). Before deleting
@@ -392,6 +397,7 @@ Run only the checks the project defines, once each, at the end of a change.
 | Whether a chapter may be finalized | `src/lib/novara/qc.ts` + the persisted `ChapterReview` |
 | Whether an asset may be edited | `src/lib/novara/lifecycle.ts` (the `draft` / `final` rule) |
 | How memory is written | `src/lib/novara/sediment.ts` |
+| How healthy the memory pool is | `GET /api/novels/[id]/memory/status` (the counters in `src/lib/novara/memory.ts`) |
 | How memory is recalled | `src/lib/novara/memory.ts` |
 | Who may read what | `src/lib/db.ts` (the ownership extension) |
 | What the database contains | `prisma/schema.prisma` |
