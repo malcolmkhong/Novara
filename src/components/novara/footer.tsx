@@ -1,7 +1,7 @@
 "use client";
 
-import { PenLine } from "lucide-react";
 import { BRAND } from "@/config/novara";
+import { BrandMark } from "./brand-logo";
 
 interface FooterProps {
   onEnterWriter: () => void;
@@ -16,8 +16,8 @@ export function Footer({ onEnterWriter }: FooterProps) {
         <div className="grid gap-10 md:grid-cols-4">
           <div className="space-y-3">
             <div className="flex items-center gap-2.5">
-              <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary text-primary-foreground">
-                <PenLine className="h-4 w-4" aria-hidden="true" />
+              <span className="flex h-8 w-8 items-center justify-center">
+                <BrandMark className="h-8 w-8" />
               </span>
               <span className="font-display text-xl font-bold">
                 {BRAND.name}

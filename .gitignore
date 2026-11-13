@@ -78,3 +78,16 @@ prompt
 server.log
 # Skills directory
 /skills/
+
+# Design-tool scratch (STEP 78 triage): never commit.
+# Nothing under src/ references these paths.
+Untitled Project/
+homepageanimation/
+# One-off design captures and helper scripts, not application assets.
+public/_look-*.png
+public/_look-*.jpg
+public/_plate-*.png
+public/_plate-*.jpg
+public/_sheet.html
+scripts/.tmp-*.cjs
+scripts/.opt.json

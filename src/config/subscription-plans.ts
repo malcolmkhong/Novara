@@ -132,8 +132,28 @@ export function getPlan(id: string): SubscriptionPlan | undefined {
   return SUBSCRIPTION_PLANS.find((p) => p.id === id);
 }
 
-export function formatPrice(plan: SubscriptionPlan): string {
-  return plan.monthlyPrice === 0 ? "$0" : `$${plan.monthlyPrice}`;
+/** Which billing period a price is quoted for. Annual pricing is display-only
+    — the payment gateway still does not exist. */
+export type BillingCycle = "monthly" | "annual";
+
+export function formatPrice(
+  plan: SubscriptionPlan,
+  cycle: BillingCycle = "monthly",
+): string {
+  if (plan.monthlyPrice === 0) return "$0";
+  if (cycle === "monthly") return `$${plan.monthlyPrice}`;
+  // Annual is charged as ten monthly payments, shown as the equivalent
+  // monthly rate so the saving is legible at a glance.
+  return `$${Math.round((plan.monthlyPrice * 10) / 12)}`;
+}
+
+/** The yearly amount actually billed, or null when it does not apply. */
+export function formatAnnualTotal(
+  plan: SubscriptionPlan,
+  cycle: BillingCycle,
+): string | null {
+  if (cycle !== "annual" || plan.monthlyPrice === 0) return null;
+  return `$${plan.monthlyPrice * 10} billed yearly`;
 }
 
 export function formatLimit(v: UsageAmount): string {

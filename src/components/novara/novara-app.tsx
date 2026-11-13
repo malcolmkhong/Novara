@@ -1,5 +1,7 @@
 "use client";
 
+import { AnimatePresence, motion } from "framer-motion";
+
 import { useCallback, useEffect, useState } from "react";
 import { useHashRoute } from "@/hooks/use-hash-route";
 import { Navbar } from "./navbar";
@@ -68,12 +70,22 @@ export function NovaraApp() {
       <div className="flex min-h-screen flex-col">
         <Navbar route={route} onEnterWriter={() => void enterWriter()} />
         <main className="flex-1">
-          {route === "home" && <HomePage onEnterWriter={() => void enterWriter()} />}
-          {route === "product" && <ProductPage onEnterWriter={() => void enterWriter()} />}
-          {route === "plans" && <PlansPage onEnterWriter={() => void enterWriter()} />}
-          {route === "about" && <AboutPage onEnterWriter={() => void enterWriter()} />}
-          {route === "terms" && <LegalPage kind="terms" />}
-          {route === "privacy" && <LegalPage kind="privacy" />}
+          <AnimatePresence mode="wait" initial={false}>
+            <motion.div
+              key={route}
+              initial={{ opacity: 0, y: 12 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -8 }}
+              transition={{ duration: 0.34, ease: [0.32, 0.72, 0, 1] }}
+            >
+              {route === "home" && <HomePage onEnterWriter={() => void enterWriter()} />}
+              {route === "product" && <ProductPage onEnterWriter={() => void enterWriter()} />}
+              {route === "plans" && <PlansPage onEnterWriter={() => void enterWriter()} />}
+              {route === "about" && <AboutPage onEnterWriter={() => void enterWriter()} />}
+              {route === "terms" && <LegalPage kind="terms" />}
+              {route === "privacy" && <LegalPage kind="privacy" />}
+            </motion.div>
+          </AnimatePresence>
         </main>
         <Footer onEnterWriter={() => void enterWriter()} />
       </div>

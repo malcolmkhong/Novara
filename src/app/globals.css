@@ -41,7 +41,54 @@
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
   --radius-xl: calc(var(--radius) + 4px);
-  --font-display: Georgia, 'Times New Roman', 'Noto Serif SC', 'Songti SC', serif;
+  /* Display face: Fraunces (variable, optical-size aware) loaded by next/font
+     in layout.tsx. The Georgia/Times stack stays as the fallback so the page
+     still reads as a serif if the webfont fails. */
+  --font-display: var(--font-fraunces), Georgia, 'Times New Roman', 'Noto Serif SC', 'Songti SC', serif;
+}
+
+/* ---------------------------------------------------------------------------
+ * Motion tokens. Tailwind v4 reads @theme for --animate-* entries, so each
+ * keyframe below becomes a utility: animate-marquee, animate-float-slow, ...
+ * ------------------------------------------------------------------------ */
+@theme {
+  --animate-marquee: marquee 46s linear infinite;
+  --animate-marquee-reverse: marquee-reverse 46s linear infinite;
+  --animate-float-slow: float-slow 16s ease-in-out infinite;
+  --animate-float-slower: float-slow 26s ease-in-out infinite reverse;
+  --animate-pulse-ring: pulse-ring 2.8s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  --animate-caret: caret 1.05s steps(1) infinite;
+  --animate-sheen: sheen 2.6s ease-in-out infinite;
+  --animate-pan: pan 20s ease-in-out infinite alternate;
+}
+
+@keyframes marquee {
+  from { transform: translate3d(0, 0, 0); }
+  to { transform: translate3d(-50%, 0, 0); }
+}
+@keyframes marquee-reverse {
+  from { transform: translate3d(-50%, 0, 0); }
+  to { transform: translate3d(0, 0, 0); }
+}
+@keyframes float-slow {
+  0%, 100% { transform: translate3d(0, 0, 0) scale(1); }
+  50% { transform: translate3d(0, -20px, 0) scale(1.05); }
+}
+@keyframes pulse-ring {
+  0% { transform: scale(0.85); opacity: 0.75; }
+  70%, 100% { transform: scale(2.1); opacity: 0; }
+}
+@keyframes caret {
+  0%, 49% { opacity: 1; }
+  50%, 100% { opacity: 0; }
+}
+@keyframes sheen {
+  0% { transform: translateX(-130%); }
+  55%, 100% { transform: translateX(230%); }
+}
+@keyframes pan {
+  from { transform: translate3d(-4%, -2%, 0) scale(1); }
+  to { transform: translate3d(6%, 4%, 0) scale(1.12); }
 }
 
 :root {
@@ -113,6 +160,7 @@
   --sidebar-accent: oklch(0.269 0 0);
   --sidebar-accent-foreground: oklch(0.985 0 0);
   --sidebar-border: oklch(1 0 0 / 10%);
+  --sidebar-input: oklch(1 0 0 / 15%);
   --sidebar-ring: oklch(0.556 0 0);
 }
 
@@ -126,6 +174,35 @@
   ::selection {
     background: oklch(0.87 0.07 88);
     color: oklch(0.25 0.05 50);
+  }
+  /* Display headings get optical sizing so the hero line does not look thin. */
+  h1, h2, h3 {
+    font-family: var(--font-display);
+    font-variation-settings: "SOFT" 0, "WONK" 0;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+ * Reduced motion. Every animated affordance on the marketing pages degrades
+ * to a static end state. Spinners are re-allowed because a loading indicator
+ * that does not move reads as "hung", not as "calm".
+ * ------------------------------------------------------------------------ */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+  .animate-spin,
+  [class*="animate-spin"] {
+    animation-duration: 1s !important;
+    animation-iteration-count: infinite !important;
+  }
+  .animate-caret,
+  [class*="animate-caret"] {
+    animation-duration: 1.05ms !important;
+    animation-iteration-count: infinite !important;
   }
 }
 
@@ -147,6 +224,96 @@
 }
 .nice-scroll::-webkit-scrollbar-thumb:hover {
   background: oklch(0.68 0.02 70);
+}
+
+/* ---------------------------------------------------------------------------
+ * Marketing surface helpers.
+ * ------------------------------------------------------------------------ */
+
+/* Film grain. A tiny inline SVG turbulence beats shipping a PNG: no request,
+ * no layout shift, and it tiles seamlessly at any viewport size. */
+.grain::after {
+  content: "";
+  position: absolute;
+  inset: -50%;
+  pointer-events: none;
+  opacity: 0.035;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  background-repeat: repeat;
+  mix-blend-mode: overlay;
+}
+
+/* Faint technical grid for dark hero surfaces. */
+.hero-grid {
+  background-image:
+    linear-gradient(to right, oklch(1 0 0 / 0.045) 1px, transparent 1px),
+    linear-gradient(to bottom, oklch(1 0 0 / 0.045) 1px, transparent 1px);
+  background-size: 64px 64px;
+  -webkit-mask-image: radial-gradient(ellipse 85% 65% at 50% 40%, black 20%, transparent 78%);
+  mask-image: radial-gradient(ellipse 85% 65% at 50% 40%, black 20%, transparent 78%);
+}
+
+/* Soft fade at both edges of a horizontal marquee. */
+.marquee-mask {
+  -webkit-mask-image: linear-gradient(to right, transparent, black 10%, black 90%, transparent);
+  mask-image: linear-gradient(to right, transparent, black 10%, black 90%, transparent);
+}
+
+/* Gradient text used for the hero headline accent and the final CTA. */
+.text-ember {
+  background: linear-gradient(104deg, oklch(0.93 0.14 82) 0%, oklch(0.78 0.16 55) 42%, oklch(0.7 0.14 38) 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+/* Sheen sweep for primary buttons. The sweep is a child element so it can
+   be triggered on hover without re-painting the button itself. */
+.sheen {
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+}
+.sheen::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 45%;
+  transform: translateX(-130%) skewX(-18deg);
+  background: linear-gradient(
+    90deg,
+    transparent,
+    oklch(1 0 0 / 0.28),
+    transparent
+  );
+  pointer-events: none;
+}
+.sheen:hover::before,
+.sheen:focus-visible::before {
+  animation: sheen 0.9s ease-out;
+}
+
+/* Card sheen: a soft highlight that follows the pointer. --mx/--my are set
+   inline by the card component on pointer move. */
+.pointer-sheen {
+  position: relative;
+}
+.pointer-sheen::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  opacity: 0;
+  transition: opacity 300ms ease;
+  background: radial-gradient(
+    320px circle at var(--mx, 50%) var(--my, 50%),
+    oklch(0.53 0.125 48 / 0.09),
+    transparent 70%
+  );
+  pointer-events: none;
+}
+.pointer-sheen:hover::before {
+  opacity: 1;
 }
 
 /* ---------------------------------------------------------------------------
@@ -184,7 +351,8 @@
 
 .novara-prose p {
   margin: 0.85em 0;
-}.novara-prose h1,
+}
+.novara-prose h1,
 .novara-prose h2,
 .novara-prose h3,
 .novara-prose h4 {

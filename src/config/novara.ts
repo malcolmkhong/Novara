@@ -38,11 +38,25 @@ export const NAV_LINKS: NavLink[] = [
 // Hero stats
 // ---------------------------------------------------------------------------
 
-export const HERO_STATS = [
-  { value: "5", label: "Specialized AI agents" },
-  { value: "1", label: "Shared story bible" },
-  { value: "~100,000", label: "Words per novel pipeline" },
-  { value: "0", label: "Continuity drift target" },
+export interface HeroStat {
+  value: string;
+  label: string;
+  /** When set, the number counts up from 0 as it scrolls into view. */
+  count?: number;
+  /** Prefix shown before the counted number. */
+  prefix?: string;
+}
+
+export const HERO_STATS: HeroStat[] = [
+  { value: "5", label: "Specialized AI agents", count: 5 },
+  { value: "1", label: "Shared story bible", count: 1 },
+  {
+    value: "~100,000",
+    label: "Words per novel pipeline",
+    count: 100000,
+    prefix: "~",
+  },
+  { value: "0", label: "Continuity drift target", count: 0 },
 ];
 
 // ---------------------------------------------------------------------------
@@ -424,6 +438,9 @@ export const ROADMAP: RoadmapPhase[] = [
 export const BRAND = {
   name: "Novara AI",
   tagline: "Your AI Novel Writing Team",
+  /** Explicit line breaks for the hero headline. A masked reveal needs to
+      know where the lines end, so the browser must not choose them. */
+  taglineLines: ["Your AI Novel", "Writing Team"],
   positioning:
     "Novara AI is not just an AI writing tool — it is an AI-powered Novel Creation System that helps you plan, write, edit and manage long-form fiction.",
   contactEmail: "hello@novara.ai",

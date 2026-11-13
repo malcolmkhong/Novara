@@ -1,15 +1,25 @@
 "use client";
 
-import { Check, Info, Target } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
+// ---------------------------------------------------------------------------
+// The homepage.
+//
+// Structure note: the previous version repeated one layout — centered heading,
+// then a grid of identical cards — seven times over. The repetition is what
+// made the page read as flat, so each section now gets an archetype of its
+// own: a sticky problem list, an animated delegation diagram, live agent
+// consoles, a pinned step rail, a bento grid, and a scrolling genre marquee.
+//
+// Motion lives in the small primitives in ./motion and in the section
+// components next to this file. This file is mostly layout.
+// ---------------------------------------------------------------------------
+
+import { motion } from "framer-motion";
+import { ArrowRight, Info, Target } from "lucide-react";
+import { BrandMark } from "@/components/novara/brand-logo";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import {
-  AI_TEAM,
-  BRAND,
   GENRES,
-  HERO_STATS,
-  HOW_IT_WORKS,
   MONETIZATION_CHANNELS,
   MONETIZATION_DISCLAIMER,
   NOVEL_FORMATS,
@@ -17,552 +27,397 @@ import {
   PILLARS,
   PROBLEMS,
 } from "@/config/novara";
-import {
-  PAYMENT_GATEWAY_STATUS,
-  SUBSCRIPTION_PLANS,
-  formatPrice,
-} from "@/config/subscription-plans";
 import { cn } from "@/lib/utils";
+import { AgentPipeline } from "./agent-pipeline";
+import { AgentTeam } from "./agent-team";
+import { Hero } from "./hero";
+import { EASE_OUT_EXPO, Reveal, Stagger, StaggerItem } from "./motion";
+import { Pricing } from "./pricing";
+import { StepRail } from "./step-rail";
 
 export interface HomePageProps {
   onEnterWriter: () => void;
 }
 
-// --- Hero mock (pure CSS, decorative) ---------------------------------------
-
-const HERO_MOCK_CHAPTERS = [
-  { name: "Chapter 1", words: "2,412", active: true },
-  { name: "Chapter 2", words: "1,874", active: false },
-  { name: "Chapter 3", words: "2,208", active: false },
-  { name: "Chapter 4", words: "1,655", active: false },
-];
-
-const HERO_MOCK_LINES = [
-  { width: "w-11/12", accent: false },
-  { width: "w-full", accent: false },
-  { width: "w-10/12", accent: false },
-  { width: "w-9/12", accent: true },
-  { width: "w-full", accent: false },
-  { width: "w-2/3", accent: false },
-  { width: "w-5/6", accent: false },
-];
-
-const HERO_AGENT_CHIPS = ["Atlas · Leader", "Sage · Writer", "Prism · Analyst"];
-
-const SOLUTION_SUBAGENTS = [
-  "Sub-agent · Structure",
-  "Sub-agent · World & characters",
-  "Sub-agent · Prose",
-];
-
-const CARD_HOVER =
-  "transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md";
-
 const ICON_SQUARE =
-  "flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-amber-100 text-amber-900";
+  "flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary";
+
+/** Fade a section in as it scrolls up. */
+function SectionIntro({
+  eyebrow,
+  title,
+  description,
+  headingId,
+}: {
+  eyebrow?: string;
+  title: string;
+  description?: string;
+  headingId: string;
+}) {
+  return (
+    <div className="mx-auto max-w-2xl text-center">
+      <Reveal>
+        {eyebrow && (
+          <p className="text-sm font-medium uppercase tracking-wide text-primary">{eyebrow}</p>
+        )}
+        <h2
+          id={headingId}
+          className="mt-2 font-display text-3xl font-bold tracking-tight sm:text-4xl"
+        >
+          {title}
+        </h2>
+        {description && <p className="mt-4 text-muted-foreground">{description}</p>}
+      </Reveal>
+    </div>
+  );
+}
 
 export function HomePage({ onEnterWriter }: HomePageProps) {
   return (
     <>
       {/* S1 — Hero */}
+      <Hero onEnterWriter={onEnterWriter} />
+
+      {/* S2 — The problem: a sticky thesis beside a list that scrolls past it. */}
       <section
-        aria-labelledby="home-hero-heading"
-        className="relative overflow-hidden bg-stone-950 text-stone-50"
+        id="home-problem"
+        aria-labelledby="home-problem-heading"
+        className="py-20 sm:py-28"
       >
-        <div aria-hidden="true" className="pointer-events-none absolute inset-0">
-          <div className="absolute -top-24 left-1/4 h-72 w-72 rounded-full bg-amber-500/20 blur-3xl" />
-          <div className="absolute -bottom-16 right-0 h-80 w-80 rounded-full bg-amber-600/10 blur-3xl" />
-        </div>
-        <div className="relative mx-auto max-w-6xl px-4 py-20 sm:px-6 sm:py-24 lg:py-28">
-          <div className="grid items-center gap-14 lg:grid-cols-2">
-            <div>
-              <Badge
-                variant="outline"
-                className="border-stone-700 bg-stone-900/60 text-amber-300"
-              >
-                AI-Powered Novel Writing Team
-              </Badge>
-              <h1
-                id="home-hero-heading"
-                className="mt-5 font-display text-4xl font-bold tracking-tight sm:text-5xl lg:text-6xl"
-              >
-                {BRAND.tagline}
-              </h1>
-              <p className="mt-5 max-w-xl text-xl leading-relaxed text-stone-300">
-                Novara AI gives you a coordinated team of five specialized AI
-                agents — a leader, a writer, a researcher, an analyst and an
-                engineer. They take your novel from one-line concept to
-                complete manuscript, and keep it consistent from the first
-                page to the last.
-              </p>
-              <div className="mt-8 flex flex-wrap gap-3">
-                <Button size="lg" onClick={onEnterWriter}>
-                  Start Creating
-                </Button>
-                <Button
-                  size="lg"
-                  variant="outline"
-                  asChild
-                  className="border-stone-700 bg-transparent text-stone-200 hover:border-stone-600 hover:bg-stone-800 hover:text-stone-50"
+        <div className="mx-auto max-w-6xl px-4 sm:px-6">
+          <div className="grid gap-12 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] lg:gap-16">
+            <div className="lg:sticky lg:top-28 lg:self-start">
+              <Reveal>
+                <p className="text-sm font-medium uppercase tracking-wide text-primary">
+                  The problem
+                </p>
+                <h2
+                  id="home-problem-heading"
+                  className="mt-2 font-display text-3xl font-bold tracking-tight sm:text-4xl"
                 >
-                  <a href="#/product">Explore Features</a>
-                </Button>
-              </div>
-              <div className="mt-12 grid grid-cols-2 gap-4 border-t border-stone-800 pt-8 xl:grid-cols-4">
-                {HERO_STATS.map((stat) => (
-                  <div key={stat.label} className="min-w-0">
-                    <div className="font-display text-xl font-bold text-amber-400">
-                      {stat.value}
-                    </div>
-                    <div className="mt-1 text-xs text-stone-400">
-                      {stat.label}
-                    </div>
-                  </div>
-                ))}
-              </div>
+                  Writing a novel is a team-sized job
+                </h2>
+                <p className="mt-4 text-muted-foreground">
+                  One person is asked to be architect, worldbuilder, writer, editor
+                  and continuity checker — all at once.
+                </p>
+              </Reveal>
             </div>
 
-            <div className="hidden lg:block">
-              <div className="rounded-xl border border-stone-800 bg-stone-900 shadow-2xl">
-                <div className="flex items-center gap-2 border-b border-stone-800 px-4 py-3">
-                  <span
-                    aria-hidden="true"
-                    className="h-2.5 w-2.5 rounded-full bg-stone-700"
-                  />
-                  <span
-                    aria-hidden="true"
-                    className="h-2.5 w-2.5 rounded-full bg-stone-700"
-                  />
-                  <span
-                    aria-hidden="true"
-                    className="h-2.5 w-2.5 rounded-full bg-stone-700"
-                  />
-                  <span className="ml-3 text-xs text-stone-400">
-                    Novara AI — Writer
-                  </span>
-                </div>
-                <div className="flex">
-                  <div className="w-40 shrink-0 border-r border-stone-800 p-4">
-                    <p className="text-xs font-semibold uppercase tracking-wider text-stone-400">
-                      Chapters
-                    </p>
-                    <div className="mt-3 space-y-1.5">
-                      {HERO_MOCK_CHAPTERS.map((chapter) => (
-                        <div
-                          key={chapter.name}
-                          className={cn(
-                            "rounded-md px-2.5 py-1.5",
-                            chapter.active && "bg-stone-800/80",
-                          )}
-                        >
-                          <div
-                            className={cn(
-                              "text-xs font-medium",
-                              chapter.active
-                                ? "text-amber-300"
-                                : "text-stone-400",
-                            )}
-                          >
-                            {chapter.name}
+            <Stagger className="space-y-4">
+              {PROBLEMS.map((problem, index) => {
+                const Icon = problem.icon;
+                return (
+                  <StaggerItem key={problem.title}>
+                    <Card className="group pointer-sheen overflow-hidden transition-[border-color,box-shadow,transform] duration-300 hover:-translate-y-1 hover:border-primary/30 hover:shadow-lg">
+                      <CardContent className="flex gap-4">
+                        <span className={ICON_SQUARE}>
+                          <Icon className="h-5 w-5" aria-hidden="true" />
+                        </span>
+                        <div>
+                          <div className="flex items-baseline gap-3">
+                            <span className="font-mono text-xs tabular-nums text-primary/50">
+                              {String(index + 1).padStart(2, "0")}
+                            </span>
+                            <h3 className="text-lg font-semibold">{problem.title}</h3>
                           </div>
-                          <div className="text-xs text-stone-400">
-                            {chapter.words} words
-                          </div>
+                          <p className="mt-1.5 text-sm leading-relaxed text-muted-foreground">
+                            {problem.description}
+                          </p>
                         </div>
-                      ))}
-                    </div>
-                  </div>
-                  <div className="flex-1 p-5">
-                    <div className="flex items-center justify-between gap-3">
-                      <span className="text-xs font-medium text-stone-400">
-                        Chapter 1 · Draft
-                      </span>
-                      <span className="inline-flex items-center gap-1.5 rounded-full border border-stone-700 px-2 py-0.5 text-xs text-stone-400">
-                        <span
-                          aria-hidden="true"
-                          className="h-1 w-1 rounded-full bg-amber-400"
-                        />
-                        Drafting
-                      </span>
-                    </div>
-                    <div className="mt-4 space-y-2.5">
-                      {HERO_MOCK_LINES.map((line, index) => (
-                        <div
-                          key={index}
-                          aria-hidden="true"
-                          className={cn(
-                            "h-2 rounded-full",
-                            line.width,
-                            line.accent
-                              ? "bg-amber-500/60"
-                              : "bg-stone-800",
-                          )}
-                        />
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              </div>
-              <div className="mt-4 flex flex-wrap justify-center gap-2">
-                {HERO_AGENT_CHIPS.map((chip) => (
-                  <span
-                    key={chip}
-                    className="inline-flex items-center gap-1.5 rounded-full border border-stone-700 bg-stone-900 px-3 py-1 text-xs text-stone-300"
-                  >
-                    <span
-                      aria-hidden="true"
-                      className="h-1.5 w-1.5 rounded-full bg-amber-400"
-                    />
-                    {chip}
-                  </span>
-                ))}
-              </div>
-            </div>
+                      </CardContent>
+                    </Card>
+                  </StaggerItem>
+                );
+              })}
+            </Stagger>
           </div>
         </div>
       </section>
 
-      {/* S2 — The problem */}
-      <section aria-labelledby="home-problem-heading" className="py-16 sm:py-20">
-        <div className="mx-auto max-w-6xl px-4 sm:px-6">
-          <div className="mx-auto max-w-2xl text-center">
-            <p className="text-sm font-medium uppercase tracking-wide text-primary">
-              The problem
-            </p>
-            <h2
-              id="home-problem-heading"
-              className="mt-2 font-display text-2xl font-bold tracking-tight sm:text-4xl"
-            >
-              Writing a novel is a team-sized job
-            </h2>
-            <p className="mt-4 text-muted-foreground">
-              One person is asked to be architect, worldbuilder, writer, editor
-              and continuity checker — all at once.
-            </p>
-          </div>
-          <div className="mt-10 grid gap-5 sm:mt-12 sm:grid-cols-2 lg:grid-cols-4">
-            {PROBLEMS.map((problem) => {
-              const Icon = problem.icon;
-              return (
-                <Card key={problem.title} className={CARD_HOVER}>
-                  <CardContent className="space-y-3">
-                    <span className={ICON_SQUARE}>
-                      <Icon className="h-5 w-5" aria-hidden="true" />
-                    </span>
-                    <h3 className="text-lg font-semibold">{problem.title}</h3>
-                    <p className="text-sm leading-relaxed text-muted-foreground">
-                      {problem.description}
-                    </p>
-                  </CardContent>
-                </Card>
-              );
-            })}
-          </div>
-        </div>
-      </section>
-
-      {/* S3 — The solution */}
+      {/* S3 — The solution: pillars, then the delegation diagram. */}
       <section
+        id="home-solution"
         aria-labelledby="home-solution-heading"
-        className="bg-secondary/50 py-16 sm:py-20"
+        className="bg-secondary/50 py-20 sm:py-28"
       >
         <div className="mx-auto max-w-6xl px-4 sm:px-6">
-          <div className="mx-auto max-w-2xl text-center">
-            <p className="text-sm font-medium uppercase tracking-wide text-primary">
-              The solution
-            </p>
-            <h2
-              id="home-solution-heading"
-              className="mt-2 font-display text-2xl font-bold tracking-tight sm:text-4xl"
-            >
-              Meet Novara AI — an AI-powered Novel Creation System
-            </h2>
-          </div>
-          <div className="mt-10 grid gap-5 sm:mt-12 md:grid-cols-3">
-            {PILLARS.map((pillar) => {
+          <SectionIntro
+            eyebrow="The solution"
+            title="Meet Novara AI — an AI-powered Novel Creation System"
+            headingId="home-solution-heading"
+          />
+
+          <div className="mt-12 grid gap-5 md:grid-cols-3">
+            {PILLARS.map((pillar, index) => {
               const Icon = pillar.icon;
               return (
-                <Card key={pillar.title} className={CARD_HOVER}>
-                  <CardContent className="space-y-3">
-                    <span className={ICON_SQUARE}>
-                      <Icon className="h-5 w-5" aria-hidden="true" />
+                <motion.div
+                  key={pillar.title}
+                  initial={{ opacity: 0, y: 24 }}
+                  whileInView={{ opacity: 1, y: 0 }}
+                  viewport={{ once: true, amount: 0.3 }}
+                  transition={{
+                    duration: 0.7,
+                    delay: index * 0.1,
+                    ease: EASE_OUT_EXPO,
+                  }}
+                >
+                  <Card className="group pointer-sheen relative h-full overflow-hidden transition-[border-color,box-shadow,transform] duration-300 hover:-translate-y-1 hover:border-primary/30 hover:shadow-xl">
+                    <span
+                      aria-hidden="true"
+                      className="pointer-events-none absolute -right-1 -top-3 font-display text-7xl font-bold text-primary/[0.07]"
+                    >
+                      {String(index + 1).padStart(2, "0")}
                     </span>
-                    <h3 className="font-display text-xl font-bold">
-                      {pillar.title}
-                    </h3>
-                    <p className="text-sm leading-relaxed text-muted-foreground">
-                      {pillar.description}
-                    </p>
-                  </CardContent>
-                </Card>
+                    <CardContent className="relative space-y-3">
+                      <span className={ICON_SQUARE}>
+                        <Icon className="h-5 w-5" aria-hidden="true" />
+                      </span>
+                      <h3 className="font-display text-xl font-bold">{pillar.title}</h3>
+                      <p className="text-sm leading-relaxed text-muted-foreground">
+                        {pillar.description}
+                      </p>
+                    </CardContent>
+                  </Card>
+                </motion.div>
               );
             })}
           </div>
 
-          {/* Leader → sub-agents diagram */}
-          <div className="mx-auto mt-14 w-full max-w-xl">
-            <div className="flex flex-col items-center">
-              <span className="inline-flex items-center gap-2 rounded-full border border-primary/40 bg-primary/10 px-5 py-2 text-sm font-semibold text-primary">
-                <span
-                  aria-hidden="true"
-                  className="h-2 w-2 rounded-full bg-primary"
-                />
-                Leader Agent
-              </span>
-              <div aria-hidden="true" className="h-6 w-px bg-primary/30" />
-              <div className="relative">
-                <div
-                  aria-hidden="true"
-                  className="absolute left-[16.6%] right-[16.6%] top-0 hidden h-px bg-primary/30 sm:block"
-                />
-                <div className="grid grid-cols-1 gap-x-6 gap-y-2 sm:grid-cols-3 sm:pt-5">
-                  {SOLUTION_SUBAGENTS.map((label) => (
-                    <div key={label} className="flex flex-col items-center">
-                      <div
-                        aria-hidden="true"
-                        className="h-5 w-px bg-primary/30"
-                      />
-                      <span className="rounded-full border bg-background px-4 py-1.5 text-xs font-medium text-muted-foreground">
-                        {label}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
+          <div className="mt-16">
+            <AgentPipeline />
           </div>
         </div>
       </section>
 
-      {/* S4 — The AI Team */}
+      {/* S4 — The AI team: live consoles instead of static descriptions. */}
       <section
+        id="home-team"
         aria-labelledby="home-team-heading"
-        className="py-16 sm:py-20"
+        className="py-20 sm:py-28"
       >
         <div className="mx-auto max-w-6xl px-4 sm:px-6">
-          <div className="mx-auto max-w-2xl text-center">
-            <p className="text-sm font-medium uppercase tracking-wide text-primary">
-              The AI Team
-            </p>
-            <h2
-              id="home-team-heading"
-              className="mt-2 font-display text-2xl font-bold tracking-tight sm:text-4xl"
-            >
-              Five specialists. One shared story bible.
-            </h2>
-          </div>
-          <div className="mt-10 grid gap-5 sm:mt-12 sm:grid-cols-2 lg:grid-cols-3">
-            {AI_TEAM.map((agent) => {
-              const Icon = agent.icon;
-              return (
-                <Card key={agent.name} className={CARD_HOVER}>
-                  <CardContent className="space-y-3">
-                    <div className="flex items-center justify-between gap-3">
-                      <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-amber-100 text-amber-900">
-                        <Icon className="h-4.5 w-4.5" aria-hidden="true" />
-                      </span>
-                      <Badge
-                        variant="outline"
-                        className="text-xs uppercase tracking-wide text-muted-foreground"
-                      >
-                        {agent.role}
-                      </Badge>
-                    </div>
-                    <h3 className="font-display text-xl font-bold">
-                      {agent.name}
-                    </h3>
-                    <p className="text-sm leading-relaxed text-muted-foreground">
-                      {agent.description}
-                    </p>
-                    <p className="text-sm font-medium text-primary">
-                      Delivers: {agent.delivers}
-                    </p>
-                  </CardContent>
-                </Card>
-              );
-            })}
-          </div>
-          <p className="mx-auto mt-8 max-w-2xl text-center text-sm text-muted-foreground">
+          <SectionIntro
+            eyebrow="The AI Team"
+            title="Five specialists. One shared story bible."
+            headingId="home-team-heading"
+          />
+          <AgentTeam />
+          <Reveal className="mx-auto mt-10 max-w-2xl text-center text-sm text-muted-foreground">
             All five agents read and write to{" "}
-            <span className="font-medium text-foreground">
-              one shared story bible
-            </span>{" "}
+            <span className="font-medium text-foreground">one shared story bible</span>{" "}
             — so every hand-off between agents stays consistent.
-          </p>
+          </Reveal>
         </div>
       </section>
 
-      {/* S5 — How it works */}
+      {/* S5 — How it works: a pinned rail that tracks scroll position. */}
       <section
+        id="home-how"
         aria-labelledby="home-how-heading"
-        className="bg-secondary/50 py-16 sm:py-20"
+        className="bg-secondary/50 py-20 sm:py-28"
       >
         <div className="mx-auto max-w-6xl px-4 sm:px-6">
-          <div className="mx-auto max-w-2xl text-center">
-            <h2
-              id="home-how-heading"
-              className="font-display text-2xl font-bold tracking-tight sm:text-4xl"
-            >
-              From concept to manuscript in eight steps
-            </h2>
-          </div>
-          <div className="mt-10 grid gap-5 sm:mt-12 sm:grid-cols-2 lg:grid-cols-4">
-            {HOW_IT_WORKS.map((step, index) => (
-              <Card key={step.title} className={CARD_HOVER}>
-                <CardContent className="space-y-3">
-                  <span className="font-display text-2xl font-bold text-primary">
-                    {String(index + 1).padStart(2, "0")}
-                  </span>
-                  <h3 className="text-lg font-semibold leading-snug">
-                    {step.title}
-                  </h3>
-                  <p className="text-sm leading-relaxed text-muted-foreground">
-                    {step.description}
-                  </p>
-                </CardContent>
-              </Card>
-            ))}
-          </div>
+          <SectionIntro
+            title="From concept to manuscript in eight steps"
+            headingId="home-how-heading"
+          />
+          <StepRail />
         </div>
       </section>
 
-      {/* S6 — What can you create */}
+      {/* S6 — What can you create: a bento grid plus a genre marquee. */}
       <section
+        id="home-create"
         aria-labelledby="home-create-heading"
-        className="py-16 sm:py-20"
+        className="overflow-hidden py-20 sm:py-28"
       >
         <div className="mx-auto max-w-6xl px-4 sm:px-6">
-          <div className="mx-auto max-w-2xl text-center">
-            <h2
-              id="home-create-heading"
-              className="font-display text-2xl font-bold tracking-tight sm:text-4xl"
-            >
-              What can you create with Novara AI?
-            </h2>
-          </div>
-          <div className="mt-10 grid gap-5 sm:mt-12 md:grid-cols-3">
-            {NOVEL_FORMATS.map((format) => {
+          <SectionIntro
+            title="What can you create with Novara AI?"
+            headingId="home-create-heading"
+          />
+
+          <div className="mt-12 grid gap-5 lg:grid-cols-6">
+            {NOVEL_FORMATS.map((format, index) => {
               const Icon = format.icon;
+              const span =
+                index === 0 ? "lg:col-span-4" : index === 1 ? "lg:col-span-2" : "lg:col-span-3";
               return (
-                <Card key={format.title} className={CARD_HOVER}>
-                  <CardContent className="space-y-3">
-                    <span className={ICON_SQUARE}>
-                      <Icon className="h-5 w-5" aria-hidden="true" />
-                    </span>
-                    <h3 className="font-display text-xl font-bold">
-                      {format.title}
-                    </h3>
-                    <p className="text-sm leading-relaxed text-muted-foreground">
-                      {format.description}
-                    </p>
-                  </CardContent>
-                </Card>
+                <motion.div
+                  key={format.title}
+                  initial={{ opacity: 0, y: 26 }}
+                  whileInView={{ opacity: 1, y: 0 }}
+                  viewport={{ once: true, amount: 0.3 }}
+                  transition={{
+                    duration: 0.7,
+                    delay: index * 0.09,
+                    ease: EASE_OUT_EXPO,
+                  }}
+                  className={span}
+                >
+                  <Card className="group pointer-sheen h-full overflow-hidden transition-[border-color,box-shadow,transform] duration-300 hover:-translate-y-1 hover:border-primary/30 hover:shadow-xl">
+                    <CardContent className="flex h-full flex-col space-y-3">
+                      <span className={ICON_SQUARE}>
+                        <Icon className="h-5 w-5" aria-hidden="true" />
+                      </span>
+                      <h3 className="font-display text-xl font-bold">{format.title}</h3>
+                      <p className="text-sm leading-relaxed text-muted-foreground">
+                        {format.description}
+                      </p>
+                    </CardContent>
+                  </Card>
+                </motion.div>
               );
             })}
+
+            <motion.div
+              initial={{ opacity: 0, y: 26 }}
+              whileInView={{ opacity: 1, y: 0 }}
+              viewport={{ once: true, amount: 0.3 }}
+              transition={{ duration: 0.7, delay: 0.27, ease: EASE_OUT_EXPO }}
+              className="lg:col-span-3"
+            >
+              <div className="flex h-full flex-col justify-center rounded-xl border border-primary/30 bg-primary/5 px-6 py-8">
+                <p className="flex flex-wrap items-center justify-center gap-2 text-center text-sm sm:text-lg">
+                  <Target className="h-4 w-4 shrink-0 text-primary" aria-hidden="true" />
+                  <span>
+                    <span className="font-semibold text-primary">Target:</span> one complete
+                    ~100,000-word novel — foundation + outline + 40+ chapters + reviews
+                    + export.
+                  </span>
+                </p>
+              </div>
+            </motion.div>
           </div>
-          <div className="mx-auto mt-10 max-w-3xl">
+
+          <div className="mt-16">
             <p className="text-center text-xs font-semibold uppercase tracking-wide text-muted-foreground">
               Genres
             </p>
-            <div className="mt-3 flex flex-wrap justify-center gap-2">
-              {GENRES.map((genre) => (
-                <span
-                  key={genre}
-                  className="rounded-full border bg-card px-3 py-1 text-xs text-muted-foreground"
-                >
-                  {genre}
-                </span>
-              ))}
+            <div className="marquee-mask mt-4 flex overflow-hidden">
+              <div className="flex w-max animate-marquee">
+                {[0, 1].map((copy) => (
+                  <div key={copy} className="flex shrink-0 gap-3 pr-3">
+                    {GENRES.map((genre) => (
+                      <span
+                        key={genre}
+                        className="shrink-0 rounded-full border bg-card px-4 py-1.5 text-sm text-muted-foreground"
+                      >
+                        {genre}
+                      </span>
+                    ))}
+                  </div>
+                ))}
+              </div>
             </div>
-          </div>
-          <div className="mx-auto mt-10 max-w-3xl rounded-xl border border-primary/30 bg-primary/5 px-6 py-4">
-            <p className="flex flex-wrap items-center justify-center gap-2 text-center text-sm sm:text-lg">
-              <Target className="h-4 w-4 shrink-0 text-primary" aria-hidden="true" />
-              <span>
-                <span className="font-semibold text-primary">Target:</span> one
-                complete ~100,000-word novel — foundation → outline → 40+
-                chapters → reviews → export.
-              </span>
-            </p>
           </div>
         </div>
       </section>
 
-      {/* S7 — Who is Novara for */}
+      {/* S7 — Who is Novara for: rows, not cards. */}
       <section
+        id="home-personas"
         aria-labelledby="home-personas-heading"
-        className="bg-secondary/50 py-16 sm:py-20"
+        className="bg-secondary/50 py-20 sm:py-28"
       >
         <div className="mx-auto max-w-6xl px-4 sm:px-6">
-          <div className="mx-auto max-w-2xl text-center">
-            <h2
-              id="home-personas-heading"
-              className="font-display text-2xl font-bold tracking-tight sm:text-4xl"
-            >
-              Who is Novara AI for?
-            </h2>
-          </div>
-          <div className="mt-10 grid gap-5 sm:mt-12 sm:grid-cols-2 lg:grid-cols-3">
-            {PERSONAS.map((persona) => {
+          <SectionIntro
+            title="Who is Novara AI for?"
+            headingId="home-personas-heading"
+          />
+
+          <div className="mt-12 grid gap-4 sm:grid-cols-2">
+            {PERSONAS.map((persona, index) => {
               const Icon = persona.icon;
               return (
-                <Card key={persona.title} className={CARD_HOVER}>
-                  <CardContent className="flex gap-4">
+                <motion.div
+                  key={persona.title}
+                  initial={{ opacity: 0, y: 22 }}
+                  whileInView={{ opacity: 1, y: 0 }}
+                  viewport={{ once: true, amount: 0.35 }}
+                  transition={{
+                    duration: 0.6,
+                    delay: index * 0.06,
+                    ease: EASE_OUT_EXPO,
+                  }}
+                >
+                  <div className="group flex h-full items-start gap-4 rounded-xl border bg-card p-5 transition-[border-color,box-shadow,transform] duration-300 hover:-translate-y-0.5 hover:border-primary/35 hover:shadow-md">
                     <span className={ICON_SQUARE}>
                       <Icon className="h-5 w-5" aria-hidden="true" />
                     </span>
-                    <div>
+                    <div className="min-w-0 flex-1">
                       <h3 className="font-semibold">{persona.title}</h3>
                       <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
                         {persona.description}
                       </p>
                     </div>
-                  </CardContent>
-                </Card>
+                    <ArrowRight
+                      className="mt-1 h-4 w-4 shrink-0 text-muted-foreground opacity-0 transition-all duration-300 group-hover:translate-x-1 group-hover:opacity-100"
+                      aria-hidden="true"
+                    />
+                  </div>
+                </motion.div>
               );
             })}
           </div>
         </div>
       </section>
 
-      {/* S8 — Monetization */}
+      {/* S8 — Monetization. */}
       <section
+        id="home-monetization"
         aria-labelledby="home-monetization-heading"
-        className="py-16 sm:py-20"
+        className="py-20 sm:py-28"
       >
         <div className="mx-auto max-w-6xl px-4 sm:px-6">
-          <div className="mx-auto max-w-2xl text-center">
-            <h2
-              id="home-monetization-heading"
-              className="font-display text-2xl font-bold tracking-tight sm:text-4xl"
-            >
-              From manuscript to income
-            </h2>
-            <p className="mt-4 text-muted-foreground">
-              A finished novel is a product. Novara AI helps you build it — the
-              channels below are where it can go.
-            </p>
-          </div>
-          <div className="mt-10 grid gap-5 sm:mt-12 sm:grid-cols-2 lg:grid-cols-3">
-            {MONETIZATION_CHANNELS.map((channel) => {
+          <SectionIntro
+            eyebrow="Monetization"
+            title="From manuscript to income"
+            description="A finished novel is a product. Novara AI helps you build it — the channels below are where it can go."
+            headingId="home-monetization-heading"
+          />
+
+          <div className="mt-12 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            {MONETIZATION_CHANNELS.map((channel, index) => {
               const Icon = channel.icon;
               return (
-                <Card key={channel.title} className={CARD_HOVER}>
-                  <CardContent className="space-y-3">
-                    <span className={ICON_SQUARE}>
-                      <Icon className="h-5 w-5" aria-hidden="true" />
+                <motion.div
+                  key={channel.title}
+                  initial={{ opacity: 0, y: 22 }}
+                  whileInView={{ opacity: 1, y: 0 }}
+                  viewport={{ once: true, amount: 0.3 }}
+                  transition={{
+                    duration: 0.6,
+                    delay: index * 0.06,
+                    ease: EASE_OUT_EXPO,
+                  }}
+                >
+                  <div className="group pointer-sheen relative h-full overflow-hidden rounded-xl border bg-card p-5 transition-[border-color,box-shadow,transform] duration-300 hover:-translate-y-1 hover:border-primary/35 hover:shadow-lg">
+                    <span
+                      aria-hidden="true"
+                      className="pointer-events-none absolute right-4 top-3 font-display text-4xl font-bold text-primary/[0.07]"
+                    >
+                      {String(index + 1).padStart(2, "0")}
                     </span>
-                    <h3 className="font-semibold">{channel.title}</h3>
-                    <p className="text-sm leading-relaxed text-muted-foreground">
-                      {channel.description}
-                    </p>
-                  </CardContent>
-                </Card>
+                    <div className="relative">
+                      <span className={ICON_SQUARE}>
+                        <Icon className="h-5 w-5" aria-hidden="true" />
+                      </span>
+                      <h3 className="mt-3 font-semibold">{channel.title}</h3>
+                      <p className="mt-1.5 text-sm leading-relaxed text-muted-foreground">
+                        {channel.description}
+                      </p>
+                    </div>
+                  </div>
+                </motion.div>
               );
             })}
           </div>
-          <div className="mx-auto mt-10 max-w-3xl rounded-lg border bg-muted/40 p-4">
-            <div className="flex gap-3">
+
+          <Reveal className="mx-auto mt-10 max-w-3xl">
+            <div className="flex gap-3 rounded-lg border bg-muted/40 p-4">
               <Info
                 className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground"
                 aria-hidden="true"
@@ -571,109 +426,57 @@ export function HomePage({ onEnterWriter }: HomePageProps) {
                 {MONETIZATION_DISCLAIMER}
               </p>
             </div>
-          </div>
+          </Reveal>
         </div>
       </section>
 
-      {/* S9 — Subscription preview */}
+      {/* S9 — Pricing. */}
+      <Pricing onEnterWriter={onEnterWriter} />
+
+      {/* S10 — Final CTA: bookends the hero so the page opens and closes on
+          the same visual note. */}
       <section
-        aria-labelledby="home-plans-heading"
-        className="bg-secondary/50 py-16 sm:py-20"
+        aria-labelledby="home-final-cta-heading"
+        className="relative isolate overflow-hidden bg-stone-950 py-20 text-stone-50 sm:py-28"
       >
-        <div className="mx-auto max-w-6xl px-4 sm:px-6">
-          <div className="mx-auto max-w-2xl text-center">
-            <p className="text-sm font-medium uppercase tracking-wide text-primary">
-              Pricing
-            </p>
-            <h2
-              id="home-plans-heading"
-              className="mt-2 font-display text-2xl font-bold tracking-tight sm:text-4xl"
-            >
-              Plans that grow with your manuscript
-            </h2>
-          </div>
-          <div className="mt-12 grid gap-6 md:grid-cols-3">
-            {SUBSCRIPTION_PLANS.map((plan) => (
-              <Card
-                key={plan.id}
-                className={cn(
-                  "relative flex flex-col",
-                  plan.highlighted && "border-primary shadow-lg shadow-primary/5",
-                )}
-              >
-                {plan.badge && (
-                  <Badge className="absolute -top-2.5 left-1/2 -translate-x-1/2">
-                    {plan.badge}
-                  </Badge>
-                )}
-                <CardContent className="flex-1">
-                  <h3 className="font-display text-xl font-bold">{plan.name}</h3>
-                  <div className="mt-2 flex items-baseline gap-1">
-                    <span className="font-display text-2xl font-bold">
-                      {formatPrice(plan)}
-                    </span>
-                    <span className="text-sm text-muted-foreground">
-                      / month
-                    </span>
-                  </div>
-                  <ul className="mt-5 space-y-2 text-sm">
-                    {plan.features.slice(0, 4).map((feature) => (
-                      <li key={feature} className="flex items-start gap-2">
-                        <Check
-                          className="mt-0.5 h-4 w-4 shrink-0 text-primary"
-                          aria-hidden="true"
-                        />
-                        <span className="text-muted-foreground">{feature}</span>
-                      </li>
-                    ))}
-                  </ul>
-                </CardContent>
-              </Card>
-            ))}
-          </div>
-          <div className="mt-10 text-center">
-            <Button variant="outline" asChild>
-              <a href="#/plans">View All Plans</a>
-            </Button>
-            <p className="mt-4 text-xs text-muted-foreground">
-              {PAYMENT_GATEWAY_STATUS.label} — plans are not yet purchasable.
-            </p>
-          </div>
+        <div aria-hidden="true" className="pointer-events-none absolute inset-0">
+          <div className="hero-grid absolute inset-0 opacity-60" />
+          <motion.div
+            className="absolute -top-32 left-1/2 h-80 w-80 -translate-x-1/2 rounded-full bg-amber-500/20 blur-[120px]"
+            animate={{ scale: [1, 1.14, 1], opacity: [0.65, 1, 0.65] }}
+            transition={{ duration: 9, repeat: Infinity, ease: "easeInOut" }}
+          />
+          <div className="absolute -bottom-28 right-[18%] h-64 w-64 rounded-full bg-orange-600/[0.12] blur-[110px]" />
+          <div className="grain absolute inset-0" />
         </div>
-      </section>
 
-      {/* S10 — Final CTA */}
-      <section aria-labelledby="home-final-cta-heading" className="py-16 sm:py-20">
-        <div className="mx-auto max-w-6xl px-4 sm:px-6">
-          <div className="relative overflow-hidden rounded-2xl bg-stone-950 px-6 py-14 text-center text-stone-50 sm:px-12 sm:py-16">
-            <div
-              aria-hidden="true"
-              className="pointer-events-none absolute inset-0"
+        <div className="relative mx-auto max-w-3xl px-4 text-center sm:px-6">
+          <Reveal>
+            <div className="mx-auto mb-8 flex h-14 w-14 items-center justify-center">
+              <BrandMark variant="dark" className="h-14 w-14" />
+            </div>
+            <h2
+              id="home-final-cta-heading"
+              className="font-display text-3xl font-bold tracking-tight sm:text-5xl"
             >
-              <div className="absolute -top-20 left-1/2 h-64 w-64 -translate-x-1/2 rounded-full bg-amber-500/20 blur-3xl" />
-              <div className="absolute -bottom-24 right-1/4 h-56 w-56 rounded-full bg-amber-600/10 blur-3xl" />
+              Start creating with Novara AI
+            </h2>
+            <p className="mx-auto mt-5 max-w-xl text-lg text-stone-300">
+              Enter the AI Writer, give the team your concept, and watch it grow into a
+              manuscript — free to start.
+            </p>
+            <div className="mt-9 flex justify-center">
+              <Button size="lg" className="sheen group" onClick={onEnterWriter}>
+                Start Creating
+                <ArrowRight
+                  className="h-4 w-4 transition-transform duration-300 group-hover:translate-x-1"
+                  aria-hidden="true"
+                />
+              </Button>
             </div>
-            <div className="relative mx-auto max-w-2xl">
-              <h2
-                id="home-final-cta-heading"
-                className="font-display text-2xl font-bold tracking-tight sm:text-4xl"
-              >
-                Start Creating with Novara AI
-              </h2>
-              <p className="mt-4 text-lg text-stone-300">
-                Enter the AI Writer, give the team your concept, and watch it
-                grow into a manuscript — free to start.
-              </p>
-              <div className="mt-8">
-                <Button size="lg" onClick={onEnterWriter}>
-                  Start Creating
-                </Button>
-              </div>
-            </div>
-          </div>
+          </Reveal>
         </div>
       </section>
-      {/* S11 — Footer: intentionally not rendered here; the shell provides it. */}
     </>
   );
 }
