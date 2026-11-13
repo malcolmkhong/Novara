@@ -102,7 +102,7 @@ export function LegalPage({ kind }: { kind: LegalKind }) {
         Last updated: {LAST_UPDATED}
       </p>
 
-      <div className="mt-10 space-y-8">
+      <div className="mt-10 max-w-[40rem] space-y-8">
         {sections.map((section) => (
           <section key={section.heading}>
             <h2 className="font-display text-lg font-semibold">

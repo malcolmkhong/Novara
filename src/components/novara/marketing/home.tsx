@@ -88,7 +88,7 @@ export function HomePage({ onEnterWriter }: HomePageProps) {
               >
                 {BRAND.tagline}
               </h1>
-              <p className="mt-5 max-w-xl text-base leading-relaxed text-stone-300 sm:text-lg">
+              <p className="mt-5 max-w-xl text-xl leading-relaxed text-stone-300">
                 Novara AI gives you a coordinated team of five specialized AI
                 agents — a leader, a writer, a researcher, an analyst and an
                 engineer. They take your novel from one-line concept to
@@ -108,10 +108,10 @@ export function HomePage({ onEnterWriter }: HomePageProps) {
                   <a href="#/product">Explore Features</a>
                 </Button>
               </div>
-              <div className="mt-12 grid grid-cols-2 gap-6 border-t border-stone-800 pt-8 sm:grid-cols-4">
+              <div className="mt-12 grid grid-cols-2 gap-4 border-t border-stone-800 pt-8 xl:grid-cols-4">
                 {HERO_STATS.map((stat) => (
-                  <div key={stat.label}>
-                    <div className="font-display text-2xl font-bold text-amber-400 sm:text-3xl">
+                  <div key={stat.label} className="min-w-0">
+                    <div className="font-display text-xl font-bold text-amber-400">
                       {stat.value}
                     </div>
                     <div className="mt-1 text-xs text-stone-400">
@@ -143,7 +143,7 @@ export function HomePage({ onEnterWriter }: HomePageProps) {
                 </div>
                 <div className="flex">
                   <div className="w-40 shrink-0 border-r border-stone-800 p-4">
-                    <p className="text-[10px] font-semibold uppercase tracking-wider text-stone-500">
+                    <p className="text-xs font-semibold uppercase tracking-wider text-stone-400">
                       Chapters
                     </p>
                     <div className="mt-3 space-y-1.5">
@@ -165,7 +165,7 @@ export function HomePage({ onEnterWriter }: HomePageProps) {
                           >
                             {chapter.name}
                           </div>
-                          <div className="text-[10px] text-stone-500">
+                          <div className="text-xs text-stone-400">
                             {chapter.words} words
                           </div>
                         </div>
@@ -177,7 +177,7 @@ export function HomePage({ onEnterWriter }: HomePageProps) {
                       <span className="text-xs font-medium text-stone-400">
                         Chapter 1 · Draft
                       </span>
-                      <span className="inline-flex items-center gap-1.5 rounded-full border border-stone-700 px-2 py-0.5 text-[10px] text-stone-400">
+                      <span className="inline-flex items-center gap-1.5 rounded-full border border-stone-700 px-2 py-0.5 text-xs text-stone-400">
                         <span
                           aria-hidden="true"
                           className="h-1 w-1 rounded-full bg-amber-400"
@@ -231,7 +231,7 @@ export function HomePage({ onEnterWriter }: HomePageProps) {
             </p>
             <h2
               id="home-problem-heading"
-              className="mt-2 font-display text-3xl font-bold tracking-tight sm:text-4xl"
+              className="mt-2 font-display text-2xl font-bold tracking-tight sm:text-4xl"
             >
               Writing a novel is a team-sized job
             </h2>
@@ -249,7 +249,7 @@ export function HomePage({ onEnterWriter }: HomePageProps) {
                     <span className={ICON_SQUARE}>
                       <Icon className="h-5 w-5" aria-hidden="true" />
                     </span>
-                    <h3 className="text-base font-semibold">{problem.title}</h3>
+                    <h3 className="text-lg font-semibold">{problem.title}</h3>
                     <p className="text-sm leading-relaxed text-muted-foreground">
                       {problem.description}
                     </p>
@@ -273,7 +273,7 @@ export function HomePage({ onEnterWriter }: HomePageProps) {
             </p>
             <h2
               id="home-solution-heading"
-              className="mt-2 font-display text-3xl font-bold tracking-tight sm:text-4xl"
+              className="mt-2 font-display text-2xl font-bold tracking-tight sm:text-4xl"
             >
               Meet Novara AI — an AI-powered Novel Creation System
             </h2>
@@ -287,7 +287,7 @@ export function HomePage({ onEnterWriter }: HomePageProps) {
                     <span className={ICON_SQUARE}>
                       <Icon className="h-5 w-5" aria-hidden="true" />
                     </span>
-                    <h3 className="font-display text-lg font-bold">
+                    <h3 className="font-display text-xl font-bold">
                       {pillar.title}
                     </h3>
                     <p className="text-sm leading-relaxed text-muted-foreground">
@@ -346,7 +346,7 @@ export function HomePage({ onEnterWriter }: HomePageProps) {
             </p>
             <h2
               id="home-team-heading"
-              className="mt-2 font-display text-3xl font-bold tracking-tight sm:text-4xl"
+              className="mt-2 font-display text-2xl font-bold tracking-tight sm:text-4xl"
             >
               Five specialists. One shared story bible.
             </h2>
@@ -363,12 +363,12 @@ export function HomePage({ onEnterWriter }: HomePageProps) {
                       </span>
                       <Badge
                         variant="outline"
-                        className="text-[11px] uppercase tracking-wide text-muted-foreground"
+                        className="text-xs uppercase tracking-wide text-muted-foreground"
                       >
                         {agent.role}
                       </Badge>
                     </div>
-                    <h3 className="font-display text-lg font-bold">
+                    <h3 className="font-display text-xl font-bold">
                       {agent.name}
                     </h3>
                     <p className="text-sm leading-relaxed text-muted-foreground">
@@ -401,7 +401,7 @@ export function HomePage({ onEnterWriter }: HomePageProps) {
           <div className="mx-auto max-w-2xl text-center">
             <h2
               id="home-how-heading"
-              className="font-display text-3xl font-bold tracking-tight sm:text-4xl"
+              className="font-display text-2xl font-bold tracking-tight sm:text-4xl"
             >
               From concept to manuscript in eight steps
             </h2>
@@ -410,10 +410,10 @@ export function HomePage({ onEnterWriter }: HomePageProps) {
             {HOW_IT_WORKS.map((step, index) => (
               <Card key={step.title} className={CARD_HOVER}>
                 <CardContent className="space-y-3">
-                  <span className="font-display text-3xl font-bold text-primary">
+                  <span className="font-display text-2xl font-bold text-primary">
                     {String(index + 1).padStart(2, "0")}
                   </span>
-                  <h3 className="text-base font-semibold leading-snug">
+                  <h3 className="text-lg font-semibold leading-snug">
                     {step.title}
                   </h3>
                   <p className="text-sm leading-relaxed text-muted-foreground">
@@ -435,7 +435,7 @@ export function HomePage({ onEnterWriter }: HomePageProps) {
           <div className="mx-auto max-w-2xl text-center">
             <h2
               id="home-create-heading"
-              className="font-display text-3xl font-bold tracking-tight sm:text-4xl"
+              className="font-display text-2xl font-bold tracking-tight sm:text-4xl"
             >
               What can you create with Novara AI?
             </h2>
@@ -449,7 +449,7 @@ export function HomePage({ onEnterWriter }: HomePageProps) {
                     <span className={ICON_SQUARE}>
                       <Icon className="h-5 w-5" aria-hidden="true" />
                     </span>
-                    <h3 className="font-display text-lg font-bold">
+                    <h3 className="font-display text-xl font-bold">
                       {format.title}
                     </h3>
                     <p className="text-sm leading-relaxed text-muted-foreground">
@@ -476,7 +476,7 @@ export function HomePage({ onEnterWriter }: HomePageProps) {
             </div>
           </div>
           <div className="mx-auto mt-10 max-w-3xl rounded-xl border border-primary/30 bg-primary/5 px-6 py-4">
-            <p className="flex flex-wrap items-center justify-center gap-2 text-center text-sm sm:text-base">
+            <p className="flex flex-wrap items-center justify-center gap-2 text-center text-sm sm:text-lg">
               <Target className="h-4 w-4 shrink-0 text-primary" aria-hidden="true" />
               <span>
                 <span className="font-semibold text-primary">Target:</span> one
@@ -497,7 +497,7 @@ export function HomePage({ onEnterWriter }: HomePageProps) {
           <div className="mx-auto max-w-2xl text-center">
             <h2
               id="home-personas-heading"
-              className="font-display text-3xl font-bold tracking-tight sm:text-4xl"
+              className="font-display text-2xl font-bold tracking-tight sm:text-4xl"
             >
               Who is Novara AI for?
             </h2>
@@ -534,7 +534,7 @@ export function HomePage({ onEnterWriter }: HomePageProps) {
           <div className="mx-auto max-w-2xl text-center">
             <h2
               id="home-monetization-heading"
-              className="font-display text-3xl font-bold tracking-tight sm:text-4xl"
+              className="font-display text-2xl font-bold tracking-tight sm:text-4xl"
             >
               From manuscript to income
             </h2>
@@ -587,7 +587,7 @@ export function HomePage({ onEnterWriter }: HomePageProps) {
             </p>
             <h2
               id="home-plans-heading"
-              className="mt-2 font-display text-3xl font-bold tracking-tight sm:text-4xl"
+              className="mt-2 font-display text-2xl font-bold tracking-tight sm:text-4xl"
             >
               Plans that grow with your manuscript
             </h2>
@@ -607,9 +607,9 @@ export function HomePage({ onEnterWriter }: HomePageProps) {
                   </Badge>
                 )}
                 <CardContent className="flex-1">
-                  <h3 className="font-display text-lg font-bold">{plan.name}</h3>
+                  <h3 className="font-display text-xl font-bold">{plan.name}</h3>
                   <div className="mt-2 flex items-baseline gap-1">
-                    <span className="font-display text-3xl font-bold">
+                    <span className="font-display text-2xl font-bold">
                       {formatPrice(plan)}
                     </span>
                     <span className="text-sm text-muted-foreground">
@@ -656,11 +656,11 @@ export function HomePage({ onEnterWriter }: HomePageProps) {
             <div className="relative mx-auto max-w-2xl">
               <h2
                 id="home-final-cta-heading"
-                className="font-display text-3xl font-bold tracking-tight sm:text-4xl"
+                className="font-display text-2xl font-bold tracking-tight sm:text-4xl"
               >
                 Start Creating with Novara AI
               </h2>
-              <p className="mt-4 text-base text-stone-300">
+              <p className="mt-4 text-lg text-stone-300">
                 Enter the AI Writer, give the team your concept, and watch it
                 grow into a manuscript — free to start.
               </p>

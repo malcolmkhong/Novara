@@ -19,7 +19,7 @@ export function Footer({ onEnterWriter }: FooterProps) {
               <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary text-primary-foreground">
                 <PenLine className="h-4 w-4" aria-hidden="true" />
               </span>
-              <span className="font-display text-base font-bold">
+              <span className="font-display text-xl font-bold">
                 {BRAND.name}
               </span>
             </div>
@@ -35,7 +35,7 @@ export function Footer({ onEnterWriter }: FooterProps) {
               <li>
                 <a
                   href="#/product"
-                  className="text-muted-foreground transition-colors hover:text-primary"
+                  className="inline-flex min-h-6 items-center text-muted-foreground transition-colors hover:text-primary"
                 >
                   Product
                 </a>
@@ -43,7 +43,7 @@ export function Footer({ onEnterWriter }: FooterProps) {
               <li>
                 <a
                   href="#/plans"
-                  className="text-muted-foreground transition-colors hover:text-primary"
+                  className="inline-flex min-h-6 items-center text-muted-foreground transition-colors hover:text-primary"
                 >
                   Subscription Plans
                 </a>
@@ -52,7 +52,7 @@ export function Footer({ onEnterWriter }: FooterProps) {
                 <button
                   type="button"
                   onClick={onEnterWriter}
-                  className="text-muted-foreground transition-colors hover:text-primary"
+                  className="inline-flex min-h-6 items-center text-muted-foreground transition-colors hover:text-primary"
                 >
                   AI Writer
                 </button>
@@ -66,7 +66,7 @@ export function Footer({ onEnterWriter }: FooterProps) {
               <li>
                 <a
                   href="#/about"
-                  className="text-muted-foreground transition-colors hover:text-primary"
+                  className="inline-flex min-h-6 items-center text-muted-foreground transition-colors hover:text-primary"
                 >
                   About Us
                 </a>
@@ -74,7 +74,7 @@ export function Footer({ onEnterWriter }: FooterProps) {
               <li>
                 <a
                   href={`mailto:${BRAND.contactEmail}`}
-                  className="text-muted-foreground transition-colors hover:text-primary"
+                  className="inline-flex min-h-6 items-center text-muted-foreground transition-colors hover:text-primary"
                 >
                   Contact
                 </a>
@@ -89,7 +89,7 @@ export function Footer({ onEnterWriter }: FooterProps) {
                 <button
                   type="button"
                   onClick={onEnterWriter}
-                  className="text-muted-foreground transition-colors hover:text-primary"
+                  className="inline-flex min-h-6 items-center text-muted-foreground transition-colors hover:text-primary"
                 >
                   Login
                 </button>
@@ -97,7 +97,7 @@ export function Footer({ onEnterWriter }: FooterProps) {
               <li>
                 <a
                   href="#/terms"
-                  className="text-muted-foreground transition-colors hover:text-primary"
+                  className="inline-flex min-h-6 items-center text-muted-foreground transition-colors hover:text-primary"
                 >
                   Terms of Service
                 </a>
@@ -105,7 +105,7 @@ export function Footer({ onEnterWriter }: FooterProps) {
               <li>
                 <a
                   href="#/privacy"
-                  className="text-muted-foreground transition-colors hover:text-primary"
+                  className="inline-flex min-h-6 items-center text-muted-foreground transition-colors hover:text-primary"
                 >
                   Privacy Policy
                 </a>

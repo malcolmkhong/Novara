@@ -28,7 +28,7 @@ export function Navbar({ route, onEnterWriter }: NavbarProps) {
           <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary text-primary-foreground shadow-sm">
             <PenLine className="h-4.5 w-4.5" aria-hidden="true" />
           </span>
-          <span className="font-display text-lg font-bold tracking-tight">
+          <span className="font-display text-xl font-bold tracking-tight">
             {BRAND.name}
           </span>
         </a>
