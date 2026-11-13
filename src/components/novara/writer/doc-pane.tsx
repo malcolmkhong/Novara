@@ -180,6 +180,11 @@ export function DocPane({ detail, tree, runs, chapters, className }: DocPaneProp
       )}
       aria-label="Document pane"
     >
+      {/* TOP BAND — the tab strip and the path row share the shared workbench
+          band height (--workbench-head-h), so the path row's bottom border
+          lands on the same horizontal line as the rail's tree header and the
+          chat header. */}
+      <div className="flex h-[var(--workbench-head-h,112px)] shrink-0 flex-col">
       {/* Tab strip — the open documents. */}
       <div className="flex items-center gap-1 border-b px-1">
         <Button
@@ -237,8 +242,10 @@ export function DocPane({ detail, tree, runs, chapters, className }: DocPaneProp
         </div>
       </div>
 
-      {/* Header — path, kind, view toggle, copy, fullscreen. */}
-      <div className="flex flex-wrap items-center gap-1.5 border-b px-2 py-1.5">
+      {/* Header — path, kind, view toggle, copy, fullscreen. It fills the rest
+          of the band so its bottom border is the shared line; the controls
+          stay at the top of the row. */}
+      <div className="flex flex-1 flex-wrap content-start items-start gap-1.5 border-b px-2 py-1.5">
         <span className="max-w-[150px] truncate font-mono text-[11px] text-muted-foreground">
           {path}
         </span>
@@ -300,6 +307,7 @@ export function DocPane({ detail, tree, runs, chapters, className }: DocPaneProp
             <Maximize2 className="h-4 w-4" aria-hidden="true" />
           )}
         </Button>
+      </div>
       </div>
 
       {/* Body — the document. */}

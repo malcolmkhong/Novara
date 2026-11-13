@@ -207,8 +207,11 @@ export function AssetTree({
     <div className="flex min-h-0 flex-1 flex-col">
       {/* TOP BLOCK — the novel's identity. The three actions that used to sit
           here as full-width buttons moved into ONE overflow menu on the title
-          row (same handlers, same confirmations). */}
-      <div className="border-b px-3 pb-2 pt-3">
+          row (same handlers, same confirmations).
+          The block is exactly the shared workbench band height, so its bottom
+          border lands on the same horizontal line as the chat header and the
+          document pane header. */}
+      <div className="min-h-[var(--workbench-head-h,112px)] overflow-hidden border-b px-3 pb-2 pt-3">
         <div className="flex items-center gap-1.5">
           <h2 className="min-w-0 flex-1 truncate font-display text-sm font-semibold leading-tight">
             {novel.title}
@@ -245,7 +248,7 @@ export function AssetTree({
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
-        <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+        <div className="mt-1.5 flex flex-nowrap items-center gap-1.5 overflow-hidden">
           {novel.genre && <Badge variant="outline">{novel.genre}</Badge>}
           <Badge variant="outline" className="text-muted-foreground">
             {novel.status}

@@ -833,8 +833,11 @@ export function ConversationPane({
     <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col" aria-label="Agent conversation pane">
       {/* Pane header — navigation only (STEP 67). The run status moved into
           the run summary line and the approval-mode chip is already a control
-          in the composer; saying either here said it twice. */}
-      <div className="flex items-center gap-2 border-b px-3 py-2">
+          in the composer; saying either here said it twice.
+          The header is exactly the shared workbench band height, so its bottom
+          border lands on the same horizontal line as the rail's tree header
+          and the document pane header. */}
+      <div className="flex h-[var(--workbench-head-h,112px)] items-start gap-2 border-b px-3 py-2">
         <div className="ml-auto flex items-center gap-1">
           {history.length > 0 && (
             <select
@@ -873,10 +876,13 @@ export function ConversationPane({
               <PanelRight className="h-4 w-4" aria-hidden="true" />
             </Button>
           )}
+          {/* Chat / Board — one 32px segmented control. The track is a plain
+              bordered box and the selected segment is a solid muted block that
+              fills the control's full height (not an inset pill). */}
           <div
             role="group"
             aria-label="Center view"
-            className="inline-flex rounded-md border p-0.5"
+            className="inline-flex h-8 items-stretch overflow-hidden rounded-md border bg-background p-0"
           >
             {(
               [
@@ -889,7 +895,12 @@ export function ConversationPane({
                 type="button"
                 size="sm"
                 variant="ghost"
-                className="h-7 gap-1 px-2.5 text-xs"
+                className={cn(
+                  "h-full gap-1 rounded-none px-2.5 text-[13px] leading-none",
+                  view === id
+                    ? "bg-muted font-medium text-foreground"
+                    : "text-muted-foreground hover:bg-muted/50 hover:text-foreground",
+                )}
                 aria-pressed={view === id}
                 onClick={() => setView(novel.id, id)}
               >

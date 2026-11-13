@@ -466,7 +466,10 @@ export function WorkbenchShell({
   const tasks = run.detail?.tasks ?? [];
 
   return (
-    <div className="flex h-full min-h-0 w-full border-t pb-[3.25rem] lg:pb-0">
+    <div className="flex h-full min-h-0 w-full border-t pb-[3.25rem] lg:pb-0 [--workbench-head-h:112px]">
+      {/* The three columns share ONE top band: the rail's tree header, the
+          chat header and the document pane's header all end on the same
+          horizontal line. `--workbench-head-h` is that band's height. */}
       {/* Left rail — the document tree */}
       <aside
         aria-label="Asset tree"
