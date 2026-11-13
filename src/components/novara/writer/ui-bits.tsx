@@ -12,7 +12,8 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import type { PinnedRef } from "@/lib/novara/agent-types";
-import type { ChapterStatus } from "@/lib/novara/types";
+import { canonStateLabel } from "@/lib/novara/doc-tree";
+import type { CanonState } from "@/lib/novara/types";
 import { useWriterStore } from "@/hooks/use-writer-store";
 import { cn } from "@/lib/utils";
 
@@ -102,25 +103,33 @@ export function ConfirmDialog({
   );
 }
 
-const STATUS_STYLES: Record<ChapterStatus, string> = {
+const STATE_STYLES: Record<CanonState, string> = {
   draft: "bg-muted text-muted-foreground",
-  revised: "bg-amber-100 text-amber-800 border-amber-200",
   final: "bg-emerald-100 text-emerald-800 border-emerald-200",
 };
 
-const STATUS_LABELS: Record<ChapterStatus, string> = {
-  draft: "Draft",
-  revised: "Revised",
-  final: "Final",
-};
-
-export function ChapterStatusBadge({ status }: { status: ChapterStatus }) {
+/**
+ * THE state chip (STEP 79) — one look for the whole canon vocabulary.
+ *
+ * The vocabulary is exactly two words, Draft and Final; the labels come from
+ * the tree, which is the single source of truth (`canonStateLabel`). Every
+ * canon state in the tree, in the document pane and in the chapter editor
+ * renders through this component, so a Draft looks the same everywhere and a
+ * Final always looks the same too.
+ */
+export function StateChip({
+  status,
+  className,
+}: {
+  status: CanonState;
+  className?: string;
+}) {
   return (
     <Badge
       variant="outline"
-      className={cn("text-[11px]", STATUS_STYLES[status])}
+      className={cn("text-[11px]", STATE_STYLES[status], className)}
     >
-      {STATUS_LABELS[status]}
+      {canonStateLabel(status)}
     </Badge>
   );
 }

@@ -95,6 +95,49 @@ export const toolActionSchema = z.discriminatedUnion("action", [
     index: z.number().int().positive(),
     summary: z.string().trim().min(1).max(2000),
   }),
+  // STEP 79 — the lifecycle moves. The agent may reopen a final asset (and
+  // MUST say so in the chat — the reason becomes the visible line) and may
+  // finalize a draft one. The rule itself lives in the route layer; the tool
+  // calls the same service the routes call.
+  //
+  // The model never sees ids: it names the asset (a character, a world entry,
+  // a beat, a volume, a pack) or gives the chapter index, and the runtime
+  // resolves it.
+  z.object({
+    action: z.literal("reopen_asset"),
+    kind: z.enum([
+      "chapter",
+      "contract",
+      "character",
+      "world_entry",
+      "outline_beat",
+      "volume",
+      "pack",
+    ]),
+    /** The chapter index (kind "chapter"). */
+    index: z.number().int().positive().optional(),
+    /** The asset's name as the model knows it. */
+    name: z.string().trim().min(1).max(120).optional(),
+    /** Why the asset is being reopened — the chat line says it in the author's words. */
+    reason: z.string().trim().min(1).max(300),
+  }),
+  z.object({
+    action: z.literal("finalize_asset"),
+    // A chapter is finalized by finalize_chapter (the E2 gate and the memory
+    // projection live there) — this tool is for the canon assets.
+    kind: z.enum([
+      "contract",
+      "character",
+      "world_entry",
+      "outline_beat",
+      "volume",
+      "pack",
+    ]),
+    index: z.number().int().positive().optional(),
+    name: z.string().trim().min(1).max(120).optional(),
+    /** Why the asset is being locked as canon (recorded on the transition). */
+    reason: z.string().trim().min(1).max(300).optional(),
+  }),
   z.object({ action: z.literal("finish") }),
 ]);
 

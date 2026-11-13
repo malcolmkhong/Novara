@@ -628,7 +628,7 @@ export async function buildMemoryView(novelId: string): Promise<NovelMemoryView>
 export interface ChapterMemorySyncRow {
   chapterId: string;
   index: number;
-  /** The chapter's status: "draft" | "revised" | "final". */
+  /** The chapter's status: "draft" | "final". */
   status: string;
   hasDigest: boolean;
   factCount: number;

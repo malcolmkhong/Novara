@@ -18,29 +18,61 @@ import { useEffect, useMemo, useState } from "react";
 import {
   Check,
   Copy,
+  Loader2,
   Maximize2,
   Minimize2,
   PanelLeftClose,
   PanelLeftOpen,
+  RotateCcw,
   X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { useToast } from "@/hooks/use-toast";
 import { useWriterStore, type DocViewMode } from "@/hooks/use-writer-store";
-import { getNovelMemory } from "@/lib/novara/api";
+import { getNovelMemory, reopenAsset } from "@/lib/novara/api";
 import {
   DOC_KIND_LABELS,
   DOC_RENDERERS,
   type MemorySnapshot,
 } from "@/lib/novara/doc-markdown";
-import { walkDocTree, type DocNode, type Node, type RunSummary } from "@/lib/novara/doc-tree";
-import type { AiDraftResult, ChapterDTO, ChapterStatus, NovelDetail } from "@/lib/novara/types";
+import {
+  canonState,
+  canonStateLabel,
+  DOC_LIFECYCLE_KINDS,
+  walkDocTree,
+  type DocNode,
+  type Node,
+  type RunSummary,
+} from "@/lib/novara/doc-tree";
+import type {
+  AiDraftResult,
+  CanonState,
+  ChapterDTO,
+  ChapterStatus,
+  NovelDetail,
+} from "@/lib/novara/types";
 import { cn } from "@/lib/utils";
 import { ChapterEditor } from "./chapter-editor";
 import { MarkdownDocument } from "./markdown-document";
+import { StateChip } from "./ui-bits";
 
 /** Stable empty list — a fresh array on every selector call breaks zustand's
  * snapshot identity (React Compiler loop guard). */
 const EMPTY_DOCS: string[] = [];
+
+/**
+ * The renderer's meta line may carry a raw status word ("draft", "final") or
+ * one of the retired state words. The vocabulary has exactly two words
+ * (STEP 79) — Draft and Final — and everything else is a count.
+ */
+function canonicalMeta(meta: string | undefined, state: CanonState | undefined): string {
+  const raw = (meta ?? "").trim();
+  const word = raw.toLowerCase();
+  if (word === "draft" || word === "final" || word === "revised") {
+    return canonStateLabel(state ?? canonState(word));
+  }
+  return raw;
+}
 
 /** The chapter handlers the chapter document needs (the editor stays alive). */
 export interface DocPaneChapterHandlers {
@@ -62,10 +94,20 @@ export interface DocPaneProps {
   /** The novel's runs (the run document projects one of them). */
   runs: RunSummary[];
   chapters: DocPaneChapterHandlers;
+  /** Re-fetch the novel detail — used after a reopen flips the state chip. */
+  onRefresh?: () => Promise<void>;
   className?: string;
 }
 
-export function DocPane({ detail, tree, runs, chapters, className }: DocPaneProps) {
+export function DocPane({
+  detail,
+  tree,
+  runs,
+  chapters,
+  onRefresh,
+  className,
+}: DocPaneProps) {
+  const { toast } = useToast();
   const novelId = detail.novel.id;
   const openDocs = useWriterStore((s) => s.openDocsByNovel[novelId] ?? EMPTY_DOCS);
   const activeDocId = useWriterStore((s) => s.activeDocByNovel[novelId] ?? null);
@@ -87,6 +129,7 @@ export function DocPane({ detail, tree, runs, chapters, className }: DocPaneProp
   const [copied, setCopied] = useState(false);
   const [full, setFull] = useState(false);
   const [memory, setMemory] = useState<MemorySnapshot | null>(null);
+  const [reopening, setReopening] = useState(false);
 
   // Every document node of the tree, keyed by its id (the tab labels).
   const docNodes = useMemo(() => {
@@ -99,6 +142,11 @@ export function DocPane({ detail, tree, runs, chapters, className }: DocPaneProp
 
   const activeNode = activeDocId ? (docNodes.get(activeDocId) ?? null) : null;
   const isChapter = activeNode?.doc === "chapter";
+  // STEP 79 — a document is editable if and only if its subject is a Draft.
+  const activeState = activeNode?.state ?? null;
+  const isFinalDocument = activeState === "final";
+  // The lifecycle kind of the open document — the API's snake_case vocabulary.
+  const reopenKind = activeNode ? (DOC_LIFECYCLE_KINDS[activeNode.doc] ?? null) : null;
 
   // The memory documents project the memory pool — fetched once, lazily.
   const needsMemory =
@@ -160,6 +208,12 @@ export function DocPane({ detail, tree, runs, chapters, className }: DocPaneProp
 
   const kindLabel = activeNode ? DOC_KIND_LABELS[activeNode.doc] : "Document";
   const path = `A:\\Novel\\${detail.novel.title}`;
+  // The status line never shows a retired state word: a raw "draft"/"final"
+  // becomes Draft/Final, and the concept document shows its field COUNT.
+  const statusMeta =
+    activeNode?.doc === "concept"
+      ? `${activeNode.badge ?? "0"} fields`
+      : canonicalMeta(rendered?.meta, activeNode?.state);
   const focusNote =
     activeNode?.doc === "memory_index" || activeNode?.doc === "memory_category"
       ? memoryFocus
@@ -170,6 +224,42 @@ export function DocPane({ detail, tree, runs, chapters, className }: DocPaneProp
           ? ` · focus: ${ledgerFocus}`
           : ""
         : "";
+
+  /** Reopen the open document's asset so it becomes editable again (STEP 79). */
+  const reopen = async () => {
+    if (!activeNode || !reopenKind) return;
+    setReopening(true);
+    try {
+      await reopenAsset(novelId, reopenKind, activeNode.ref);
+      toast({
+        title: "Reopened for editing",
+        description: `${kindLabel} is a draft again.`,
+      });
+      // Re-fetch the detail so the state chip flips to Draft.
+      await onRefresh?.();
+    } catch (e) {
+      // A typed refusal carries the server's own message — show it verbatim.
+      const err = e as Error & {
+        status?: number;
+        body?: { error?: string; kind?: string; reopen?: string };
+      };
+      const description =
+        err.body?.error === "asset_finalized"
+          ? `The ${err.body.kind ?? "asset"} is finalized (locked). Reopen it to edit: ${
+              err.body.reopen ?? ""
+            }`.trim()
+          : e instanceof Error
+            ? e.message
+            : "Unknown error";
+      toast({
+        title: "Could not reopen",
+        description,
+        variant: "destructive",
+      });
+    } finally {
+      setReopening(false);
+    }
+  };
 
   return (
     <div
@@ -252,6 +342,25 @@ export function DocPane({ detail, tree, runs, chapters, className }: DocPaneProp
         <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
           {kindLabel}
         </span>
+        {activeState && <StateChip status={activeState} />}
+        {isFinalDocument && reopenKind && (
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-7 px-2 text-[11px]"
+            onClick={() => void reopen()}
+            disabled={reopening}
+            aria-label="Reopen to edit"
+            title="Reopen to edit"
+          >
+            {reopening ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+            ) : (
+              <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />
+            )}
+            Reopen to edit
+          </Button>
+        )}
         <span className="flex-1" />
         {!isChapter && (
           <span className="flex items-center rounded border text-[11px]">
@@ -342,8 +451,8 @@ export function DocPane({ detail, tree, runs, chapters, className }: DocPaneProp
       {/* Status line — what this document is. */}
       <div className="border-t px-3 py-1.5 text-[11px] text-muted-foreground">
         {isChapter
-          ? `editable · the author's prose · ${rendered?.meta ?? ""}`
-          : `read-only · generated from ${kindLabel} · ${rendered?.meta ?? ""}${focusNote}`}
+          ? `${isFinalDocument ? "locked" : "editable"} · the author's prose · ${statusMeta}`
+          : `read-only · generated from ${kindLabel} · ${statusMeta}${focusNote}`}
       </div>
     </div>
   );

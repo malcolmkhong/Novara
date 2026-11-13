@@ -371,7 +371,7 @@ export function WorkbenchShell({
   } | null>(null);
 
   // Final-lock gate (Phase 7): a final chapter refuses content changes until
-  // the author explicitly reopens it (demotes to revised).
+  // the author explicitly reopens it (demotes to draft).
   const [pendingReopen, setPendingReopen] = useState<{
     id: string;
     patch: { title?: string; content?: string; status?: ChapterStatus; brief?: string };
@@ -401,6 +401,11 @@ export function WorkbenchShell({
           requiresReopen?: boolean;
           existingWords?: number;
           incomingWords?: number;
+          /** STEP 79 — the typed refusal of a finalized asset. */
+          error?: string;
+          kind?: string;
+          id?: string;
+          reopen?: string;
         };
       };
       if (err.status === 409 && err.body?.requiresReopen) {
@@ -413,6 +418,20 @@ export function WorkbenchShell({
           patch,
           existingWords: err.body.existingWords ?? 0,
           incomingWords: err.body.incomingWords ?? 0,
+        });
+        return null;
+      }
+      // STEP 79 — the server refuses to mutate a FINAL asset with a typed
+      // body. Show ITS message (kind + finalized + the reopen URL), never the
+      // generic "Save failed".
+      if (err.status === 409 && err.body?.error === "asset_finalized") {
+        const kind = err.body.kind ?? "asset";
+        toast({
+          title: "This asset is finalized",
+          description: `The ${kind} is finalized (locked) and cannot be changed. Reopen it to edit: ${
+            err.body.reopen ?? "/api/novels/…/reopen"
+          }`,
+          variant: "destructive",
         });
         return null;
       }
@@ -526,6 +545,7 @@ export function WorkbenchShell({
           detail={detail}
           tree={tree}
           runs={runs}
+          onRefresh={refresh}
           chapters={{
             selectedId: selectedChapterId,
             onSelect: (id: string) => selectChapter(novel.id, id),
@@ -553,6 +573,7 @@ export function WorkbenchShell({
             detail={detail}
             tree={tree}
             runs={runs}
+            onRefresh={refresh}
             chapters={{
               selectedId: selectedChapterId,
               onSelect: (id: string) => selectChapter(novel.id, id),
@@ -697,7 +718,7 @@ export function WorkbenchShell({
           if (!v) setPendingReopen(null);
         }}
         title="Reopen this final chapter?"
-        description="This chapter is finalized (locked). Reopening demotes it to revised and applies your changes — the final mark will be removed until it is re-finalized."
+        description="This chapter is finalized (locked). Reopening demotes it to draft and applies your changes — the final mark will be removed until it is re-finalized."
         confirmLabel="Reopen & save"
         onConfirm={async () => {
           const pending = pendingReopen;

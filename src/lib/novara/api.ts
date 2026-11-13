@@ -13,6 +13,7 @@ import type {
   ClueStatus,
   ImportReport,
   LedgerView,
+  LifecycleAssetKind,
   NovelBackupFile,
   NovelDetail,
   NovelStatus,
@@ -159,6 +160,36 @@ export function updateNovel(
 
 export function deleteNovel(id: string): Promise<{ ok: true }> {
   return request(`/api/novels/${id}`, { method: "DELETE" });
+}
+
+// ---------------------------------------------------------------------------
+// Canon assets (STEP 79)
+// ---------------------------------------------------------------------------
+
+/** The result of a canon move (reopen) of one asset. */
+export interface ReopenAssetResult {
+  ok: true;
+  kind: string;
+  id: string;
+  from: string;
+  to: "draft" | "final";
+  /** false when the asset was already a draft (the move is idempotent). */
+  changed: boolean;
+}
+
+/**
+ * Reopen a FINAL asset for editing (STEP 79) — a document is editable if and
+ * only if its subject is a Draft. The kind is the API's snake_case entity
+ * kind; the contract's asset id is the novel id.
+ */
+export function reopenAsset(
+  novelId: string,
+  kind: LifecycleAssetKind,
+  assetId: string
+): Promise<ReopenAssetResult> {
+  return request(`/api/novels/${novelId}/${kind}/${assetId}/reopen`, {
+    method: "POST",
+  });
 }
 
 // ---------------------------------------------------------------------------

@@ -68,7 +68,7 @@ export async function POST(req: Request) {
         title: c.title,
         content: c.content,
         wordCount: countWords(c.content),
-        status: c.status,
+        status: c.status === "final" ? "final" : "draft",
         brief: c.brief ?? "",
       })),
     }),

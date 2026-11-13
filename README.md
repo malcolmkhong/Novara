@@ -66,8 +66,8 @@ fails, the chapter stays `draft` — it can never be final with unprojected memo
 | E2 settle | same review precondition | `src/lib/novara/qc.ts:61-88` (`evaluateSettle`) |
 | Repair budget | ≤ 2 review→repair cycles per chapter, then escalate to the author | `src/lib/novara/qc.ts:96-120` (`evaluateRepair`) |
 | Overwrite | replacing non-empty prose requires explicit `overwrite: true` | `src/lib/novara/write-gate.ts:23-33` |
-| Final lock | a `final` chapter cannot be edited without `reopen`; a reopen can never re-finalize | `src/app/api/chapters/[id]/route.ts:43-92` |
-| Asset canon | non-body assets (`Character`, `WorldEntry`, `OutlineBeat`, `Volume`, 5 ledgers, contract) are locked the same way; reopening archives the old version into `AssetVersion` | `src/lib/novara/asset-gate.ts:132-220` |
+| Final lock | a `final` asset cannot be edited: every update/delete route answers `409 {"error":"asset_finalized","kind","id","reopen"}`; only a `reopen` makes it editable again | `src/lib/novara/lifecycle.ts` (`finalizedRefusal`), the route layer |
+| Asset canon | non-body assets (`Character`, `WorldEntry`, `OutlineBeat`, `Volume`, `ChapterPack`, 5 ledgers, contract) carry the same two-value status; reopening archives the old version into `AssetVersion` and writes an `AssetTransition` row | `src/lib/novara/lifecycle.ts` (`moveAsset`), `src/lib/novara/asset-gate.ts` |
 | Approval | in `approval` mode every write pauses for the author; replacing non-empty prose pauses even in `full_access` | `src/lib/agent/runtime.ts:3494-3582` |
 | Honesty | the model's `run-report` counters are compared against counters rebuilt from the event log; mismatches become blocking issues in the final report | `src/lib/novara/qc.ts:128-144`, `src/lib/agent/runtime.ts:2276` |
 
@@ -123,9 +123,9 @@ skill body, and builds each prompt as *role card + skills*, capped at
 | Role | Job | Tools it may call |
 |---|---|---|
 | **Atlas** | leader — reads state, plans, dispatches orders, verifies outcomes, writes the final report | read tools + `doctor_scan` |
-| **Sage** | writer — drafts and repairs prose | read tools, `doctor_scan`, `create_chapter`, `update_chapter`, `update_outline_beat`, `update_ledger`, `finish` |
+| **Sage** | writer — drafts and repairs prose | read tools, `doctor_scan`, `create_chapter`, `update_chapter`, `update_outline_beat`, `update_ledger`, `reopen_asset`, `finalize_asset`, `finish` |
 | **Nova** | researcher — read-only answers with evidence | read tools only |
-| **Prism** | analyst — reviews and certifies | read tools, `doctor_scan`, `review_chapter`, `finalize_chapter`, `settle_chapter`, `update_ledger`, `finish` |
+| **Prism** | analyst — reviews and certifies | read tools, `doctor_scan`, `review_chapter`, `finalize_chapter`, `settle_chapter`, `update_ledger`, `reopen_asset`, `finalize_asset`, `finish` |
 | **Forge** | engineer — hygiene and export | read tools, `doctor_scan`, `export_markdown`, `finish` |
 
 Tools are defined in `src/lib/agent/tool-protocol.ts` and executed in
@@ -134,7 +134,7 @@ Tools are defined in `src/lib/agent/tool-protocol.ts` and executed in
 catalogue: `read_novel`, `read_chapter`, `read_outline`, `read_foreshadows`,
 `read_promises`, `memory_query`, `doctor_scan`, `update_ledger`, `review_chapter`,
 `finalize_chapter`, `settle_chapter`, `export_markdown`, `create_chapter`,
-`update_chapter`, `update_outline_beat`, `finish`.
+`update_chapter`, `update_outline_beat`, `reopen_asset`, `finalize_asset`, `finish`.
 
 ### 4.1 Run lifecycle
 
@@ -182,7 +182,7 @@ The file degrades to defaults when invalid; `team.yaml` and `skills.yaml` are fa
 | Area | Models |
 |---|---|
 | Identity | `User` (auth subject; never written by the app) |
-| Novel body | `Novel` · `Chapter` (`draft` / `revised` / `final`) · `ChapterVersion` · `ChapterReview` |
+| Novel body | `Novel` · `Chapter` (`draft` / `final`) · `ChapterVersion` · `ChapterReview` |
 | Bible | `Character` · `WorldGroup` · `WorldEntry` |
 | Outline | `Volume` · `OutlineBeat` |
 | Contract | `NovelContract` (+ `Novel.conceptSnapshot`) |
@@ -190,7 +190,7 @@ The file degrades to defaults when invalid; `team.yaml` and `skills.yaml` are fa
 | Memory projection | `ChapterDigest` · `StoryFact` (9 categories) · `CharacterState` · `Foreshadow` |
 | Draft area | `ChapterPack` (`material` / `prep`, keyed by chapter index) |
 | Agent | `AgentRun` · `AgentTask` · `AgentEvent` · `AgentMessage` · `ContextSummary` · `SkillInvocation` |
-| Immutable layer | `AssetVersion` |
+| Immutable layer | `AssetVersion` · `AssetTransition` (every reopen/finalize is logged) |
 | Usage & credits | `UsageCall` · `UsageProvenance` · `UsageDaily` · `UsageInvoice` · `CreditAccount` · `CreditLedger` |
 | Legacy | `TeamAgent` · `TeamConversation` · `TeamMessage` · `TeamTask` · `TeamTaskLog` · `TeamTurnLog` (no route or UI uses them) |
 
@@ -386,8 +386,6 @@ These are facts about the code, not a roadmap:
 - The `Team*` models still exist in the schema but no route, UI or runtime code uses them.
 - `prisma/db/custom.db` and the SQLite-shaped deploy scripts are leftovers from the
   pre-Postgres schema.
-- The author-facing `PATCH /api/chapters/[id]` can still set `status: "final"` without
-  writing a memory projection; only the agent runtime's `finalize_chapter` couples the two.
 - Several `src/lib/novara/api.ts` client helpers and API routes have no caller in the UI
   (the manual editors for characters, world entries, beats, volumes, ledger rows and packs
   lost their entry point when the artifact pane was replaced by the document pane).

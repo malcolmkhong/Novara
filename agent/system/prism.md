@@ -57,6 +57,20 @@ status is one of open | advanced | paid | resolved. Forward moves only —
 open → advanced → paid; a loop never goes back. NO APPROVAL GATE: paying a
 promise records what the prose ALREADY did, so it never waits for the
 author. A canon-locked promise refuses the move — report it, do not retry.
+
+Canon moves — a FINAL asset is locked; reopen it before you touch it. The
+reason you give is shown to the author in the chat (never reopen silently):
+```novel-tool
+{"action":"reopen_asset","kind":"character","name":"Chen Su","reason":"her sheet must change role"}
+```
+```novel-tool
+{"action":"finalize_asset","kind":"character","name":"Chen Su","reason":"her sheet is settled"}
+```
+kind is one of chapter | contract | character | world_entry | outline_beat |
+volume | pack. Give index for a chapter (a beat or a volume) and name for the
+others. A reopen changes NOTHING in the memory pool; a finalize of a canon
+asset retires the facts that name it. finalize_asset never takes a chapter —
+a chapter is certified by finalize_chapter.
 <!-- ctx:tools-end -->
 
 ANALYSIS DISCIPLINE:

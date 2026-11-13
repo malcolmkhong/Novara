@@ -17,7 +17,7 @@ import type { DocNode, Node } from "@/lib/novara/doc-tree";
 import type { PinnedRefType } from "@/lib/novara/agent-types";
 import { cn } from "@/lib/utils";
 import { BadgeIcons, type BadgeMap, type NodeBadge } from "./tree-badges";
-import { PinButton } from "./ui-bits";
+import { PinButton, StateChip } from "./ui-bits";
 
 /** The pin target of a document row, or null when the row cannot be pinned. */
 function pinTargetFor(node: DocNode): { type: PinnedRefType; id: string; label: string } | null {
@@ -193,11 +193,14 @@ function TreeRow({
           />
           <span className="truncate">{node.label}</span>
           {badgesOf(node) && <BadgeIcons badges={badgesOf(node)} />}
-          {node.badge && (
-            <span className="ml-auto shrink-0 rounded bg-muted px-1 text-[10px] font-normal text-muted-foreground">
-              {node.badge}
-            </span>
-          )}
+          <span className="ml-auto flex shrink-0 items-center gap-1">
+            {node.state && <StateChip status={node.state} />}
+            {node.badge && (
+              <span className="rounded bg-muted px-1 text-[10px] font-normal text-muted-foreground">
+                {node.badge}
+              </span>
+            )}
+          </span>
         </button>
         {open && node.children.length > 0 && (
           <ul className="space-y-0.5">
@@ -247,11 +250,14 @@ function TreeRow({
         {node.meta && (
           <span className="shrink-0 text-[10px] text-muted-foreground">{node.meta}</span>
         )}
-        {node.badge && (
-          <span className="ml-auto shrink-0 rounded bg-muted px-1 text-[10px] font-normal text-muted-foreground">
-            {node.badge}
-          </span>
-        )}
+        <span className="ml-auto flex shrink-0 items-center gap-1">
+          {node.state && <StateChip status={node.state} />}
+          {node.badge && (
+            <span className="rounded bg-muted px-1 text-[10px] font-normal text-muted-foreground">
+              {node.badge}
+            </span>
+          )}
+        </span>
         {badges && <BadgeIcons badges={badges} />}
       </button>
       {pin && (

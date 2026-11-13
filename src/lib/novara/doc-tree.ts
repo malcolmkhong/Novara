@@ -19,7 +19,7 @@
 // "定稿" both work, so the alias travels with the node.
 // ---------------------------------------------------------------------------
 
-import type { NovelDetail } from "@/lib/novara/types";
+import type { CanonState, LifecycleAssetKind, NovelDetail } from "@/lib/novara/types";
 import { formatWordCount } from "@/lib/novara/words";
 
 /** Every kind of document the tree can open. */
@@ -51,8 +51,10 @@ export interface FolderNode {
   kind: "folder";
   /** The children of this folder. */
   children: Node[];
-  /** A count, or a short explanation (e.g. "empty"). Never blank. */
+  /** A count — a number, never a state word. Never blank. */
   badge?: string;
+  /** The canon state of this folder's asset (a volume), when it has one. */
+  state?: CanonState;
   /** The original Chinese label — the search line matches both. */
   zh?: string;
 }
@@ -65,8 +67,10 @@ export interface DocNode {
   doc: DocKind;
   /** The database id the renderer needs (chapter id, beat id, …). */
   ref: string;
-  /** A short count or state, e.g. "Final", "3". */
+  /** A short count, e.g. "3". Never a state word. */
   badge?: string;
+  /** The canon state (STEP 79) — Draft or Final, never anything else. */
+  state?: CanonState;
   /** A short qualifier, e.g. the word count or the review state. */
   meta?: string;
   /** The original Chinese label — the search line matches both. */
@@ -156,16 +160,17 @@ function folder(
   name: string,
   label: string,
   children: Node[],
-  opts: { zh?: string; badge?: string } = {}
+  opts: { zh?: string; badge?: string; state?: CanonState } = {}
 ): FolderNode {
   return {
     id: folderId(name),
     label,
     kind: "folder",
     zh: opts.zh,
-    // A folder never renders as a silent hole: it carries its child count, or
-    // "empty" when it has none.
-    badge: opts.badge ?? (children.length > 0 ? String(children.length) : "empty"),
+    // A folder never renders as a silent hole: it carries its child count —
+    // a number, never a state word ("0" when it has none).
+    badge: opts.badge ?? String(children.length),
+    state: opts.state,
     children,
   };
 }
@@ -174,7 +179,7 @@ function doc(
   kind: DocKind,
   ref: string,
   label: string,
-  opts: { zh?: string; badge?: string; meta?: string } = {}
+  opts: { zh?: string; badge?: string; meta?: string; state?: CanonState } = {}
 ): DocNode {
   return {
     id: docId(kind, ref),
@@ -184,15 +189,57 @@ function doc(
     ref,
     zh: opts.zh,
     badge: opts.badge,
+    state: opts.state,
     meta: opts.meta,
   };
 }
 
-/** "final" -> "Final", "revised" -> "Revised", "draft" -> "Draft". */
-export function chapterStatusLabel(status: string): string {
-  if (status === "final") return "Final";
-  if (status === "revised") return "Revised";
-  return "Draft";
+/**
+ * The canon state vocabulary (STEP 79) — the tree is the single source of
+ * truth: Draft and Final, nothing else. Counts (beats, chars, fields) are
+ * numbers, never state words.
+ */
+export const CANON_STATE_LABELS: Record<CanonState, string> = {
+  draft: "Draft",
+  final: "Final",
+};
+
+/**
+ * Normalise a stored status to the two-word vocabulary. A legacy row that
+ * still says "revised" reads as Draft.
+ */
+export function canonState(value: string | null | undefined): CanonState {
+  return value === "final" ? "final" : "draft";
+}
+
+/** The label of a canon state: "Draft" or "Final". */
+export function canonStateLabel(state: CanonState): string {
+  return CANON_STATE_LABELS[state];
+}
+
+/**
+ * The lifecycle kind of a tree document — the API's snake_case vocabulary.
+ * The contract's asset id is the novel id (its node ref is the novel id).
+ */
+export const DOC_LIFECYCLE_KINDS: Partial<Record<DocKind, LifecycleAssetKind>> = {
+  chapter: "chapter",
+  contract: "contract",
+  character: "character",
+  world_entry: "world_entry",
+  beat: "outline_beat",
+  pack: "pack",
+};
+
+/**
+ * The number of FILLED concept fields. The concept document has no canon
+ * state, so its fact is a count (STEP 79) — never a "Written"/"Empty" word.
+ */
+export function conceptFieldCount(snapshot: string): number {
+  if (!snapshot.trim()) return 0;
+  return snapshot
+    .split(/\n\s*\n/)
+    .map((block) => block.trim())
+    .filter((block) => block.length > 0 && !block.startsWith("#")).length;
 }
 
 /**
@@ -216,8 +263,8 @@ export function buildDocTree(
   nodes.push(
     doc("contract", novel.id, "Book contract", {
       zh: "作品契约",
-      badge: detail.contractStatus === "final" ? "Final" : "Draft",
-      meta: detail.contract ? `${detail.contract.length} chars` : "Empty",
+      state: canonState(detail.contractStatus),
+      meta: `${detail.contract?.length ?? 0} chars`,
     })
   );
 
@@ -241,11 +288,10 @@ export function buildDocTree(
         beats.map((beat) =>
           doc("beat", beat.id, beat.title, {
             zh: "情节点",
-            badge: beat.status === "final" ? "Final" : undefined,
-            meta: beat.status,
+            state: canonState(beat.status),
           })
         ),
-        { zh: "卷规划" }
+        { zh: "卷规划", state: canonState(volume.status) }
       )
     );
   }
@@ -263,7 +309,7 @@ export function buildDocTree(
   const entryDoc = (entry: NovelDetail["worldEntries"][number]): DocNode =>
     doc("world_entry", entry.id, entry.title, {
       zh: "世界书",
-      badge: entry.status === "final" ? "Final" : undefined,
+      state: canonState(entry.status),
       meta: entry.category,
     });
   for (const group of groups) {
@@ -293,7 +339,7 @@ export function buildDocTree(
       detail.characters.map((c) =>
         doc("character", c.id, c.name, {
           zh: "人物档案",
-          badge: c.status === "final" ? "Final" : undefined,
+          state: canonState(c.status),
           meta: c.role || undefined,
         })
       ),
@@ -301,7 +347,7 @@ export function buildDocTree(
     )
   );
 
-  // 5. Chapters. The rows carry their own state (Final / Revised / Draft);
+  // 5. Chapters. Every row carries its own canon state (Draft / Final);
   // the FOLDER badge is the number of FINAL chapters — the "final only"
   // count the order asks for.
   const finalCount = chapters.filter((c) => c.status === "final").length;
@@ -312,7 +358,7 @@ export function buildDocTree(
       chapters.map((ch) =>
         doc("chapter", ch.id, `${String(ch.index).padStart(4, "0")} ${ch.title}`, {
           zh: "草稿区",
-          badge: chapterStatusLabel(ch.status),
+          state: canonState(ch.status),
           meta: `${formatWordCount(ch.wordCount)} words`,
         })
       ),
@@ -328,6 +374,7 @@ export function buildDocTree(
       detail.packs.map((p) =>
         doc("pack", p.id, p.title, {
           zh: "材料包",
+          state: p.status ? canonState(p.status) : undefined,
           meta: `Chapter ${p.chapterIndex} · ${p.kind}`,
         })
       ),
@@ -346,11 +393,12 @@ export function buildDocTree(
   }
   nodes.push(folder("memory", "Memory", memoryChildren, { zh: "本书记忆" }));
 
-  // 8. Concepts — the creation snapshot.
+  // 8. Concepts — the creation snapshot. It has no canon state: the fact it
+  // carries is the NUMBER of filled fields (STEP 79), never a state word.
   nodes.push(
     doc("concept", novel.id, "Concepts", {
       zh: "构想",
-      badge: novel.conceptSnapshot ? "Written" : "Empty",
+      badge: String(conceptFieldCount(novel.conceptSnapshot)),
     })
   );
 

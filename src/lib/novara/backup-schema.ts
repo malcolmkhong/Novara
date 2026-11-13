@@ -37,6 +37,8 @@ export const backupFileSchema = z.object({
         z.object({
           title: z.string().trim().min(1).max(200),
           content: z.string().max(1000000).default(""),
+          // STEP 79 — the stored vocabulary is draft | final. "revised" is
+          // still READ (old backups carry it) and is imported as a draft.
           status: z.enum(["draft", "revised", "final"]).default("draft"),
           brief: z.string().max(20000).default(""),
         })

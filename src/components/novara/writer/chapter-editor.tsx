@@ -37,10 +37,11 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import { getChapterVersions, type ChapterVersionRow } from "@/lib/novara/api";
+import { canonState } from "@/lib/novara/doc-tree";
 import type { AiDraftResult, ChapterDTO, ChapterStatus } from "@/lib/novara/types";
 import { countWords, formatWordCount } from "@/lib/novara/words";
 import { cn } from "@/lib/utils";
-import { ChapterStatusBadge, ConfirmDialog, PinButton } from "./ui-bits";
+import { ConfirmDialog, PinButton, StateChip } from "./ui-bits";
 import { MarkdownDocument } from "./markdown-document";
 
 /** Editor surface: raw writing vs rendered document window. */
@@ -108,7 +109,9 @@ export function ChapterEditor({
     if (selected) {
       setTitle(selected.title);
       setContent(selected.content);
-      setStatus(selected.status);
+      // The vocabulary has two words (STEP 79): a legacy "revised" row reads
+      // as a draft.
+      setStatus(canonState(selected.status));
       setBrief(selected.brief);
       setDirty(false);
       // Opening a file reads like opening a document — chapters with content
@@ -138,7 +141,7 @@ export function ChapterEditor({
       if (next) {
         setTitle(next.title);
         setContent(next.content);
-        setStatus(next.status);
+        setStatus(canonState(next.status));
         setBrief(next.brief);
         setDirty(false);
       }
@@ -257,7 +260,8 @@ export function ChapterEditor({
   const reopenChapter = async () => {
     setReopening(true);
     try {
-      await save({ status: "revised" });
+      // STEP 79 — the vocabulary is Draft | Final: reopening demotes to Draft.
+      await save({ status: "draft" });
     } finally {
       setReopening(false);
     }
@@ -464,14 +468,9 @@ export function ChapterEditor({
                     </span>
                     <span className="mt-0.5 flex items-center gap-2 text-xs text-muted-foreground">
                       {formatWordCount(ch.wordCount)} words
-                      {ch.status !== "draft" && (
+                      {ch.status === "final" && (
                         <span
-                          className={cn(
-                            "h-1.5 w-1.5 rounded-full",
-                            ch.status === "final"
-                              ? "bg-emerald-600"
-                              : "bg-amber-500"
-                          )}
+                          className="h-1.5 w-1.5 rounded-full bg-emerald-600"
                           aria-hidden="true"
                         />
                       )}
@@ -626,32 +625,9 @@ export function ChapterEditor({
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem value="draft">Draft</SelectItem>
-                      <SelectItem value="revised">Revised</SelectItem>
                       <SelectItem value="final">Final</SelectItem>
                     </SelectContent>
                   </Select>
-                  {isFinal && (
-                    <span className="flex shrink-0 items-center gap-2">
-                      <span className="flex items-center gap-1 text-xs text-muted-foreground">
-                        <Lock className="h-3.5 w-3.5" aria-hidden="true" />
-                        Final — locked
-                      </span>
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        onClick={() => void reopenChapter()}
-                        disabled={reopening}
-                        aria-label="Reopen chapter for editing"
-                      >
-                        {reopening ? (
-                          <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
-                        ) : (
-                          <RotateCcw className="h-4 w-4" aria-hidden="true" />
-                        )}
-                        Reopen
-                      </Button>
-                    </span>
-                  )}
                 </>
               ) : (
                 <div className="flex min-w-0 flex-1 items-center justify-between gap-3">
@@ -663,9 +639,32 @@ export function ChapterEditor({
                   </span>
                 </div>
               )}
+              {isFinal && (
+                <span className="flex shrink-0 items-center gap-2">
+                  <span className="flex items-center gap-1 text-xs text-muted-foreground">
+                    <Lock className="h-3.5 w-3.5" aria-hidden="true" />
+                    Final — locked
+                  </span>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => void reopenChapter()}
+                    disabled={reopening}
+                    aria-label="Reopen chapter for editing"
+                  >
+                    {reopening ? (
+                      <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+                    ) : (
+                      <RotateCcw className="h-4 w-4" aria-hidden="true" />
+                    )}
+                    Reopen
+                  </Button>
+                </span>
+              )}
             </div>
 
-            {/* Toolbar — view toggle always; writing tools in write mode */}
+            {/* Toolbar — view toggle always; writing tools in write mode only
+                while the chapter is a draft (a final chapter is locked) */}
             <div className="flex flex-wrap items-center gap-2 border-b bg-muted/30 px-4 py-2 text-xs text-muted-foreground">
               <span
                 className="flex overflow-hidden rounded-md border bg-background"
@@ -726,7 +725,7 @@ export function ChapterEditor({
                   Unsaved changes
                 </span>
               )}
-              {view === "write" && (
+              {view === "write" && !isFinal && (
                 <span className="ml-auto flex items-center gap-2">
                   <Button
                     size="sm"
@@ -845,11 +844,13 @@ export function ChapterEditor({
               </div>
             )}
             <div className="flex items-center justify-between border-t px-4 py-2 text-xs text-muted-foreground">
-              <ChapterStatusBadge status={status} />
+              <StateChip status={status} />
               <span>
                 {view === "write"
                   ? "Autosaves when you click away"
-                  : "Open in Write to edit"}{" "}
+                  : isFinal
+                    ? "Locked — reopen to edit"
+                    : "Open in Write to edit"}{" "}
                 · Chapter {selected.index}
               </span>
             </div>

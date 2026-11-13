@@ -57,12 +57,15 @@ import { assessOverwrite } from "@/lib/novara/write-gate";
 import { recordChapterVersion } from "@/lib/novara/versions";
 import { reviewChapter } from "@/lib/novara/review";
 import {
-  extractSediment,
   isProjectionCurrent,
   sedimentChapterCore,
-  writeSedimentProjection,
   type SedimentOutcome,
 } from "@/lib/novara/sediment";
+import {
+  finalizeChapter,
+  moveAsset,
+  type LifecycleKind,
+} from "@/lib/novara/lifecycle";
 import {
   buildMemorySyncReport,
   buildMemoryView,
@@ -77,7 +80,6 @@ import {
 } from "@/lib/novara/open-loops";
 import {
   auditReport,
-  evaluateFinalize,
   evaluateRepair,
   evaluateSettle,
 } from "@/lib/novara/qc";
@@ -1354,9 +1356,31 @@ const READ_ACTIONS = new Set([
 
 const MEMBER_TOOLS: Record<AgentRoleId, string[]> = {
   atlas: [...READ_ACTIONS, "doctor_scan"],
-  sage: [...READ_ACTIONS, "doctor_scan", "create_chapter", "update_chapter", "update_outline_beat", "update_ledger", "finish"],
+  // STEP 79 — the roles that already write canon may also reopen it (and must
+  // say so in the chat) and may finalize a draft asset.
+  sage: [
+    ...READ_ACTIONS,
+    "doctor_scan",
+    "create_chapter",
+    "update_chapter",
+    "update_outline_beat",
+    "update_ledger",
+    "reopen_asset",
+    "finalize_asset",
+    "finish",
+  ],
   nova: [...READ_ACTIONS],
-  prism: [...READ_ACTIONS, "doctor_scan", "review_chapter", "finalize_chapter", "settle_chapter", "update_ledger", "finish"],
+  prism: [
+    ...READ_ACTIONS,
+    "doctor_scan",
+    "review_chapter",
+    "finalize_chapter",
+    "settle_chapter",
+    "update_ledger",
+    "reopen_asset",
+    "finalize_asset",
+    "finish",
+  ],
   forge: [...READ_ACTIONS, "doctor_scan", "export_markdown", "finish"],
 };
 
@@ -1366,6 +1390,101 @@ const DANGLING_LOOP_MAX_AGE = 20;
 
 function toolAllowedFor(actor: AgentRoleId, action: string): boolean {
   return MEMBER_TOOLS[actor]?.includes(action) ?? false;
+}
+
+/**
+ * STEP 79 — resolve the reference the model gives ("chapter 3", "陈素") to the
+ * asset row it means. The model never sees ids, so the tool carries a human
+ * reference and the runtime does the lookup.
+ */
+async function resolveLifecycleTarget(
+  novelId: string,
+  kind: string,
+  index?: number,
+  name?: string
+): Promise<{ id: string; label: string } | null> {
+  const byName = <T extends { title: string }>(rows: T[], wanted: string): T | undefined =>
+    rows.find((row) => row.title === wanted) ??
+    rows.find((row) => row.title.toLowerCase() === wanted.toLowerCase());
+  switch (kind) {
+    case "chapter": {
+      if (index === undefined) return null;
+      const chapter = await db.chapter.findFirst({
+        where: { novelId, index },
+        select: { id: true, index: true, title: true },
+      });
+      if (!chapter) return null;
+      return { id: chapter.id, label: `Chapter ${chapter.index} "${truncate(chapter.title, 60)}"` };
+    }
+    case "contract": {
+      const contract = await db.novelContract.findUnique({
+        where: { novelId },
+        select: { novelId: true },
+      });
+      return contract ? { id: contract.novelId, label: "the novel contract" } : null;
+    }
+    case "character": {
+      if (!name) return null;
+      const rows = await db.character.findMany({
+        where: { novelId },
+        select: { id: true, name: true },
+      });
+      const hit =
+        rows.find((row) => row.name === name) ??
+        rows.find((row) => row.name.toLowerCase() === name.toLowerCase());
+      return hit ? { id: hit.id, label: `${hit.name}'s sheet` } : null;
+    }
+    case "world_entry": {
+      if (!name) return null;
+      const rows = await db.worldEntry.findMany({
+        where: { novelId },
+        select: { id: true, title: true },
+      });
+      const hit = byName(rows, name);
+      return hit ? { id: hit.id, label: `world entry "${hit.title}"` } : null;
+    }
+    case "outline_beat": {
+      const rows = await db.outlineBeat.findMany({
+        where: { novelId },
+        select: { id: true, index: true, title: true },
+      });
+      const hit =
+        index !== undefined
+          ? rows.find((row) => row.index === index)
+          : name
+            ? byName(rows, name)
+            : undefined;
+      return hit
+        ? { id: hit.id, label: `outline beat ${hit.index} "${truncate(hit.title, 60)}"` }
+        : null;
+    }
+    case "volume": {
+      const rows = await db.volume.findMany({
+        where: { novelId },
+        select: { id: true, index: true, title: true },
+      });
+      const hit =
+        index !== undefined
+          ? rows.find((row) => row.index === index)
+          : name
+            ? byName(rows, name)
+            : undefined;
+      return hit
+        ? { id: hit.id, label: `volume ${hit.index} "${truncate(hit.title, 60)}"` }
+        : null;
+    }
+    case "pack": {
+      if (!name) return null;
+      const rows = await db.chapterPack.findMany({
+        where: { novelId },
+        select: { id: true, title: true },
+      });
+      const hit = byName(rows, name);
+      return hit ? { id: hit.id, label: `pack "${hit.title}"` } : null;
+    }
+    default:
+      return null;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -3076,44 +3195,23 @@ export async function executeTool(params: ExecuteToolParams): Promise<ToolResult
           feed: `finalize_chapter(${action.index}) → ok: chapter is already FINAL — adopted (idempotent re-dispatch, no re-commit).`,
         };
       }
-      const latest = await db.chapterReview.findFirst({
-        where: { chapterId: chapter.id },
-        orderBy: { createdAt: "desc" },
+      // STEP 79 — the lifecycle service owns the move. The E2 gate, the settle
+      // precondition, the extraction OUTSIDE the transaction and the ONE
+      // transaction that flips the chapter AND projects its memory AND writes
+      // the AssetTransition row all live in src/lib/novara/lifecycle.ts — this
+      // tool calls the rule, it does not re-implement it.
+      const owner = await db.novel.findUnique({
+        where: { id: params.novelId },
+        select: { userId: true },
       });
-      const verdict = evaluateFinalize({
-        latestBlockingCount: latest ? latest.blockingCount : null,
-        wordCount: chapter.wordCount,
+      const result = await finalizeChapter({
+        chapterId: chapter.id,
+        byUid: owner?.userId ?? "",
+        source: `agent:${actor}`,
       });
-      if (!verdict.allowed) {
-        return { ok: false, feed: `finalize_chapter(${action.index}) → ${verdict.reason}` };
-      }
-      // STEP 69 — the settle precondition (qc.ts evaluateSettle): a persisted
-      // review with 0 blocking and a non-empty chapter. The projection is a
-      // CONSEQUENCE of the finalization, so the same gate guards both.
-      const settleVerdict = evaluateSettle({
-        latestBlockingCount: latest ? latest.blockingCount : null,
-        wordCount: chapter.wordCount,
-      });
-      if (!settleVerdict.allowed) {
-        return { ok: false, feed: `finalize_chapter(${action.index}) → ${settleVerdict.reason}` };
-      }
-
-      // STEP 69 — SETTLE IS A CONSEQUENCE OF FINALIZE, IN ONE TRANSACTION.
-      //
-      // The model call happens FIRST and OUTSIDE the transaction (a slow AI
-      // call must never hold a database connection). The transaction then
-      // flips the chapter to final AND writes the whole memory projection
-      // (digest · StoryFact · CharacterState · Foreshadow) — so a chapter
-      // can NEVER be final with unprojected memory: any failure rolls the
-      // finalization back with it.
-      // STEP 72 — a failed extraction must reach the user in plain words.
-      // The chapter stays draft (the status flip never happened), and the
-      // feed says exactly that — no silent draft.
-      let records: Awaited<ReturnType<typeof extractSediment>>;
-      try {
-        records = await extractSediment(chapter.id);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : "the memory step failed";
+      if (!result.ok) {
+        const message = String(result.body.reason ?? "the finalization was refused");
+        // STEP 72 — a failed finalization must reach the user in plain words.
         await emitEvent({
           runId: params.runId,
           taskId: params.taskId,
@@ -3126,17 +3224,16 @@ export async function executeTool(params: ExecuteToolParams): Promise<ToolResult
           feed: `finalize_chapter(${action.index}) → error: ${message}`,
         };
       }
-      // Resolve the ownership identity BEFORE opening the interactive
-      // transaction (DATABASE_URL carries connection_limit=1 — a base-client
-      // query from inside the transaction would have nowhere to run).
-      await warmIdentity();
-      const outcome = await db.$transaction(async (tx) => {
-        await tx.chapter.update({
-          where: { id: chapter.id },
-          data: { status: "final" },
-        });
-        return await writeSedimentProjection(tx, records);
-      });
+      // Idempotent: the chapter was already final — adopt, count nothing.
+      if (!result.changed) {
+        return {
+          ok: true,
+          adopted: "finalize",
+          finalizedChapterId: chapter.id,
+          feed: `finalize_chapter(${action.index}) → ok: chapter is already FINAL — adopted (idempotent re-dispatch, no re-commit).`,
+        };
+      }
+      const outcome = result.outcome;
       params.measured.chaptersFinalized += 1;
       params.measured.settlesRun += 1;
       await emitEvent({
@@ -3144,7 +3241,7 @@ export async function executeTool(params: ExecuteToolParams): Promise<ToolResult
         taskId: params.taskId,
         actor,
         kind: "write",
-        summary: `Chapter ${chapter.index} "${truncate(chapter.title, 60)}" marked FINAL — E2 gate passed (latest review: ${latest?.blockingCount ?? 0} blocking, verified in DB) and its memory was projected in the same commit.`,
+        summary: `Chapter ${chapter.index} "${truncate(chapter.title, 60)}" marked FINAL — E2 gate passed (latest review: ${result.blockingCount ?? 0} blocking, verified in DB) and its memory was projected in the same commit.`,
         payload: { artifact: "chapter", chapterId: chapter.id, index: chapter.index, status: "final", op: "finalize_chapter" },
       });
       // The projection is its own verified effect: it carries its own event so
@@ -3155,19 +3252,91 @@ export async function executeTool(params: ExecuteToolParams): Promise<ToolResult
         taskId: params.taskId,
         actor,
         kind: "write",
-        summary: `Chapter ${chapter.index} memory settled by the finalization — ${outcome.factsCreated} facts (+${outcome.factsTouched} reinforced, ${outcome.factsRetired} retired as superseded), ${outcome.characterStates} states, ${outcome.plantsCreated} plants, ${outcome.advanced} advanced, ${outcome.paid} paid (verified in DB).`,
+        summary: `Chapter ${chapter.index} memory settled by the finalization — ${outcome?.factsCreated ?? 0} facts (+${outcome?.factsTouched ?? 0} reinforced, ${outcome?.factsRetired ?? 0} retired as superseded), ${outcome?.characterStates ?? 0} states, ${outcome?.plantsCreated ?? 0} plants, ${outcome?.advanced ?? 0} advanced, ${outcome?.paid ?? 0} paid (verified in DB).`,
         payload: { artifact: "chapter", chapterId: chapter.id, index: chapter.index, settles: outcome, op: "settle_chapter" },
       });
       // STEP 72 — the anti-rot counters are REPORTED, not hidden: a fact the
       // model left without a subject stays live, and the operator must see it.
       const subjectlessNote =
-        outcome.subjectlessFacts > 0
-          ? ` ${outcome.subjectlessFacts} rot-prone fact(s) had no subject and stay live (the model named no subject — never guessed).`
+        (outcome?.subjectlessFacts ?? 0) > 0
+          ? ` ${outcome?.subjectlessFacts} rot-prone fact(s) had no subject and stay live (the model named no subject — never guessed).`
           : "";
       return {
         ok: true,
         finalizedChapterId: chapter.id,
-        feed: `finalize_chapter(${action.index}) → ok: chapter status = final (E2 gate passed on the persisted review) and its memory was projected in the same commit — ${outcome.factsCreated} facts (+${outcome.factsTouched} reinforced, ${outcome.factsRetired} retired as superseded), ${outcome.characterStates} states, ${outcome.plantsCreated} plants, ${outcome.advanced} advanced, ${outcome.paid} paid.${subjectlessNote}`,
+        feed: `finalize_chapter(${action.index}) → ok: chapter status = final (E2 gate passed on the persisted review) and its memory was projected in the same commit — ${outcome?.factsCreated ?? 0} facts (+${outcome?.factsTouched ?? 0} reinforced, ${outcome?.factsRetired ?? 0} retired as superseded), ${outcome?.characterStates ?? 0} states, ${outcome?.plantsCreated ?? 0} plants, ${outcome?.advanced ?? 0} advanced, ${outcome?.paid ?? 0} paid.${subjectlessNote}`,
+      };
+    }
+    case "reopen_asset":
+    case "finalize_asset": {
+      // STEP 79 — the lifecycle moves. The agent may reopen a final asset
+      // (and must say so in the chat) and may finalize a draft one. The rule
+      // itself is the service's; the routes call the same service.
+      const move = action.action === "reopen_asset" ? "reopen" : "finalize";
+      const target = await resolveLifecycleTarget(
+        params.novelId,
+        action.kind,
+        action.index,
+        action.name
+      );
+      if (!target) {
+        return {
+          ok: false,
+          feed: `${action.action} → error: no ${action.kind} matches ${action.index !== undefined ? `index ${action.index}` : `name "${action.name ?? ""}"`} in this novel.`,
+        };
+      }
+      const owner = await db.novel.findUnique({
+        where: { id: params.novelId },
+        select: { userId: true },
+      });
+      const result = await moveAsset({
+        kind: action.kind as LifecycleKind,
+        assetId: target.id,
+        novelId: params.novelId,
+        move,
+        byUid: owner?.userId ?? "",
+        source: `agent:${actor}`,
+        note: action.reason,
+      });
+      if (!result.ok) {
+        const message = String(result.body.reason ?? result.body.error ?? "the move was refused");
+        await emitEvent({
+          runId: params.runId,
+          taskId: params.taskId,
+          actor,
+          kind: "error",
+          summary: `${target.label} was NOT ${move}d — ${truncate(message, 240)}`,
+        });
+        return { ok: false, feed: `${action.action} → error: ${message}` };
+      }
+      if (!result.changed) {
+        return {
+          ok: true,
+          feed: `${action.action} → ok: ${target.label} is already ${result.to} — adopted (idempotent, no duplicate transition).`,
+        };
+      }
+      // A reopen is NEVER silent: the line goes to the chat.
+      await emitEvent({
+        runId: params.runId,
+        taskId: params.taskId,
+        actor,
+        kind: "write",
+        summary:
+          move === "reopen"
+            ? `Reopening ${target.label} to ${action.reason ?? "edit it"} — status ${result.from} → draft (verified in DB; the memory pool is untouched).`
+            : `Finalized ${target.label} — status ${result.from} → final (verified in DB).`,
+        payload: {
+          artifact: action.kind,
+          assetId: target.id,
+          op: action.action,
+          from: result.from,
+          to: result.to,
+          reason: action.reason ?? null,
+        },
+      });
+      return {
+        ok: true,
+        feed: `${action.action} → ok: ${target.label} is now ${result.to} (status ${result.from} → ${result.to}, verified in DB).`,
       };
     }
     case "settle_chapter": {

@@ -1,14 +1,8 @@
 import { db } from "@/lib/db";
+import { callerUid } from "@/lib/credits/charge";
 import { ledgerUpdateSchema } from "@/lib/novara/schemas";
 import { jsonError, parseBody, validationError } from "@/lib/novara/api-helpers";
-import {
-  assetDeleteGate,
-  assetGate,
-  canonDowngrade,
-  canonLock,
-  type AssetLockField,
-  type AssetType,
-} from "@/lib/novara/asset-gate";
+import { finalizedRefusal, moveAsset } from "@/lib/novara/lifecycle";
 
 export const dynamic = "force-dynamic";
 
@@ -16,40 +10,96 @@ type Params = { params: Promise<{ id: string; kind: string }> };
 
 const KINDS = new Set(["storyline", "timeline", "arc", "promise", "clue"]);
 
-// Per-kind gate metadata: which table row is the asset, which field carries
-// the canon lock, and which fields make up the verbatim snapshot.
+// Per-kind gate metadata: which column carries the canon lock. The lock
+// rides the `lock` column for storyline/promise/clue (their own `status` is
+// the lifecycle state) and the `status` column for timeline/arc.
 const GATE_META = {
-  storyline: { assetType: "storyline" as AssetType, lockField: "lock" as AssetLockField },
-  timeline: { assetType: "timeline_entry" as AssetType, lockField: "status" as AssetLockField },
-  arc: { assetType: "character_arc" as AssetType, lockField: "status" as AssetLockField },
-  promise: { assetType: "story_promise" as AssetType, lockField: "lock" as AssetLockField },
-  clue: { assetType: "story_clue" as AssetType, lockField: "lock" as AssetLockField },
-};
+  storyline: { lockField: "lock" },
+  timeline: { lockField: "status" },
+  arc: { lockField: "status" },
+  promise: { lockField: "lock" },
+  clue: { lockField: "lock" },
+} as const;
 
 type GateKind = keyof typeof GATE_META;
 
-/** Current lock state + snapshot fields for a ledger row of any kind. */
-function ledgerLockSnapshot(
+/** The canon lock of a ledger row: "draft" or "final". */
+function ledgerLockState(kind: GateKind, row: Record<string, unknown>): string {
+  const field = GATE_META[kind].lockField;
+  return String(row[field] ?? "") || "draft";
+}
+
+/**
+ * STEP 79 — the final lock for one ledger row.
+ *
+ * A final row refuses every mutation with the typed body
+ * { error: "asset_finalized", kind, id, reopen } (HTTP 409). The explicit
+ * reopen is the one way through it: the lifecycle service archives the final
+ * state into AssetVersion, demotes the row to draft and writes the
+ * AssetTransition row.
+ *
+ * Returns the response to send, or null when the row may be mutated.
+ */
+async function ledgerGuard(
   kind: GateKind,
-  row: Record<string, unknown>
-): { lockState: string; snapshotFields: Record<string, string | number | null | undefined> } {
-  const lockState = String(GATE_META[kind].lockField === "lock" ? row.lock : row.status) || "draft";
-  const fields: Record<string, string | number | null | undefined> = {};
-  for (const key of ["name", "summary", "status", "lock", "label", "detail", "characterName", "note", "content", "chapterIndex", "order", "madeChapter", "dueChapter", "plantChapter", "revealChapter"]) {
-    const value = row[key];
-    if (value === undefined) continue;
-    fields[key] =
-      value === null || typeof value === "string" || typeof value === "number"
-        ? (value as string | number | null)
-        : String(value);
+  row: { id: string; novelId: string },
+  lockState: string,
+  wantsReopen: boolean,
+  req: Request
+): Promise<Response | null> {
+  if (!wantsReopen) {
+    const refusal = finalizedRefusal({
+      kind,
+      id: row.id,
+      novelId: row.novelId,
+      status: lockState,
+    });
+    if (refusal) return Response.json(refusal, { status: 409 });
+    return null;
   }
-  return { lockState, snapshotFields: fields };
+  if (lockState !== "final") return null;
+  const reopened = await moveAsset({
+    kind,
+    assetId: row.id,
+    novelId: row.novelId,
+    move: "reopen",
+    byUid: callerUid(req) ?? "",
+    source: "author",
+  });
+  if (!reopened.ok) return Response.json(reopened.body, { status: reopened.status });
+  return null;
+}
+
+/**
+ * Lock a ledger row through the lifecycle service: it archives the pre-final
+ * state, writes the AssetTransition row and retires the facts that name the
+ * row. Returns the response to send, or null on success.
+ */
+async function ledgerFinalize(
+  kind: GateKind,
+  id: string,
+  novelId: string,
+  req: Request
+): Promise<Response | null> {
+  const finalized = await moveAsset({
+    kind,
+    assetId: id,
+    novelId,
+    move: "finalize",
+    byUid: callerUid(req) ?? "",
+    source: "author",
+  });
+  if (!finalized.ok) return Response.json(finalized.body, { status: finalized.status });
+  return null;
 }
 
 // PATCH /api/ledger/[kind]/[id] — update one ledger row.
 // timeline/arc rows support moveTo (renumber the sibling sequence server-side).
-// Canon gate (Phase 9): a locked row is Immutable Canon — 409 unless
-// reopen:true (archives the final state, downgrades to draft).
+// Final lock (STEP 79): a locked row is immutable canon — the patch is refused
+// with HTTP 409 and the typed body
+// { error: "asset_finalized", kind, id, reopen } unless `reopen: true`, which
+// demotes the row to draft through the lifecycle service (which archives the
+// final state into AssetVersion).
 export async function PATCH(req: Request, { params }: Params) {
   const { id, kind } = await params;
   if (!KINDS.has(kind)) return jsonError(`Unknown ledger kind: ${kind}`, 404);
@@ -69,27 +119,38 @@ export async function PATCH(req: Request, { params }: Params) {
     const existing = await db.storyline.findUnique({ where: { id } });
     if (!existing) return jsonError("Storyline not found", 404);
     const { reopen, lock, ...rest } = schema.data.data;
-    const { lockState, snapshotFields } = ledgerLockSnapshot("storyline", existing);
-    const gate = await assetGate({
-      novelId: existing.novelId,
-      assetType: GATE_META.storyline.assetType,
-      assetId: existing.id,
-      assetLabel: existing.name,
-      lockState,
-      lockField: "lock",
-      reopen,
-      wantsFinal: lock === "final",
-      snapshotFields,
-    });
-    if (gate instanceof Response) return gate;
-    const row = await db.storyline.update({
+    const wantsReopen = reopen === true;
+    const wantsFinal = lock === "final";
+    const lockState = ledgerLockState("storyline", existing);
+    // A reopened row is never re-finalized in the same request.
+    const canonMoved = lockState === "final" && wantsReopen;
+
+    const guardError = await ledgerGuard("storyline", existing, lockState, wantsReopen, req);
+    if (guardError) return guardError;
+
+    // The canon lock belongs to the lifecycle service: the update never
+    // writes the lock column itself.
+    let row = await db.storyline.update({
       where: { id },
       data: {
         ...rest,
-        ...(gate.reopened ? canonDowngrade("lock") : {}),
-        ...(gate.finalized ? canonLock("lock") : {}),
       },
     });
+
+    if (wantsFinal && !canonMoved) {
+      const finalizeError = await ledgerFinalize(
+        "storyline",
+        existing.id,
+        existing.novelId,
+        req
+      );
+      if (finalizeError) return finalizeError;
+      // The service locked the row — re-read so the response carries the
+      // locked state.
+      const locked = await db.storyline.findUnique({ where: { id } });
+      if (locked) row = locked;
+    }
+
     return Response.json({ row });
   }
 
@@ -97,19 +158,14 @@ export async function PATCH(req: Request, { params }: Params) {
     const existing = await db.timelineEntry.findUnique({ where: { id } });
     if (!existing) return jsonError("Timeline entry not found", 404);
     const { moveTo, reopen, status, ...rest } = schema.data.data;
-    const { lockState, snapshotFields } = ledgerLockSnapshot("timeline", existing);
-    const gate = await assetGate({
-      novelId: existing.novelId,
-      assetType: GATE_META.timeline.assetType,
-      assetId: existing.id,
-      assetLabel: existing.label,
-      lockState,
-      lockField: "status",
-      reopen,
-      wantsFinal: status === "final",
-      snapshotFields,
-    });
-    if (gate instanceof Response) return gate;
+    const wantsReopen = reopen === true;
+    const wantsFinal = status === "final";
+    const lockState = ledgerLockState("timeline", existing);
+    const canonMoved = lockState === "final" && wantsReopen;
+
+    const guardError = await ledgerGuard("timeline", existing, lockState, wantsReopen, req);
+    if (guardError) return guardError;
+
     if (moveTo !== undefined && moveTo !== existing.order) {
       const siblings = await db.timelineEntry.findMany({
         where: { novelId: existing.novelId },
@@ -125,14 +181,30 @@ export async function PATCH(req: Request, { params }: Params) {
         )
       );
     }
-    const row = await db.timelineEntry.update({
+
+    // The canon lock belongs to the lifecycle service: the update never
+    // writes the lock column itself.
+    let row = await db.timelineEntry.update({
       where: { id },
       data: {
         ...rest,
-        ...(gate.reopened ? canonDowngrade("status") : {}),
-        ...(gate.finalized ? canonLock("status") : {}),
       },
     });
+
+    if (wantsFinal && !canonMoved) {
+      const finalizeError = await ledgerFinalize(
+        "timeline",
+        existing.id,
+        existing.novelId,
+        req
+      );
+      if (finalizeError) return finalizeError;
+      // The service locked the row — re-read so the response carries the
+      // locked state.
+      const locked = await db.timelineEntry.findUnique({ where: { id } });
+      if (locked) row = locked;
+    }
+
     return Response.json({ row });
   }
 
@@ -141,19 +213,14 @@ export async function PATCH(req: Request, { params }: Params) {
     const existing = await db.characterArc.findUnique({ where: { id } });
     if (!existing) return jsonError("Character arc not found", 404);
     const { moveTo, reopen, status, ...rest } = schema.data.data;
-    const { lockState, snapshotFields } = ledgerLockSnapshot("arc", existing);
-    const gate = await assetGate({
-      novelId: existing.novelId,
-      assetType: GATE_META.arc.assetType,
-      assetId: existing.id,
-      assetLabel: `${existing.characterName} · ${existing.order}`,
-      lockState,
-      lockField: "status",
-      reopen,
-      wantsFinal: status === "final",
-      snapshotFields,
-    });
-    if (gate instanceof Response) return gate;
+    const wantsReopen = reopen === true;
+    const wantsFinal = status === "final";
+    const lockState = ledgerLockState("arc", existing);
+    const canonMoved = lockState === "final" && wantsReopen;
+
+    const guardError = await ledgerGuard("arc", existing, lockState, wantsReopen, req);
+    if (guardError) return guardError;
+
     if (moveTo !== undefined && moveTo !== existing.order) {
       const siblings = await db.characterArc.findMany({
         where: { novelId: existing.novelId, characterName: existing.characterName },
@@ -169,14 +236,25 @@ export async function PATCH(req: Request, { params }: Params) {
         )
       );
     }
-    const row = await db.characterArc.update({
+
+    // The canon lock belongs to the lifecycle service: the update never
+    // writes the lock column itself.
+    let row = await db.characterArc.update({
       where: { id },
       data: {
         ...rest,
-        ...(gate.reopened ? canonDowngrade("status") : {}),
-        ...(gate.finalized ? canonLock("status") : {}),
       },
     });
+
+    if (wantsFinal && !canonMoved) {
+      const finalizeError = await ledgerFinalize("arc", existing.id, existing.novelId, req);
+      if (finalizeError) return finalizeError;
+      // The service locked the row — re-read so the response carries the
+      // locked state.
+      const locked = await db.characterArc.findUnique({ where: { id } });
+      if (locked) row = locked;
+    }
+
     return Response.json({ row });
   }
 
@@ -186,27 +264,37 @@ export async function PATCH(req: Request, { params }: Params) {
     const existing = await db.storyPromise.findUnique({ where: { id } });
     if (!existing) return jsonError("Promise not found", 404);
     const { reopen, lock, ...rest } = schema.data.data;
-    const { lockState, snapshotFields } = ledgerLockSnapshot("promise", existing);
-    const gate = await assetGate({
-      novelId: existing.novelId,
-      assetType: GATE_META.promise.assetType,
-      assetId: existing.id,
-      assetLabel: existing.content.slice(0, 40),
-      lockState,
-      lockField: "lock",
-      reopen,
-      wantsFinal: lock === "final",
-      snapshotFields,
-    });
-    if (gate instanceof Response) return gate;
-    const row = await db.storyPromise.update({
+    const wantsReopen = reopen === true;
+    const wantsFinal = lock === "final";
+    const lockState = ledgerLockState("promise", existing);
+    const canonMoved = lockState === "final" && wantsReopen;
+
+    const guardError = await ledgerGuard("promise", existing, lockState, wantsReopen, req);
+    if (guardError) return guardError;
+
+    // The canon lock belongs to the lifecycle service: the update never
+    // writes the lock column itself.
+    let row = await db.storyPromise.update({
       where: { id },
       data: {
         ...rest,
-        ...(gate.reopened ? canonDowngrade("lock") : {}),
-        ...(gate.finalized ? canonLock("lock") : {}),
       },
     });
+
+    if (wantsFinal && !canonMoved) {
+      const finalizeError = await ledgerFinalize(
+        "promise",
+        existing.id,
+        existing.novelId,
+        req
+      );
+      if (finalizeError) return finalizeError;
+      // The service locked the row — re-read so the response carries the
+      // locked state.
+      const locked = await db.storyPromise.findUnique({ where: { id } });
+      if (locked) row = locked;
+    }
+
     return Response.json({ row });
   }
 
@@ -214,32 +302,43 @@ export async function PATCH(req: Request, { params }: Params) {
   const existingClue = await db.storyClue.findUnique({ where: { id } });
   if (!existingClue) return jsonError("Clue not found", 404);
   const { reopen, lock, ...clueRest } = schema.data.data;
-  const { lockState, snapshotFields } = ledgerLockSnapshot("clue", existingClue);
-  const gate = await assetGate({
-    novelId: existingClue.novelId,
-    assetType: GATE_META.clue.assetType,
-    assetId: existingClue.id,
-    assetLabel: existingClue.content.slice(0, 40),
-    lockState,
-    lockField: "lock",
-    reopen,
-    wantsFinal: lock === "final",
-    snapshotFields,
-  });
-  if (gate instanceof Response) return gate;
-  const clueRow = await db.storyClue.update({
+  const wantsReopen = reopen === true;
+  const wantsFinal = lock === "final";
+  const lockState = ledgerLockState("clue", existingClue);
+  const canonMoved = lockState === "final" && wantsReopen;
+
+  const guardError = await ledgerGuard("clue", existingClue, lockState, wantsReopen, req);
+  if (guardError) return guardError;
+
+  // The canon lock belongs to the lifecycle service: the update never writes
+  // the lock column itself.
+  let clueRow = await db.storyClue.update({
     where: { id },
     data: {
       ...clueRest,
-      ...(gate.reopened ? canonDowngrade("lock") : {}),
-      ...(gate.finalized ? canonLock("lock") : {}),
     },
   });
+
+  if (wantsFinal && !canonMoved) {
+    const finalizeError = await ledgerFinalize(
+      "clue",
+      existingClue.id,
+      existingClue.novelId,
+      req
+    );
+    if (finalizeError) return finalizeError;
+    // The service locked the row — re-read so the response carries the
+    // locked state.
+    const locked = await db.storyClue.findUnique({ where: { id } });
+    if (locked) clueRow = locked;
+  }
+
   return Response.json({ row: clueRow });
 }
 
 // DELETE /api/ledger/[kind]/[id] — remove one ledger row and close the gap.
-// Locked rows refuse deletion unless ?reopen=1 is explicit (archive first).
+// A locked row is immutable canon: the delete is refused with the typed body
+// unless ?reopen=1 is explicit (the archive and the demote run first).
 export async function DELETE(req: Request, { params }: Params) {
   const { id, kind } = await params;
   if (!KINDS.has(kind)) return jsonError(`Unknown ledger kind: ${kind}`, 404);
@@ -248,17 +347,14 @@ export async function DELETE(req: Request, { params }: Params) {
   if (kind === "storyline") {
     const existing = await db.storyline.findUnique({ where: { id } });
     if (!existing) return jsonError("Storyline not found", 404);
-    const { lockState, snapshotFields } = ledgerLockSnapshot("storyline", existing);
-    const gateError = await assetDeleteGate({
-      novelId: existing.novelId,
-      assetType: GATE_META.storyline.assetType,
-      assetId: existing.id,
-      assetLabel: existing.name,
-      lockState,
-      snapshotFields,
+    const guardError = await ledgerGuard(
+      "storyline",
+      existing,
+      ledgerLockState("storyline", existing),
       reopen,
-    });
-    if (gateError) return gateError;
+      req
+    );
+    if (guardError) return guardError;
     await db.storyline.delete({ where: { id } });
     return Response.json({ ok: true });
   }
@@ -266,17 +362,14 @@ export async function DELETE(req: Request, { params }: Params) {
   if (kind === "timeline") {
     const existing = await db.timelineEntry.findUnique({ where: { id } });
     if (!existing) return jsonError("Timeline entry not found", 404);
-    const { lockState, snapshotFields } = ledgerLockSnapshot("timeline", existing);
-    const gateError = await assetDeleteGate({
-      novelId: existing.novelId,
-      assetType: GATE_META.timeline.assetType,
-      assetId: existing.id,
-      assetLabel: existing.label,
-      lockState,
-      snapshotFields,
+    const guardError = await ledgerGuard(
+      "timeline",
+      existing,
+      ledgerLockState("timeline", existing),
       reopen,
-    });
-    if (gateError) return gateError;
+      req
+    );
+    if (guardError) return guardError;
     const later = await db.timelineEntry.findMany({
       where: { novelId: existing.novelId, order: { gt: existing.order } },
       orderBy: { order: "asc" },
@@ -298,17 +391,14 @@ export async function DELETE(req: Request, { params }: Params) {
   if (kind === "arc") {
     const existing = await db.characterArc.findUnique({ where: { id } });
     if (!existing) return jsonError("Character arc not found", 404);
-    const { lockState, snapshotFields } = ledgerLockSnapshot("arc", existing);
-    const gateError = await assetDeleteGate({
-      novelId: existing.novelId,
-      assetType: GATE_META.arc.assetType,
-      assetId: existing.id,
-      assetLabel: `${existing.characterName} · ${existing.order}`,
-      lockState,
-      snapshotFields,
+    const guardError = await ledgerGuard(
+      "arc",
+      existing,
+      ledgerLockState("arc", existing),
       reopen,
-    });
-    if (gateError) return gateError;
+      req
+    );
+    if (guardError) return guardError;
     const later = await db.characterArc.findMany({
       where: {
         novelId: existing.novelId,
@@ -334,17 +424,14 @@ export async function DELETE(req: Request, { params }: Params) {
   if (kind === "promise") {
     const existing = await db.storyPromise.findUnique({ where: { id } });
     if (!existing) return jsonError("Promise not found", 404);
-    const { lockState, snapshotFields } = ledgerLockSnapshot("promise", existing);
-    const gateError = await assetDeleteGate({
-      novelId: existing.novelId,
-      assetType: GATE_META.promise.assetType,
-      assetId: existing.id,
-      assetLabel: existing.content.slice(0, 40),
-      lockState,
-      snapshotFields,
+    const guardError = await ledgerGuard(
+      "promise",
+      existing,
+      ledgerLockState("promise", existing),
       reopen,
-    });
-    if (gateError) return gateError;
+      req
+    );
+    if (guardError) return guardError;
     await db.storyPromise.delete({ where: { id } });
     return Response.json({ ok: true });
   }
@@ -352,17 +439,14 @@ export async function DELETE(req: Request, { params }: Params) {
   // kind === "clue"
   const existingClue = await db.storyClue.findUnique({ where: { id } });
   if (!existingClue) return jsonError("Clue not found", 404);
-  const { lockState, snapshotFields } = ledgerLockSnapshot("clue", existingClue);
-  const gateError = await assetDeleteGate({
-    novelId: existingClue.novelId,
-    assetType: GATE_META.clue.assetType,
-    assetId: existingClue.id,
-    assetLabel: existingClue.content.slice(0, 40),
-    lockState,
-    snapshotFields,
+  const guardError = await ledgerGuard(
+    "clue",
+    existingClue,
+    ledgerLockState("clue", existingClue),
     reopen,
-  });
-  if (gateError) return gateError;
+    req
+  );
+  if (guardError) return guardError;
   await db.storyClue.delete({ where: { id } });
   return Response.json({ ok: true });
 }

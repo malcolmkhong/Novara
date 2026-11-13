@@ -30,12 +30,14 @@ that was restored — a chapter cannot be final without its memory projection.
 
 These are enforced in code. Do not "simplify" them away.
 
-1. **Final is immutable canon.** `Chapter.status === "final"` cannot be edited without an
-   explicit `reopen`, and a reopen downgrades to `revised` — it can never re-finalize
-   (`src/app/api/chapters/[id]/route.ts:43-92`). The same rule covers the non-body assets
-   handled by `src/lib/novara/asset-gate.ts` (`Character`, `WorldEntry`, `OutlineBeat`,
-   `Volume`, the five ledgers, the contract): reopening archives the old version into
-   `AssetVersion`.
+1. **Final is immutable canon.** A `final` asset cannot be edited: every update/delete
+   route for an authored entity answers `409 {"error":"asset_finalized","kind","id","reopen"}`.
+   The one way back is a `reopen`, which downgrades the asset to `draft` and archives the
+   old version into `AssetVersion`. The rule lives in `src/lib/novara/lifecycle.ts`
+   (`finalizedRefusal`, `moveAsset`) and is applied at the route layer — for the chapters,
+   the contract, `Character`, `WorldEntry`, `OutlineBeat`, `Volume`, `ChapterPack` and the
+   five ledgers. Every reopen and every finalize writes an `AssetTransition` row.
+   A reopen changes **nothing** in memory; only a finalize updates it.
 2. **The projection rides along with the commit.** `finalize_chapter` runs the AI
    extraction **outside** the transaction and then, **inside one transaction**, flips
    `Chapter.status` to `final` and calls `writeSedimentProjection`
@@ -108,7 +110,8 @@ src/
       memory.ts              scoring, retrieval, buildMemoryView, buildMemorySyncReport
       open-loops.ts          forward-only promise/clue transitions
       write-gate.ts          overwrite gate
-      asset-gate.ts          canon lock for non-body assets
+      lifecycle.ts           the draft/final rule: reopen, finalize, transition log
+      asset-gate.ts          AssetVersion snapshots for canon assets
       versions.ts            ChapterVersion snapshots (max 30 per chapter)
       doc-tree.ts / doc-markdown.ts   the document tree model and its renderers
       content.ts             loads agent/ (cards, skills, budgets)
@@ -138,7 +141,7 @@ enums (statuses are `String` fields with inline comments).
 | Area | Models |
 |---|---|
 | Identity | `User` (Firebase subject; the app never writes it) |
-| Body | `Novel` · `Chapter` (`draft` / `revised` / `final`) · `ChapterVersion` · `ChapterReview` |
+| Body | `Novel` · `Chapter` (`draft` / `final`) · `ChapterVersion` · `ChapterReview` |
 | Bible | `Character` · `WorldGroup` · `WorldEntry` |
 | Outline | `Volume` · `OutlineBeat` |
 | Contract | `NovelContract` (+ `Novel.conceptSnapshot`) |
@@ -146,7 +149,7 @@ enums (statuses are `String` fields with inline comments).
 | Memory | `ChapterDigest` · `StoryFact` · `CharacterState` · `Foreshadow` |
 | Draft area | `ChapterPack` (`material` / `prep`) |
 | Agent | `AgentRun` · `AgentTask` · `AgentEvent` · `AgentMessage` · `ContextSummary` · `SkillInvocation` |
-| Immutable layer | `AssetVersion` |
+| Immutable layer | `AssetVersion` · `AssetTransition` (every reopen/finalize) |
 | Usage/credits | `UsageCall` · `UsageProvenance` · `UsageDaily` · `UsageInvoice` · `CreditAccount` · `CreditLedger` |
 | Legacy | `TeamAgent` · `TeamConversation` · `TeamMessage` · `TeamTask` · `TeamTaskLog` · `TeamTurnLog` — no route, UI or runtime code uses them |
 
@@ -178,15 +181,20 @@ bypassed by a prompt.
 | Role | Tools |
 |---|---|
 | **atlas** | `read_novel`, `read_chapter`, `read_outline`, `read_foreshadows`, `read_promises`, `memory_query`, `doctor_scan` |
-| **sage** | the read tools, `doctor_scan`, `create_chapter`, `update_chapter`, `update_outline_beat`, `update_ledger`, `finish` |
+| **sage** | the read tools, `doctor_scan`, `create_chapter`, `update_chapter`, `update_outline_beat`, `update_ledger`, `reopen_asset`, `finalize_asset`, `finish` |
 | **nova** | the read tools only |
-| **prism** | the read tools, `doctor_scan`, `review_chapter`, `finalize_chapter`, `settle_chapter`, `update_ledger`, `finish` |
+| **prism** | the read tools, `doctor_scan`, `review_chapter`, `finalize_chapter`, `settle_chapter`, `update_ledger`, `reopen_asset`, `finalize_asset`, `finish` |
 | **forge** | the read tools, `doctor_scan`, `export_markdown`, `finish` |
 
-Full tool catalogue (16): `read_novel`, `read_chapter`, `read_outline`,
+Full tool catalogue (18): `read_novel`, `read_chapter`, `read_outline`,
 `read_foreshadows`, `read_promises`, `memory_query`, `doctor_scan`, `update_ledger`,
 `review_chapter`, `finalize_chapter`, `settle_chapter`, `export_markdown`,
-`create_chapter`, `update_chapter`, `update_outline_beat`, `finish`.
+`create_chapter`, `update_chapter`, `update_outline_beat`, `reopen_asset`,
+`finalize_asset`, `finish`.
+
+`reopen_asset` / `finalize_asset` move a canon asset between `draft` and `final`
+through `src/lib/novara/lifecycle.ts`. A reopen by the agent **must** carry a reason —
+the runtime turns it into a visible chat line, so an unlock is never silent.
 
 `settle_chapter` is idempotent and stays callable, but it is **not** load-bearing:
 `finalize_chapter` already settles. The Atlas skill card still mentions `settle_chapter`
@@ -235,7 +243,7 @@ Runtime limits live in `agent/config/budgets.yaml` (schema and fallbacks in
   conditional classes, shadcn/ui primitives from `src/components/ui/`. No CSS-in-JS, no
   new component library.
 - **API routes**: `parseBody` + a zod schema + `jsonError`; ownership comes from the
-  Prisma extension; canon checks call the gate helpers (`write-gate.ts`, `asset-gate.ts`)
+  Prisma extension; canon checks call the gate helpers (`write-gate.ts`, `lifecycle.ts`)
   instead of testing `status` inline.
 - **Database**: use `db` from `src/lib/db.ts`; interactive transactions with
   `db.$transaction(async (tx) => …)`; call `await warmIdentity()` **before** opening an
@@ -268,7 +276,8 @@ Runtime limits live in `agent/config/budgets.yaml` (schema and fallbacks in
 
 Follow `src/app/api/novels/[id]/route.ts`: `parseBody` + zod + `jsonError`; read through
 `db` (ownership is automatic); never expose a `userId` from the client; if the route
-mutates canon, call the gate helper.
+mutates canon, call `src/lib/novara/lifecycle.ts` (`finalizedRefusal` / `moveAsset`) —
+never write the canon column yourself.
 
 ### Add a row to the document tree
 
@@ -361,9 +370,10 @@ Run only the checks the project defines, once each, at the end of a change.
   (novelId, category, content) and only move `lastSeenChapter`, foreshadows dedupe on
   (content, plantChapter). A "changed" fact becomes a new row; there is no supersede
   field.
-- **The author's `PATCH /api/chapters/[id]` can still set `status: "final"`** without a
-  projection. Only the runtime couples them. If you touch that route, think about it
-  explicitly rather than copying the pattern.
+- **A reopen never touches memory.** `moveAsset` only archives the old version, flips
+  the status and writes the transition row. A finalize is the only move that writes
+  memory: a chapter finalize projects it (the extraction runs outside the transaction),
+  a canon finalize retires the facts that name it by `(category, subject)`.
 - **Some `src/lib/novara/api.ts` helpers and API routes have no UI caller** (the manual
   editors for characters, world entries, beats, volumes, ledger rows and packs lost
   their entry point when the artifact pane became the document pane). Before deleting
@@ -380,6 +390,7 @@ Run only the checks the project defines, once each, at the end of a change.
 | What the model is told | `agent/system/*.md`, `agent/skills/**`, loaded by `src/lib/novara/content.ts` |
 | What the numbers are | `agent/config/budgets.yaml` + the fallbacks in `content.ts` |
 | Whether a chapter may be finalized | `src/lib/novara/qc.ts` + the persisted `ChapterReview` |
+| Whether an asset may be edited | `src/lib/novara/lifecycle.ts` (the `draft` / `final` rule) |
 | How memory is written | `src/lib/novara/sediment.ts` |
 | How memory is recalled | `src/lib/novara/memory.ts` |
 | Who may read what | `src/lib/db.ts` (the ownership extension) |

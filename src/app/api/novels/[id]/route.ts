@@ -1,6 +1,8 @@
 import { db } from "@/lib/db";
+import { callerUid } from "@/lib/credits/charge";
 import { updateNovelSchema } from "@/lib/novara/schemas";
 import { jsonError, parseBody, validationError } from "@/lib/novara/api-helpers";
+import { finalizedRefusal, moveAsset } from "@/lib/novara/lifecycle";
 import { toSummary } from "@/lib/novara/summary";
 import type {
   ChapterDTO,
@@ -293,65 +295,68 @@ export async function PATCH(req: Request, { params }: Params) {
 
   const { contract, contractStatus, contractReopen, ...novelData } = schema.data;
 
-  // Phase 9 — the story contract (作品契约) obeys the canon gate: a final
-  // contract is Immutable Canon; content changes require contractReopen
-  // (the previous final text is archived into AssetVersion first).
+  // The story contract obeys the canon lock: a final contract is immutable
+  // canon. Any change to it is refused with HTTP 409 and the typed body
+  // { error: "asset_finalized", kind: "contract", id, reopen }. The explicit
+  // `contractReopen` demotes it to draft through the lifecycle service,
+  // which archives the final text into AssetVersion and writes the
+  // AssetTransition row before the content is touched.
   if (contract !== undefined || contractStatus !== undefined || contractReopen !== undefined) {
     const existingContract = await db.novelContract.findUnique({ where: { novelId: id } });
-    const locked = existingContract?.status === "final";
+    // The contract is 1:1 with the novel, so its asset id IS the novel id.
+    const lockState = existingContract?.status ?? "draft";
+    const wantsReopen = contractReopen === true;
+    const wantsFinal = contractStatus === "final";
 
-    if (locked && !contractReopen) {
-      return jsonError(
-        "Book contract is locked (Immutable Canon) and cannot be edited directly. Unlock (reopen) first — the original is archived automatically.",
-        409
-      );
+    if (!wantsReopen) {
+      const refusal = finalizedRefusal({
+        kind: "contract",
+        id,
+        novelId: id,
+        status: lockState,
+      });
+      if (refusal) return Response.json(refusal, { status: 409 });
     }
 
-    if (locked && contractReopen && existingContract) {
-      await db.assetVersion.create({
-        data: {
-          novelId: id,
-          assetType: "contract",
-          assetId: existingContract.novelId,
-          assetLabel: "作品契约",
-          reason: "reopen",
-          snapshot: `[content] ${existingContract.content}\n[status] final`,
-          createdBy: "author",
-        },
+    // Reopen first: the final text is archived and the contract demoted to
+    // draft before any write touches it.
+    let canonMoved = false;
+    if (lockState === "final" && wantsReopen) {
+      const reopened = await moveAsset({
+        kind: "contract",
+        assetId: id,
+        novelId: id,
+        move: "reopen",
+        byUid: callerUid(req) ?? "",
+        source: "author",
+        note: "the novel contract",
       });
-    } else if (!locked && contractStatus === "final" && existingContract) {
-      await db.assetVersion.create({
-        data: {
-          novelId: id,
-          assetType: "contract",
-          assetId: existingContract.novelId,
-          assetLabel: "作品契约",
-          reason: "finalize",
-          snapshot: `[content] ${existingContract.content}\n[status] ${existingContract.status}`,
-          createdBy: "author",
-        },
-      });
+      if (!reopened.ok) return Response.json(reopened.body, { status: reopened.status });
+      canonMoved = true;
     }
 
-    const nextStatus = locked && contractReopen
-      ? "draft"
-      : (contractStatus ?? existingContract?.status ?? "draft");
-    const nextFinalizedAt = nextStatus === "final" ? new Date() : null;
-
+    // The canon flag belongs to the lifecycle service — the route writes the
+    // content only.
     await db.novelContract.upsert({
       where: { novelId: id },
-      create: {
-        novelId: id,
-        content: contract ?? "",
-        status: nextStatus,
-        finalizedAt: nextFinalizedAt,
-      },
-      update: {
-        ...(contract !== undefined ? { content: contract } : {}),
-        status: nextStatus,
-        finalizedAt: nextFinalizedAt,
-      },
+      create: { novelId: id, content: contract ?? "" },
+      update: { ...(contract !== undefined ? { content: contract } : {}) },
     });
+
+    // Finalize after the content is stored, so the archive and the canon
+    // flag come from one place.
+    if (wantsFinal && !canonMoved) {
+      const finalized = await moveAsset({
+        kind: "contract",
+        assetId: id,
+        novelId: id,
+        move: "finalize",
+        byUid: callerUid(req) ?? "",
+        source: "author",
+        note: "the novel contract",
+      });
+      if (!finalized.ok) return Response.json(finalized.body, { status: finalized.status });
+    }
   }
 
   const novel = await db.novel.update({

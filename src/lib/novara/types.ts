@@ -4,7 +4,29 @@
 // ---------------------------------------------------------------------------
 
 export type NovelStatus = "drafting" | "completed" | "archived";
-export type ChapterStatus = "draft" | "revised" | "final";
+
+/**
+ * The canon state vocabulary (STEP 79) — exactly two words: Draft and Final.
+ * "revised" is retired as a stored value; a legacy row that still says
+ * "revised" is read as a draft.
+ */
+export type CanonState = "draft" | "final";
+
+/** A chapter's canon state — the same two words as every other asset. */
+export type ChapterStatus = CanonState;
+
+/**
+ * The entity kinds the lifecycle covers (STEP 79) — the API's snake_case
+ * vocabulary, as used by the reopen / finalize endpoints.
+ */
+export type LifecycleAssetKind =
+  | "chapter"
+  | "contract"
+  | "character"
+  | "world_entry"
+  | "outline_beat"
+  | "volume"
+  | "pack";
 export type WorldCategory =
   | "location"
   | "faction"
@@ -154,6 +176,8 @@ export interface ChapterPackDTO {
   chapterIndex: number;
   title: string;
   content: string;
+  /** Canon state (STEP 79) — present once the server maps the stored column. */
+  status?: CanonState;
   updatedAt: string;
 }
 

@@ -58,6 +58,7 @@ model Novel {
   clues         StoryClue[]
   packs         ChapterPack[]
   assetVersions AssetVersion[]
+  transitions   AssetTransition[]
   contract      NovelContract?
   agentRuns     AgentRun[]
 
@@ -81,13 +82,18 @@ model Chapter {
   title     String
   content   String   @default("")
   wordCount Int      @default(0)
-  // draft | revised | final
+  // draft | final — ONE uniform status for every authored entity.
+  // "draft" is the editable workspace, "final" is locked canon.
   status    String   @default("draft")
   // Chapter brief (细纲) — the writing brief for this chapter. Persisted so
   // briefs survive the run that created them (webnovel-writer 章细纲 analog).
   // Written by the runtime when a chapter task is delegated/created, and
   // editable by the author via PATCH.
   brief     String   @default("")
+  // STEP 79 — when the chapter became canon (null = draft). Every authored
+  // entity carries the same pair: a status (draft | final) and the moment it
+  // was locked.
+  finalizedAt DateTime?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -433,8 +439,12 @@ model ChapterPack {
   chapterIndex Int
   title        String
   content      String   @default("")
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  // STEP 79 — the same uniform canon layer as every other authored entity:
+  // draft = editable workspace, final = locked canon.
+  status      String    @default("draft")
+  finalizedAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
 
   novel Novel @relation(fields: [novelId], references: [id], onDelete: Cascade)
 
@@ -771,6 +781,44 @@ model AssetVersion {
 
   @@index([novelId, assetType, assetId])
   @@index([assetId, createdAt])
+}
+
+// ---------------------------------------------------------------------------
+// AssetTransition (STEP 79) — the DRAFT/FINAL LIFECYCLE LOG.
+//
+// One row per reopen and per finalize, for every authored entity (chapters,
+// the contract, characters, world entries, outline beats, volumes, packs).
+// The row answers "who moved this asset between draft and final, and when" —
+// the AssetVersion rows keep the CONTENT, this table keeps the MOVE.
+//
+// Memory is NOT touched by a reopen (only a finalize updates memory), so a
+// transition row is the record that a reopen changed nothing in the memory
+// pool.
+// ---------------------------------------------------------------------------
+
+model AssetTransition {
+  id      String   @id @default(cuid())
+  novelId String
+  // chapter | contract | character | world_entry | outline_beat | volume | pack
+  kind    String
+  assetId String
+  // The status BEFORE the move ("draft" | "final").
+  from    String
+  // The status AFTER the move ("draft" | "final").
+  to      String
+  // Who moved it — the caller's uid.
+  byUid   String   @default("")
+  // author | agent:<name> | wizard
+  source  String   @default("author")
+  // When the move happened.
+  at      DateTime @default(now())
+  // Optional note (what was retired, why the move happened).
+  note    String?
+
+  novel Novel @relation(fields: [novelId], references: [id], onDelete: Cascade)
+
+  @@index([novelId, kind, assetId])
+  @@index([assetId, at])
 }
 
 // ---------------------------------------------------------------------------

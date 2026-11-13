@@ -863,7 +863,7 @@ async function retireCategory(
  * STEP 72 — retire the live rows of one subject: set retiredAt, keep the row
  * (the trail), stop it being retrievable. Returns how many rows were retired.
  */
-async function retireSuperseded(
+export async function retireSuperseded(
   tx: SedimentTx,
   input: { novelId: string; category: string; subject: string; keepId?: string }
 ): Promise<number> {
