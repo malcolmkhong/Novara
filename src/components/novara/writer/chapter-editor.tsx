@@ -43,9 +43,10 @@ import { countWords, formatWordCount } from "@/lib/novara/words";
 import { cn } from "@/lib/utils";
 import { ConfirmDialog, PinButton, StateChip } from "./ui-bits";
 import { MarkdownDocument } from "./markdown-document";
+import { RichEditor } from "@/components/novara/editor/rich-editor";
 
-/** Editor surface: raw writing vs rendered document window. */
-type ChapterView = "write" | "preview";
+/** STEP 78: Document authors the chapter; Markdown is read-only source. */
+type ChapterView = "document" | "markdown";
 
 interface ChapterEditorProps {
   chapters: ChapterDTO[];
@@ -93,7 +94,7 @@ export function ChapterEditor({
   const [confirmDraft, setConfirmDraft] = useState(false);
   const [confirmAbDraft, setConfirmAbDraft] = useState(false);
   const [adding, setAdding] = useState(false);
-  const [view, setView] = useState<ChapterView>("preview");
+  const [view, setView] = useState<ChapterView>("document");
   const [brief, setBrief] = useState("");
   const [briefOpen, setBriefOpen] = useState(true);
   const [reopening, setReopening] = useState(false);
@@ -114,9 +115,8 @@ export function ChapterEditor({
       setStatus(canonState(selected.status));
       setBrief(selected.brief);
       setDirty(false);
-      // Opening a file reads like opening a document — chapters with content
-      // land in the rendered preview; empty ones go straight to writing.
-      setView(selected.content.trim() ? "preview" : "write");
+      // The Document tab is the authoring surface for every chapter.
+      setView("document");
     }
   }, [selectedId]);
 
@@ -249,10 +249,10 @@ export function ChapterEditor({
     }
   };
 
-  /** Switching to the document view autosaves, like clicking away does. */
+  /** Leaving the Document tab for the read-only source autosaves. */
   const switchView = (next: ChapterView) => {
     if (next === view) return;
-    if (next === "preview" && dirty && !saving) void save();
+    if (next === "markdown" && dirty && !saving) void save();
     setView(next);
   };
 
@@ -599,9 +599,9 @@ export function ChapterEditor({
           </div>
         ) : (
           <div className="flex flex-col">
-            {/* Header — inputs while writing, document title while reading */}
+            {/* Header — inputs on the Document tab, document title on Markdown */}
             <div className="flex flex-col gap-2 border-b p-4 sm:flex-row">
-              {view === "write" ? (
+              {view === "document" ? (
                 <>
                   <Input
                     value={title}
@@ -663,7 +663,7 @@ export function ChapterEditor({
               )}
             </div>
 
-            {/* Toolbar — view toggle always; writing tools in write mode only
+            {/* Toolbar — view toggle always; writing tools on the Document tab only
                 while the chapter is a draft (a final chapter is locked) */}
             <div className="flex flex-wrap items-center gap-2 border-b bg-muted/30 px-4 py-2 text-xs text-muted-foreground">
               <span
@@ -673,31 +673,31 @@ export function ChapterEditor({
               >
                 <button
                   type="button"
-                  onClick={() => switchView("write")}
-                  aria-pressed={view === "write"}
+                  onClick={() => switchView("document")}
+                  aria-pressed={view === "document"}
                   className={cn(
                     "flex items-center gap-1 px-2.5 py-1 transition-colors",
-                    view === "write"
+                    view === "document"
                       ? "bg-primary text-primary-foreground"
                       : "text-muted-foreground hover:text-foreground"
                   )}
                 >
                   <PenLine className="h-3.5 w-3.5" aria-hidden="true" />
-                  Write
+                  Document
                 </button>
                 <button
                   type="button"
-                  onClick={() => switchView("preview")}
-                  aria-pressed={view === "preview"}
+                  onClick={() => switchView("markdown")}
+                  aria-pressed={view === "markdown"}
                   className={cn(
                     "flex items-center gap-1 px-2.5 py-1 transition-colors",
-                    view === "preview"
+                    view === "markdown"
                       ? "bg-primary text-primary-foreground"
                       : "text-muted-foreground hover:text-foreground"
                   )}
                 >
                   <BookOpen className="h-3.5 w-3.5" aria-hidden="true" />
-                  Preview
+                  Markdown
                 </button>
               </span>
               <Button
@@ -719,13 +719,13 @@ export function ChapterEditor({
                 label="Pin to chat"
               />
               <span>{formatWordCount(countWords(content))} words</span>
-              {dirty && view === "write" && (
+              {dirty && view === "document" && (
                 <span className="flex items-center gap-1 text-amber-700">
                   <span className="h-1.5 w-1.5 rounded-full bg-amber-500" aria-hidden="true" />
                   Unsaved changes
                 </span>
               )}
-              {view === "write" && !isFinal && (
+              {view === "document" && !isFinal && (
                 <span className="ml-auto flex items-center gap-2">
                   <Button
                     size="sm"
@@ -765,8 +765,8 @@ export function ChapterEditor({
               )}
             </div>
 
-            {/* Body — textarea while writing, document window while reading */}
-            {view === "write" ? (
+            {/* Body — Document authors the chapter; Markdown is read-only source */}
+            {view === "document" ? (
               <div className="flex min-h-0 flex-1 flex-col">
                 <button
                   type="button"
@@ -800,57 +800,33 @@ export function ChapterEditor({
                     />
                   </div>
                 )}
-                <Textarea
-                  value={content}
-                  onChange={(e) => {
-                    setContent(e.target.value);
+                <RichEditor
+                  markdown={content}
+                  onChange={(md) => {
+                    setContent(md);
                     setDirty(true);
                   }}
-                  onBlur={() => {
-                    if (dirty && !saving) void save();
-                  }}
+                  editable={!isFinal}
                   placeholder="Write your chapter here — or click AI Draft to get a grounded first draft."
-                  className="nice-scroll min-h-[320px] flex-1 resize-y rounded-none border-0 novara-prose-editor font-serif shadow-none focus-visible:ring-0 lg:min-h-[480px]"
-                  aria-label="Chapter content"
+                  minHeight={320}
                 />
               </div>
             ) : (
               <div
-                className="nice-scroll max-h-[68vh] min-h-[320px] flex-1 overflow-y-auto px-6 py-5 lg:max-h-none lg:min-h-[480px]"
-                aria-label="Chapter document preview"
+                className="nice-scroll min-h-[320px] flex-1 overflow-y-auto px-6 py-5 lg:min-h-[480px]"
+                aria-label="Chapter markdown source"
               >
-                {brief.trim() ? (
-                  <div className="mx-auto mb-6 max-w-prose rounded-md border bg-muted/30 px-4 py-3">
-                    <p className="mb-1.5 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
-                      <ScrollText className="h-3.5 w-3.5" aria-hidden="true" />
-                      Brief / Outline
-                    </p>
-                    <MarkdownDocument
-                      content={brief}
-                      className="text-sm text-muted-foreground"
-                    />
-                  </div>
-                ) : null}
-                {content.trim() ? (
-                  <MarkdownDocument
-                    content={content}
-                    className="mx-auto max-w-prose font-display"
-                  />
-                ) : (
-                  <p className="py-16 text-center text-sm text-muted-foreground">
-                    Nothing to preview yet — switch to Write to start this chapter.
-                  </p>
-                )}
+                <pre className="mx-auto max-w-prose whitespace-pre-wrap break-words font-mono text-[13px] leading-[1.85]">{content || "Nothing here yet — switch to Document to start this chapter."}</pre>
               </div>
             )}
             <div className="flex items-center justify-between border-t px-4 py-2 text-xs text-muted-foreground">
               <StateChip status={status} />
               <span>
-                {view === "write"
-                  ? "Autosaves when you click away"
+                {view === "document"
+                  ? "Autosaves when you switch tabs"
                   : isFinal
                     ? "Locked — reopen to edit"
-                    : "Open in Write to edit"}{" "}
+                    : "Open in Document to edit"}{" "}
                 · Chapter {selected.index}
               </span>
             </div>

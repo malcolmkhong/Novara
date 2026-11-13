@@ -1,0 +1,3 @@
+# The editor round-trip fixtures are captured database bytes, not prose files.
+# Git must never rewrite their line endings: the gate asserts byte equality.
+scripts/fixtures/*.md -text

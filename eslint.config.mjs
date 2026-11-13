@@ -44,6 +44,13 @@ const eslintConfig = [...nextCoreWebVitals, ...nextTypescript, {
     "no-useless-escape": "off",
   },
 }, {
+  // CommonJS Node tool scripts legitimately use require(); that TS rule must
+  // not fire on them. App source (.ts/.tsx) is unaffected.
+  files: ["scripts/**/*.cjs"],
+  rules: {
+    "@typescript-eslint/no-require-imports": "off",
+  },
+}, {
   ignores: ["node_modules/**", ".next/**", "out/**", "build/**", "next-env.d.ts", "examples/**", "skills"]
 }];
 
