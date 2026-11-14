@@ -380,7 +380,7 @@ export function WorkbenchShell({
   const handleSaveChapter = async (
     id: string,
     patch: { title?: string; content?: string; status?: ChapterStatus; brief?: string },
-    opts?: { overwrite?: boolean; reopen?: boolean }
+    opts?: { overwrite?: boolean; reopen?: boolean; silent?: boolean }
   ): Promise<ChapterDTO | null> => {
     try {
       const { chapter } = await updateChapter(id, {
@@ -389,7 +389,9 @@ export function WorkbenchShell({
         ...(opts?.reopen ? { reopen: true } : {}),
       });
       onPatchChapter(chapter);
-      toast({ title: "Chapter saved" });
+      // STEP 81 — the chapter document autosaves; a silent save must not raise
+      // a toast on every keystroke pause.
+      if (!opts?.silent) toast({ title: "Chapter saved" });
       return chapter;
     } catch (e) {
       // Anti-overwrite gate: the server refuses to replace non-empty content

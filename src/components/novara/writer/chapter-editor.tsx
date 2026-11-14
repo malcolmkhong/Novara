@@ -1,20 +1,25 @@
 "use client";
 
-import { useEffect, useState } from "react";
+// ---------------------------------------------------------------------------
+// Novara AI — STEP 81: the chapter document BODY.
+//
+// The pane (doc-pane.tsx) owns the header, toolbar and status line for EVERY
+// document. This component owns only the writable prose surface, the muted
+// Brief/Outline section BELOW the prose, and the dialogs (versions, AI draft).
+// A chapter is the one document whose data is authored rather than projected,
+// so it alone owns a debounced autosave and a status-change action; that is
+// the only special case.
+// ---------------------------------------------------------------------------
+
+import { useEffect, useRef, useState } from "react";
 import {
-  BookOpen,
   ChevronDown,
   ChevronUp,
-  History,
   Loader2,
-  Lock,
-  PenLine,
-  Plus,
   RotateCcw,
   ScrollText,
   Sparkles,
   SplitSquareHorizontal,
-  Trash2,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -22,128 +27,147 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
-  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import { getChapterVersions, type ChapterVersionRow } from "@/lib/novara/api";
-import { canonState } from "@/lib/novara/doc-tree";
 import type { AiDraftResult, ChapterDTO, ChapterStatus } from "@/lib/novara/types";
 import { countWords, formatWordCount } from "@/lib/novara/words";
 import { cn } from "@/lib/utils";
-import { ConfirmDialog, PinButton, StateChip } from "./ui-bits";
-import { MarkdownDocument } from "./markdown-document";
 import { RichEditor } from "@/components/novara/editor/rich-editor";
+import { ConfirmDialog } from "./ui-bits";
+import { MarkdownDocument } from "./markdown-document";
 
-/** STEP 78: Document authors the chapter; Markdown is read-only source. */
-type ChapterView = "document" | "markdown";
+export interface ChapterDocumentState {
+  words: number;
+  dirty: boolean;
+  saving: boolean;
+  content: string;
+}
 
-interface ChapterEditorProps {
+export interface ChapterEditorProps {
   chapters: ChapterDTO[];
   selectedId: string | null;
-  onSelect: (id: string) => void;
-  onAdd: () => Promise<void>;
-  onDelete: (chapter: ChapterDTO) => Promise<void>;
   onSave: (
     id: string,
-    patch: { title?: string; content?: string; status?: ChapterStatus; brief?: string }
+    patch: { title?: string; content?: string; status?: ChapterStatus; brief?: string },
+    opts?: { overwrite?: boolean; silent?: boolean }
   ) => Promise<ChapterDTO | null>;
   onAiDraft: (
     chapter: ChapterDTO,
     opts?: { variants?: number }
   ) => Promise<AiDraftResult | null>;
-  /**
-   * Workbench mode: hide the built-in chapter list (the left asset tree
-   * provides navigation) and render the editor full width.
-   */
-  hideList?: boolean;
+  /** The pane's own Document | Markdown toggle (STEP 81). */
+  view: "document" | "markdown";
+  /** The pane's History icon button opens this versions table. */
+  historyOpen: boolean;
+  onHistoryOpenChange: (open: boolean) => void;
+  /** Live words / clean-buffer flag / markdown source for the pane's status
+   *  line and copy button. */
+  onStateChange?: (state: ChapterDocumentState) => void;
 }
+
+const AUTOSAVE_MS = 900;
 
 export function ChapterEditor({
   chapters,
   selectedId,
-  onSelect,
-  onAdd,
-  onDelete,
   onSave,
   onAiDraft,
-  hideList = false,
+  view,
+  historyOpen,
+  onHistoryOpenChange,
+  onStateChange,
 }: ChapterEditorProps) {
   const { toast } = useToast();
   const selected = chapters.find((c) => c.id === selectedId) ?? null;
+  const isFinal = selected?.status === "final";
 
-  const [title, setTitle] = useState("");
   const [content, setContent] = useState("");
-  const [status, setStatus] = useState<ChapterStatus>("draft");
+  const [brief, setBrief] = useState("");
+  const [briefOpen, setBriefOpen] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
+
   const [drafting, setDrafting] = useState(false);
   const [abDrafting, setAbDrafting] = useState(false);
   const [abResult, setAbResult] = useState<AiDraftResult | null>(null);
-  const [confirmDelete, setConfirmDelete] = useState(false);
   const [confirmDraft, setConfirmDraft] = useState(false);
   const [confirmAbDraft, setConfirmAbDraft] = useState(false);
-  const [adding, setAdding] = useState(false);
-  const [view, setView] = useState<ChapterView>("document");
-  const [brief, setBrief] = useState("");
-  const [briefOpen, setBriefOpen] = useState(true);
-  const [reopening, setReopening] = useState(false);
-  const [historyOpen, setHistoryOpen] = useState(false);
+
   const [versions, setVersions] = useState<ChapterVersionRow[] | null>(null);
   const [versionsLoading, setVersionsLoading] = useState(false);
   const [versionsError, setVersionsError] = useState<string | null>(null);
   const [activeVersion, setActiveVersion] = useState<ChapterVersionRow | null>(null);
   const [restoring, setRestoring] = useState(false);
 
-  // Sync local editor state when a different chapter is selected.
+  const onSaveRef = useRef(onSave);
   useEffect(() => {
-    if (selected) {
-      setTitle(selected.title);
-      setContent(selected.content);
-      // The vocabulary has two words (STEP 79): a legacy "revised" row reads
-      // as a draft.
-      setStatus(canonState(selected.status));
-      setBrief(selected.brief);
-      setDirty(false);
-      // The Document tab is the authoring surface for every chapter.
-      setView("document");
+    onSaveRef.current = onSave;
+  }, [onSave]);
+  const onAiDraftRef = useRef(onAiDraft);
+  useEffect(() => {
+    onAiDraftRef.current = onAiDraft;
+  }, [onAiDraft]);
+  const stateRef = useRef(onStateChange);
+  useEffect(() => {
+    stateRef.current = onStateChange;
+  }, [onStateChange]);
+
+  const pending = useRef<{ id: string; content: string } | null>(null);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Switching chapters replaces the local buffer. The pane's tab owns which
+  // chapter is open, so an old tab can never show another chapter's prose.
+  useEffect(() => {
+    if (timer.current) {
+      clearTimeout(timer.current);
+      timer.current = null;
     }
+    pending.current = null;
+    setContent(selected?.content ?? "");
+    setBrief(selected?.brief ?? "");
+    setDirty(false);
+    setActiveVersion(null);
   }, [selectedId]);
 
-  const isFinal = selected?.status === "final";
+  useEffect(() => {
+    stateRef.current?.({ words: countWords(content), dirty, saving, content });
+  }, [content, dirty, saving]);
 
-  const save = async (patch?: {
-    title?: string;
-    content?: string;
-    status?: ChapterStatus;
-    brief?: string;
-  }) => {
+  // Best-effort flush on unmount: never lose the last keystrokes.
+  useEffect(
+    () => () => {
+      if (timer.current) clearTimeout(timer.current);
+      const p = pending.current;
+      if (p) {
+        pending.current = null;
+        void onSaveRef
+          .current(p.id, { content: p.content }, { overwrite: true, silent: true })
+          .catch(() => undefined);
+      }
+    },
+    []
+  );
+
+  const persist = async (patch: { content?: string; brief?: string }) => {
     if (!selected) return null;
-    const payload = patch ?? {
-      title: title.trim() || selected.title,
-      content,
-      status,
-      brief,
-    };
+    if (timer.current) {
+      clearTimeout(timer.current);
+      timer.current = null;
+    }
+    pending.current = null;
     setSaving(true);
     try {
-      const next = await onSave(selected.id, payload);
+      const next = await onSaveRef.current(selected.id, patch, {
+        overwrite: true,
+        silent: true,
+      });
       if (next) {
-        setTitle(next.title);
-        setContent(next.content);
-        setStatus(canonState(next.status));
-        setBrief(next.brief);
         setDirty(false);
+        if (patch.brief !== undefined) setBrief(next.brief);
       }
       return next;
     } catch (e) {
@@ -158,15 +182,31 @@ export function ChapterEditor({
     }
   };
 
-  /** Applies a draft (single or A/B-picked) into the editor and saves it. */
-  const applyDraftContent = async (draftText: string, wordCount: number, mode: "fill" | "append") => {
+  const handleChange = (md: string) => {
+    if (!selected || isFinal) return;
+    setContent(md);
+    setDirty(true);
+    pending.current = { id: selected.id, content: md };
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = setTimeout(() => {
+      timer.current = null;
+      const p = pending.current;
+      if (p) void persist({ content: p.content });
+    }, AUTOSAVE_MS);
+  };
+
+  const applyDraftContent = async (
+    draftText: string,
+    wordCount: number,
+    mode: "fill" | "append"
+  ) => {
     const nextContent =
       mode === "append" && content.trim()
         ? `${content.replace(/\s+$/, "")}\n\n${draftText}`
         : draftText;
     setContent(nextContent);
     setDirty(true);
-    const saved = await save({ content: nextContent });
+    const saved = await persist({ content: nextContent });
     if (saved) {
       toast({
         title: `AI draft added (+${formatWordCount(wordCount)} words)`,
@@ -182,10 +222,8 @@ export function ChapterEditor({
     if (!selected) return;
     setDrafting(true);
     try {
-      const result = await onAiDraft(selected);
-      if (result) {
-        await applyDraftContent(result.content, result.wordCount, result.mode);
-      }
+      const result = await onAiDraftRef.current(selected);
+      if (result) await applyDraftContent(result.content, result.wordCount, result.mode);
     } catch (e) {
       toast({
         title: "AI draft failed",
@@ -202,13 +240,12 @@ export function ChapterEditor({
     if (!selected) return;
     setAbDrafting(true);
     try {
-      const result = await onAiDraft(selected, { variants: 2 });
+      const result = await onAiDraftRef.current(selected, { variants: 2 });
       if (result) {
         if (result.variants && result.variants.length >= 2) {
           setAbResult(result);
           setConfirmAbDraft(false);
         } else {
-          // Backend returned a single draft — fall through with it.
           await applyDraftContent(result.content, result.wordCount, result.mode);
           setConfirmAbDraft(false);
         }
@@ -229,74 +266,44 @@ export function ChapterEditor({
     setAbResult(null);
     if (!result?.variants?.[index]) return;
     const variant = result.variants[index];
-    try {
-      await applyDraftContent(variant.content, variant.wordCount, result.mode);
-    } catch (e) {
-      toast({
-        title: "AI draft failed",
-        description: e instanceof Error ? e.message : "Unknown error",
-        variant: "destructive",
-      });
-    }
+    await applyDraftContent(variant.content, variant.wordCount, result.mode);
   };
 
-  const addChapter = async () => {
-    setAdding(true);
-    try {
-      await onAdd();
-    } finally {
-      setAdding(false);
-    }
-  };
-
-  /** Leaving the Document tab for the read-only source autosaves. */
-  const switchView = (next: ChapterView) => {
-    if (next === view) return;
-    if (next === "markdown" && dirty && !saving) void save();
-    setView(next);
-  };
-
-  /** Status-only demotion — the server allows this without confirmation. */
-  const reopenChapter = async () => {
-    setReopening(true);
-    try {
-      // STEP 79 — the vocabulary is Draft | Final: reopening demotes to Draft.
-      await save({ status: "draft" });
-    } finally {
-      setReopening(false);
-    }
-  };
-
-  const openHistory = async () => {
-    if (!selected) return;
-    setHistoryOpen(true);
+  useEffect(() => {
+    if (!historyOpen || !selected) return;
+    let cancelled = false;
     setVersionsLoading(true);
     setVersionsError(null);
     setVersions(null);
     setActiveVersion(null);
-    try {
-      const result = await getChapterVersions(selected.id);
-      setVersions(result.versions);
-    } catch (e) {
-      setVersionsError(e instanceof Error ? e.message : "Unknown error");
-    } finally {
-      setVersionsLoading(false);
-    }
-  };
+    void getChapterVersions(selected.id)
+      .then((r) => {
+        if (!cancelled) setVersions(r.versions);
+      })
+      .catch((e) => {
+        if (!cancelled) setVersionsError(e instanceof Error ? e.message : "Unknown error");
+      })
+      .finally(() => {
+        if (!cancelled) setVersionsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [historyOpen, selectedId]);
 
-  /** Restores a historical draft through the normal save flow (parent gates 409s). */
   const restoreVersion = async (version: ChapterVersionRow) => {
     if (!selected) return;
     setRestoring(true);
     try {
-      const next = await onSave(selected.id, { content: version.content });
+      const next = await onSaveRef.current(
+        selected.id,
+        { content: version.content },
+        { overwrite: true, silent: true }
+      );
       if (next) {
-        setTitle(next.title);
         setContent(next.content);
-        setStatus(next.status);
-        setBrief(next.brief);
         setDirty(false);
-        setHistoryOpen(false);
+        onHistoryOpenChange(false);
       }
     } catch (e) {
       toast({
@@ -309,236 +316,137 @@ export function ChapterEditor({
     }
   };
 
-  if (hideList) {
-    // Workbench artifact view — editor only, full width.
+  if (!selected) {
     return (
-      <>
-        {renderEditor()}
-        {confirmDelete && (
-          <ConfirmDialog
-            open
-            onOpenChange={setConfirmDelete}
-            title="Delete this chapter?"
-            description={
-              selected
-                ? `“${selected.title}” and its ${formatWordCount(selected.wordCount)} words will be permanently deleted. Later chapters keep their order.`
-                : ""
-            }
-            busy={false}
-            onConfirm={async () => {
-              setConfirmDelete(false);
-              if (selected) await onDelete(selected);
-            }}
-          />
-        )}
-        <ConfirmDialog
-          open={confirmDraft}
-          onOpenChange={setConfirmDraft}
-          title="Generate an AI draft?"
-          description={
-            selected && selected.content.trim()
-              ? `The Novel Writer agent will continue “${selected.title}” from where your text ends. Your existing words stay untouched — the draft is appended below them.`
-              : `The Novel Writer agent will write an opening draft for “${selected?.title ?? ""}”, grounded in your synopsis, characters, world and outline.`
-          }
-          confirmLabel="Write draft"
-          busy={drafting}
-          onConfirm={runAiDraft}
-        />
-        <ConfirmDialog
-          open={confirmAbDraft}
-          onOpenChange={setConfirmAbDraft}
-          title="Generate two A/B drafts?"
-          description={
-            selected && selected.content.trim()
-              ? `The Novel Writer agent will write two alternative continuations of “${selected.title}”. Your text stays untouched — you pick one.`
-              : `The Novel Writer agent will write two alternative opening drafts for “${selected?.title ?? ""}” — you pick the one to insert.`
-          }
-          confirmLabel="Write A/B drafts"
-          busy={abDrafting}
-          onConfirm={runAbDraft}
-        />
-        <Dialog
-          open={abResult !== null}
-          onOpenChange={(v) => {
-            if (!v) setAbResult(null);
-          }}
-        >
-          <DialogContent className="max-w-3xl">
-            <DialogHeader>
-              <DialogTitle>Pick a draft</DialogTitle>
-              <DialogDescription>
-                Two grounded alternatives for “{selected?.title ?? ""}”. The one
-                you pick is inserted into the editor; the other is discarded.
-              </DialogDescription>
-            </DialogHeader>
-            <div className="grid gap-3 sm:grid-cols-2">
-              {abResult?.variants?.slice(0, 2).map((variant, i) => (
-                <div
-                  key={i}
-                  className="flex min-h-0 flex-col rounded-lg border bg-muted/20"
-                >
-                  <div className="flex items-center justify-between border-b px-3 py-2">
-                    <span className="text-sm font-medium">Draft {String.fromCharCode(65 + i)}</span>
-                    <span className="text-xs text-muted-foreground">
-                      {formatWordCount(variant.wordCount)} words
-                    </span>
-                  </div>
-                  <p className="nice-scroll max-h-56 overflow-y-auto whitespace-pre-wrap px-3 py-2 novara-prose-preview font-serif text-foreground/85">
-                    {variant.content}
-                  </p>
-                  <div className="border-t px-3 py-2">
-                    <Button
-                      size="sm"
-                      className="w-full"
-                      onClick={() => void pickVariant(i as 0 | 1)}
-                    >
-                      Use Draft {String.fromCharCode(65 + i)}
-                    </Button>
-                  </div>
-                </div>
-              ))}
-            </div>
-            <DialogFooter>
-              <Button variant="ghost" onClick={() => setAbResult(null)}>
-                Discard both
-              </Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
-      </>
+      <p className="text-xs text-muted-foreground">
+        Select a chapter — or add a new one — to start writing.
+      </p>
     );
   }
 
   return (
-    <div className="grid gap-4 lg:grid-cols-[300px_1fr]">
-      {/* Chapter list */}
-      <div className="rounded-lg border bg-card">
-        <div className="flex items-center justify-between border-b px-4 py-3">
-          <h3 className="text-sm font-semibold">
-            Chapters
-            <span className="ml-1.5 text-muted-foreground">
-              ({chapters.length})
-            </span>
-          </h3>
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={addChapter}
-            disabled={adding}
-            aria-label="Add chapter"
-          >
-            {adding ? (
-              <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
-            ) : (
-              <Plus className="h-4 w-4" aria-hidden="true" />
-            )}
-          </Button>
-        </div>
-        <div className="nice-scroll max-h-64 overflow-y-auto p-2 lg:max-h-[560px]">
-          {chapters.length === 0 ? (
-            <p className="px-3 py-6 text-center text-sm text-muted-foreground">
-              No chapters yet. Add the first one.
-            </p>
-          ) : (
-            <ul className="space-y-1">
-              {chapters.map((ch) => (
-                <li key={ch.id} className="group relative">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (dirty && selected && ch.id !== selected.id) {
-                        // Fire-and-forget autosave when switching away dirty
-                        void save();
-                      }
-                      onSelect(ch.id);
-                    }}
-                    className={cn(
-                      "w-full rounded-md px-3 py-2.5 pr-9 text-left transition-colors",
-                      ch.id === selectedId
-                        ? "bg-accent"
-                        : "hover:bg-accent/60"
+    <>
+      {view === "document" ? (
+        <div className="flex min-h-0 flex-1 flex-col">
+          <RichEditor
+            markdown={content}
+            onChange={handleChange}
+            editable={!isFinal}
+            placeholder="Write your chapter here — or click AI Draft to get a grounded first draft."
+            minHeight={320}
+          />
+
+          {/* Muted section BELOW the prose. The Brief is collapsed by default,
+              so it can never sit between the toolbar and the text. */}
+          <div className="border-t bg-muted/20">
+            <div className="flex items-center gap-1 px-4 py-1">
+              <button
+                type="button"
+                onClick={() => setBriefOpen((v) => !v)}
+                aria-expanded={briefOpen}
+                className="flex items-center gap-1.5 py-0.5 text-left text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
+              >
+                <ScrollText className="h-3.5 w-3.5" aria-hidden="true" />
+                Brief / Outline
+                {briefOpen ? (
+                  <ChevronUp className="h-3.5 w-3.5" aria-hidden="true" />
+                ) : (
+                  <ChevronDown className="h-3.5 w-3.5" aria-hidden="true" />
+                )}
+              </button>
+              <span className="flex-1" />
+              {!isFinal && (
+                <>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="h-7 gap-1 px-1.5 text-[11px]"
+                    onClick={() => setConfirmAbDraft(true)}
+                    disabled={drafting || abDrafting || saving}
+                    aria-label="Generate two AI draft alternatives"
+                  >
+                    {abDrafting ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+                    ) : (
+                      <SplitSquareHorizontal className="h-3.5 w-3.5" aria-hidden="true" />
                     )}
-                    aria-current={ch.id === selectedId ? "true" : undefined}
+                    A/B Draft
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="h-7 gap-1 px-1.5 text-[11px]"
+                    onClick={() => setConfirmDraft(true)}
+                    disabled={drafting || abDrafting || saving}
                   >
-                    <span className="block text-sm font-medium">
-                      <span className="mr-2 text-xs text-muted-foreground">
-                        {String(ch.index).padStart(2, "0")}
-                      </span>
-                      {ch.title}
-                    </span>
-                    <span className="mt-0.5 flex items-center gap-2 text-xs text-muted-foreground">
-                      {formatWordCount(ch.wordCount)} words
-                      {ch.status === "final" && (
-                        <span
-                          className="h-1.5 w-1.5 rounded-full bg-emerald-600"
-                          aria-hidden="true"
-                        />
-                      )}
-                    </span>
-                  </button>
-                  <button
-                    type="button"
-                    aria-label={`Delete ${ch.title}`}
-                    onClick={() => setConfirmDelete(true)}
-                    className="absolute right-2 top-2.5 rounded p-1 text-muted-foreground opacity-0 transition-opacity hover:text-destructive focus-visible:opacity-100 group-hover:opacity-100"
-                  >
-                    <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
+                    {drafting ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+                    ) : (
+                      <Sparkles className="h-3.5 w-3.5" aria-hidden="true" />
+                    )}
+                    AI Draft
+                  </Button>
+                </>
+              )}
+            </div>
+            {briefOpen && (
+              <div className="border-t px-4 py-3">
+                <Textarea
+                  value={brief}
+                  rows={3}
+                  readOnly={isFinal}
+                  onChange={(e) => {
+                    setBrief(e.target.value);
+                    setDirty(true);
+                  }}
+                  onBlur={() => {
+                    if (!isFinal && brief !== selected.brief) void persist({ brief });
+                  }}
+                  placeholder="Outline beats, goals, must-hit moments for this chapter…"
+                  className="resize-y bg-background text-sm text-muted-foreground placeholder:text-muted-foreground/70"
+                  aria-label="Chapter brief"
+                />
+              </div>
+            )}
+          </div>
         </div>
-      </div>
-
-      {/* Editor */}
-      {renderEditor()}
-
-      <ConfirmDialog
-        open={confirmDelete}
-        onOpenChange={setConfirmDelete}
-        title="Delete this chapter?"
-        description={
-          selected
-            ? `“${selected.title}” and its ${formatWordCount(selected.wordCount)} words will be permanently deleted. Later chapters keep their order.`
-            : ""
-        }
-        busy={false}
-        onConfirm={async () => {
-          setConfirmDelete(false);
-          if (selected) await onDelete(selected);
-        }}
-      />
+      ) : (
+        <div
+          className="nice-scroll min-h-[320px] flex-1 overflow-y-auto px-4 py-3"
+          aria-label="Chapter markdown source"
+        >
+          <pre className="mx-auto max-w-prose whitespace-pre-wrap break-words font-mono text-[13px] leading-[1.85]">
+            {content || "Nothing here yet — switch to Document to start this chapter."}
+          </pre>
+        </div>
+      )}
 
       <ConfirmDialog
         open={confirmDraft}
         onOpenChange={setConfirmDraft}
         title="Generate an AI draft?"
         description={
-          selected && selected.content.trim()
-            ? `The Novel Writer agent will continue “${selected.title}” from where your text ends. Your existing words stay untouched — the draft is appended below them.`
-            : `The Novel Writer agent will write an opening draft for “${selected?.title ?? ""}”, grounded in your synopsis, characters, world and outline.`
+          selected.content.trim()
+            ? `The Novel Writer agent will continue "${selected.title}" from where your text ends. Your existing words stay untouched — the draft is appended below them.`
+            : `The Novel Writer agent will write an opening draft for "${selected.title}", grounded in your synopsis, characters, world and outline.`
         }
         confirmLabel="Write draft"
         busy={drafting}
         onConfirm={runAiDraft}
       />
-
       <ConfirmDialog
         open={confirmAbDraft}
         onOpenChange={setConfirmAbDraft}
         title="Generate two A/B drafts?"
         description={
-          selected && selected.content.trim()
-            ? `The Novel Writer agent will write two alternative continuations of “${selected.title}”. Your text stays untouched — you pick one.`
-            : `The Novel Writer agent will write two alternative opening drafts for “${selected?.title ?? ""}” — you pick the one to insert.`
+          selected.content.trim()
+            ? `The Novel Writer agent will write two alternative continuations of "${selected.title}". Your text stays untouched — you pick one.`
+            : `The Novel Writer agent will write two alternative opening drafts for "${selected.title}" — you pick the one to insert.`
         }
         confirmLabel="Write A/B drafts"
         busy={abDrafting}
         onConfirm={runAbDraft}
       />
-
-      {/* A/B pick dialog — nothing touches the chapter until you choose */}
       <Dialog
         open={abResult !== null}
         onOpenChange={(v) => {
@@ -549,16 +457,13 @@ export function ChapterEditor({
           <DialogHeader>
             <DialogTitle>Pick a draft</DialogTitle>
             <DialogDescription>
-              Two grounded alternatives for “{selected?.title ?? ""}”. The one
-              you pick is inserted into the editor; the other is discarded.
+              Two grounded alternatives for &quot;{selected.title}&quot;. The one you
+              pick is inserted into the editor; the other is discarded.
             </DialogDescription>
           </DialogHeader>
           <div className="grid gap-3 sm:grid-cols-2">
             {abResult?.variants?.slice(0, 2).map((variant, i) => (
-              <div
-                key={i}
-                className="flex min-h-0 flex-col rounded-lg border bg-muted/20"
-              >
+              <div key={i} className="flex min-h-0 flex-col rounded-lg border bg-muted/20">
                 <div className="flex items-center justify-between border-b px-3 py-2">
                   <span className="text-sm font-medium">Draft {String.fromCharCode(65 + i)}</span>
                   <span className="text-xs text-muted-foreground">
@@ -580,269 +485,17 @@ export function ChapterEditor({
               </div>
             ))}
           </div>
-          <DialogFooter>
-            <Button variant="ghost" onClick={() => setAbResult(null)}>
-              Discard both
-            </Button>
-          </DialogFooter>
+          <Button variant="ghost" onClick={() => setAbResult(null)}>
+            Discard both
+          </Button>
         </DialogContent>
       </Dialog>
-    </div>
-  );
 
-  function renderEditor() {
-    return (
-      <div className="rounded-lg border bg-card">
-        {!selected ? (
-          <div className="flex h-64 items-center justify-center text-sm text-muted-foreground">
-            Select a chapter — or add a new one — to start writing.
-          </div>
-        ) : (
-          <div className="flex flex-col">
-            {/* Header — inputs on the Document tab, document title on Markdown */}
-            <div className="flex flex-col gap-2 border-b p-4 sm:flex-row">
-              {view === "document" ? (
-                <>
-                  <Input
-                    value={title}
-                    onChange={(e) => {
-                      setTitle(e.target.value);
-                      setDirty(true);
-                    }}
-                    className="flex-1 font-medium"
-                    aria-label="Chapter title"
-                  />
-                  <Select
-                    value={status}
-                    disabled={isFinal}
-                    onValueChange={(v) => {
-                      setStatus(v as ChapterStatus);
-                      setDirty(true);
-                    }}
-                  >
-                    <SelectTrigger className="w-full sm:w-32" aria-label="Chapter status">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="draft">Draft</SelectItem>
-                      <SelectItem value="final">Final</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </>
-              ) : (
-                <div className="flex min-w-0 flex-1 items-center justify-between gap-3">
-                  <h2 className="min-w-0 truncate font-display text-lg font-bold leading-tight">
-                    {title || selected.title}
-                  </h2>
-                  <span className="shrink-0 text-xs text-muted-foreground">
-                    Chapter {selected.index}
-                  </span>
-                </div>
-              )}
-              {isFinal && (
-                <span className="flex shrink-0 items-center gap-2">
-                  <span className="flex items-center gap-1 text-xs text-muted-foreground">
-                    <Lock className="h-3.5 w-3.5" aria-hidden="true" />
-                    Final — locked
-                  </span>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={() => void reopenChapter()}
-                    disabled={reopening}
-                    aria-label="Reopen chapter for editing"
-                  >
-                    {reopening ? (
-                      <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
-                    ) : (
-                      <RotateCcw className="h-4 w-4" aria-hidden="true" />
-                    )}
-                    Reopen
-                  </Button>
-                </span>
-              )}
-            </div>
-
-            {/* Toolbar — view toggle always; writing tools on the Document tab only
-                while the chapter is a draft (a final chapter is locked) */}
-            <div className="flex flex-wrap items-center gap-2 border-b bg-muted/30 px-4 py-2 text-xs text-muted-foreground">
-              <span
-                className="flex overflow-hidden rounded-md border bg-background"
-                role="group"
-                aria-label="Editor view"
-              >
-                <button
-                  type="button"
-                  onClick={() => switchView("document")}
-                  aria-pressed={view === "document"}
-                  className={cn(
-                    "flex items-center gap-1 px-2.5 py-1 transition-colors",
-                    view === "document"
-                      ? "bg-primary text-primary-foreground"
-                      : "text-muted-foreground hover:text-foreground"
-                  )}
-                >
-                  <PenLine className="h-3.5 w-3.5" aria-hidden="true" />
-                  Document
-                </button>
-                <button
-                  type="button"
-                  onClick={() => switchView("markdown")}
-                  aria-pressed={view === "markdown"}
-                  className={cn(
-                    "flex items-center gap-1 px-2.5 py-1 transition-colors",
-                    view === "markdown"
-                      ? "bg-primary text-primary-foreground"
-                      : "text-muted-foreground hover:text-foreground"
-                  )}
-                >
-                  <BookOpen className="h-3.5 w-3.5" aria-hidden="true" />
-                  Markdown
-                </button>
-              </span>
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={() => void openHistory()}
-                disabled={drafting || abDrafting || saving}
-              >
-                <History className="h-4 w-4" aria-hidden="true" />
-                History
-              </Button>
-              <PinButton
-                novelId={selected.novelId}
-                target={{
-                  type: "chapter",
-                  id: selected.id,
-                  label: `Chapter ${selected.index} ${selected.title}`,
-                }}
-                label="Pin to chat"
-              />
-              <span>{formatWordCount(countWords(content))} words</span>
-              {dirty && view === "document" && (
-                <span className="flex items-center gap-1 text-amber-700">
-                  <span className="h-1.5 w-1.5 rounded-full bg-amber-500" aria-hidden="true" />
-                  Unsaved changes
-                </span>
-              )}
-              {view === "document" && !isFinal && (
-                <span className="ml-auto flex items-center gap-2">
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => setConfirmAbDraft(true)}
-                    disabled={drafting || abDrafting || saving}
-                    aria-label="Generate two AI draft alternatives"
-                  >
-                    {abDrafting ? (
-                      <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
-                    ) : (
-                      <SplitSquareHorizontal className="h-4 w-4" aria-hidden="true" />
-                    )}
-                    A/B Draft
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => setConfirmDraft(true)}
-                    disabled={drafting || abDrafting || saving}
-                  >
-                    {drafting ? (
-                      <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
-                    ) : (
-                      <Sparkles className="h-4 w-4" aria-hidden="true" />
-                    )}
-                    AI Draft
-                    <span className="sr-only">(experimental)</span>
-                  </Button>
-                  <Button size="sm" onClick={() => save()} disabled={saving || !dirty}>
-                    {saving && (
-                      <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
-                    )}
-                    Save
-                  </Button>
-                </span>
-              )}
-            </div>
-
-            {/* Body — Document authors the chapter; Markdown is read-only source */}
-            {view === "document" ? (
-              <div className="flex min-h-0 flex-1 flex-col">
-                <button
-                  type="button"
-                  onClick={() => setBriefOpen((v) => !v)}
-                  aria-expanded={briefOpen}
-                  className="flex w-full items-center gap-1.5 border-b bg-muted/20 px-4 py-1.5 text-left text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
-                >
-                  <ScrollText className="h-3.5 w-3.5" aria-hidden="true" />
-                  Brief / Outline
-                  {briefOpen ? (
-                    <ChevronUp className="ml-auto h-3.5 w-3.5" aria-hidden="true" />
-                  ) : (
-                    <ChevronDown className="ml-auto h-3.5 w-3.5" aria-hidden="true" />
-                  )}
-                </button>
-                {briefOpen && (
-                  <div className="border-b px-4 py-3">
-                    <Textarea
-                      value={brief}
-                      rows={3}
-                      onChange={(e) => {
-                        setBrief(e.target.value);
-                        setDirty(true);
-                      }}
-                      onBlur={() => {
-                        if (dirty && !saving) void save();
-                      }}
-                      placeholder="Outline beats, goals, must-hit moments for this chapter…"
-                      className="resize-y bg-muted/40 text-sm text-muted-foreground placeholder:text-muted-foreground/70"
-                      aria-label="Chapter brief"
-                    />
-                  </div>
-                )}
-                <RichEditor
-                  markdown={content}
-                  onChange={(md) => {
-                    setContent(md);
-                    setDirty(true);
-                  }}
-                  editable={!isFinal}
-                  placeholder="Write your chapter here — or click AI Draft to get a grounded first draft."
-                  minHeight={320}
-                />
-              </div>
-            ) : (
-              <div
-                className="nice-scroll min-h-[320px] flex-1 overflow-y-auto px-6 py-5 lg:min-h-[480px]"
-                aria-label="Chapter markdown source"
-              >
-                <pre className="mx-auto max-w-prose whitespace-pre-wrap break-words font-mono text-[13px] leading-[1.85]">{content || "Nothing here yet — switch to Document to start this chapter."}</pre>
-              </div>
-            )}
-            <div className="flex items-center justify-between border-t px-4 py-2 text-xs text-muted-foreground">
-              <StateChip status={status} />
-              <span>
-                {view === "document"
-                  ? "Autosaves when you switch tabs"
-                  : isFinal
-                    ? "Locked — reopen to edit"
-                    : "Open in Document to edit"}{" "}
-                · Chapter {selected.index}
-              </span>
-            </div>
-          </div>
-        )}
-        {renderHistoryDialog()}
-      </div>
-    );
-  }
-
-  function renderHistoryDialog() {
-    return (
-      <Dialog open={historyOpen} onOpenChange={setHistoryOpen}>
+      {/* Versions table — opened by the pane's one History icon button. */}
+      <Dialog open={historyOpen} onOpenChange={onHistoryOpenChange}>
         <DialogContent className="max-w-2xl">
           <DialogHeader>
-            <DialogTitle>Version history — {selected?.title ?? ""}</DialogTitle>
+            <DialogTitle>Version history — {selected.title}</DialogTitle>
             <DialogDescription>
               Every save records a draft. Select one to preview it, then
               restore if it is the text you want back.
@@ -877,9 +530,7 @@ export function ChapterEditor({
                         active && "bg-accent/40"
                       )}
                     >
-                      <span className="font-mono text-xs">
-                        Draft {version.draftNo}
-                      </span>
+                      <span className="font-mono text-xs">Draft {version.draftNo}</span>
                       <span className="shrink-0 text-xs text-muted-foreground">
                         {formatWordCount(version.wordCount)} words
                       </span>
@@ -901,9 +552,7 @@ export function ChapterEditor({
                       <Button
                         size="sm"
                         variant="ghost"
-                        onClick={() =>
-                          setActiveVersion(active ? null : version)
-                        }
+                        onClick={() => setActiveVersion(active ? null : version)}
                         aria-pressed={active}
                       >
                         View
@@ -922,13 +571,11 @@ export function ChapterEditor({
                       size="sm"
                       variant="outline"
                       onClick={() => void restoreVersion(activeVersion)}
-                      disabled={restoring}
+                      disabled={restoring || isFinal}
+                      title={isFinal ? "Reopen to edit before restoring" : undefined}
                     >
                       {restoring ? (
-                        <Loader2
-                          className="h-4 w-4 animate-spin"
-                          aria-hidden="true"
-                        />
+                        <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
                       ) : (
                         <RotateCcw className="h-4 w-4" aria-hidden="true" />
                       )}
@@ -936,10 +583,7 @@ export function ChapterEditor({
                     </Button>
                   </div>
                   <div className="nice-scroll max-h-64 overflow-y-auto px-3 py-2">
-                    <MarkdownDocument
-                      content={activeVersion.content}
-                      className="text-sm"
-                    />
+                    <MarkdownDocument content={activeVersion.content} className="text-sm" />
                   </div>
                 </div>
               )}
@@ -947,6 +591,6 @@ export function ChapterEditor({
           )}
         </DialogContent>
       </Dialog>
-    );
-  }
+    </>
+  );
 }

@@ -5,9 +5,15 @@
 //
 // RULE 2: every document is a READ-ONLY PROJECTION of data that already
 // exists in the novel detail. The pane has NO save button, NO new-document
-// button and NO reload button. The ONE exception is the chapter document:
-// the author's prose is not a projection, so it keeps the existing
-// ChapterEditor unchanged (it stays editable).
+// button and NO reload button.
+//
+// STEP 81: a chapter document uses the SAME header, toolbar and status line
+// as every other document. chapter-editor.tsx is now BODY ONLY — it owns the
+// writable prose, the muted Brief/Outline section and the versions dialog,
+// and draws no chrome of its own. A chapter is the single special case: its
+// data is authored rather than projected, so it alone autosaves and offers a
+// status change. Those actions live in the pane's own header, not in a second
+// card stacked inside the body.
 //
 // The pane's tab strip lists the OPEN DOCUMENTS (not a fixed set of tabs).
 // Clicking a tree row opens its document as a tab; closing the active tab
@@ -18,7 +24,9 @@ import { useEffect, useMemo, useState } from "react";
 import {
   Check,
   Copy,
+  History,
   Loader2,
+  Lock,
   Maximize2,
   Minimize2,
   PanelLeftClose,
@@ -51,10 +59,11 @@ import type {
   ChapterStatus,
   NovelDetail,
 } from "@/lib/novara/types";
+import { formatWordCount } from "@/lib/novara/words";
 import { cn } from "@/lib/utils";
-import { ChapterEditor } from "./chapter-editor";
+import { ChapterEditor, type ChapterDocumentState } from "./chapter-editor";
 import { MarkdownDocument } from "./markdown-document";
-import { StateChip } from "./ui-bits";
+import { PinButton, StateChip } from "./ui-bits";
 
 /** Stable empty list — a fresh array on every selector call breaks zustand's
  * snapshot identity (React Compiler loop guard). */
@@ -74,7 +83,7 @@ function canonicalMeta(meta: string | undefined, state: CanonState | undefined):
   return raw;
 }
 
-/** The chapter handlers the chapter document needs (the editor stays alive). */
+/** The chapter handlers the pane needs for a chapter document. */
 export interface DocPaneChapterHandlers {
   selectedId: string | null;
   onSelect: (id: string) => void;
@@ -82,9 +91,13 @@ export interface DocPaneChapterHandlers {
   onDelete: (chapter: ChapterDTO) => Promise<void>;
   onSave: (
     id: string,
-    patch: { title?: string; content?: string; status?: ChapterStatus; brief?: string }
+    patch: { title?: string; content?: string; status?: ChapterStatus; brief?: string },
+    opts?: { overwrite?: boolean; silent?: boolean }
   ) => Promise<ChapterDTO | null>;
-  onAiDraft: (chapter: ChapterDTO) => Promise<AiDraftResult | null>;
+  onAiDraft: (
+    chapter: ChapterDTO,
+    opts?: { variants?: number }
+  ) => Promise<AiDraftResult | null>;
 }
 
 export interface DocPaneProps {
@@ -130,6 +143,17 @@ export function DocPane({
   const [full, setFull] = useState(false);
   const [memory, setMemory] = useState<MemorySnapshot | null>(null);
   const [reopening, setReopening] = useState(false);
+  const [finalizing, setFinalizing] = useState(false);
+  // History is keyed by the OPEN DOCUMENT, so switching tabs closes it without
+  // a state-syncing effect.
+  const [historyDocId, setHistoryDocId] = useState<string | null>(null);
+  const historyOpen = historyDocId !== null && historyDocId === activeDocId;
+  const [chapterState, setChapterState] = useState<ChapterDocumentState>({
+    words: 0,
+    dirty: false,
+    saving: false,
+    content: "",
+  });
 
   // Every document node of the tree, keyed by its id (the tab labels).
   const docNodes = useMemo(() => {
@@ -147,6 +171,10 @@ export function DocPane({
   const isFinalDocument = activeState === "final";
   // The lifecycle kind of the open document — the API's snake_case vocabulary.
   const reopenKind = activeNode ? (DOC_LIFECYCLE_KINDS[activeNode.doc] ?? null) : null;
+  const pinTarget =
+    activeNode && isChapter
+      ? { type: "chapter" as const, id: activeNode.ref, label: activeNode.label }
+      : null;
 
   // The memory documents project the memory pool — fetched once, lazily.
   const needsMemory =
@@ -194,8 +222,10 @@ export function DocPane({
     return () => window.removeEventListener("keydown", onKey);
   }, [full]);
 
+  // The chapter's prose is the buffer, not the renderer's projection: copy
+  // exactly what the author sees in the Markdown view.
   const copyMarkdown = async () => {
-    const markdown = rendered?.markdown ?? "";
+    const markdown = isChapter ? chapterState.content : (rendered?.markdown ?? "");
     if (!markdown) return;
     try {
       await navigator.clipboard.writeText(markdown);
@@ -258,6 +288,35 @@ export function DocPane({
       });
     } finally {
       setReopening(false);
+    }
+  };
+
+  /** Status change — Draft -> Final goes through the same save path as the
+   * rest of the app: the server owns the E2 gate and the memory projection. */
+  const markFinal = async () => {
+    if (!activeNode) return;
+    setFinalizing(true);
+    try {
+      const next = await chapters.onSave(
+        activeNode.ref,
+        { status: "final" },
+        { silent: true }
+      );
+      if (next) {
+        toast({
+          title: "Chapter finalized",
+          description: `${activeNode.label} is locked and its memory was projected.`,
+        });
+        await onRefresh?.();
+      }
+    } catch (e) {
+      toast({
+        title: "Could not finalize",
+        description: e instanceof Error ? e.message : "Unknown error",
+        variant: "destructive",
+      });
+    } finally {
+      setFinalizing(false);
     }
   };
 
@@ -332,9 +391,9 @@ export function DocPane({
         </div>
       </div>
 
-      {/* Header — path, kind, view toggle, copy, fullscreen. It fills the rest
-          of the band so its bottom border is the shared line; the controls
-          stay at the top of the row. */}
+      {/* Header — path, state chip, lifecycle actions, Document|Markdown,
+          History (chapters only), copy and fullscreen. ONE chrome for EVERY
+          document kind, chapters included. */}
       <div className="flex flex-1 flex-wrap content-start items-start gap-1.5 border-b px-2 py-1.5">
         <span className="max-w-[150px] truncate font-mono text-[11px] text-muted-foreground">
           {path}
@@ -361,32 +420,68 @@ export function DocPane({
             Reopen to edit
           </Button>
         )}
+        {isChapter && !isFinalDocument && (
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-7 px-2 text-[11px]"
+            onClick={() => void markFinal()}
+            disabled={finalizing}
+            aria-label="Mark as final"
+            title="Mark as final — locks the chapter and projects its memory"
+          >
+            {finalizing ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+            ) : (
+              <Lock className="h-3.5 w-3.5" aria-hidden="true" />
+            )}
+            Mark final
+          </Button>
+        )}
+        {pinTarget && (
+          <PinButton
+            novelId={novelId}
+            target={pinTarget}
+            label="Pin"
+            className="h-7 gap-1 px-1.5 text-[11px]"
+          />
+        )}
         <span className="flex-1" />
-        {!isChapter && (
-          <span className="flex items-center rounded border text-[11px]">
-            <button
-              type="button"
-              onClick={() => activeDocId && setDocView(novelId, activeDocId, "document")}
-              aria-pressed={viewMode === "document"}
-              className={cn(
-                "px-1.5 py-0.5",
-                viewMode === "document" && "bg-muted text-foreground"
-              )}
-            >
-              Document
-            </button>
-            <button
-              type="button"
-              onClick={() => activeDocId && setDocView(novelId, activeDocId, "markdown")}
-              aria-pressed={viewMode === "markdown"}
-              className={cn(
-                "px-1.5 py-0.5",
-                viewMode === "markdown" && "bg-muted text-foreground"
-              )}
-            >
-              Markdown
-            </button>
-          </span>
+        <span className="flex items-center rounded border text-[11px]">
+          <button
+            type="button"
+            onClick={() => activeDocId && setDocView(novelId, activeDocId, "document")}
+            aria-pressed={viewMode === "document"}
+            className={cn(
+              "px-1.5 py-0.5",
+              viewMode === "document" && "bg-muted text-foreground"
+            )}
+          >
+            Document
+          </button>
+          <button
+            type="button"
+            onClick={() => activeDocId && setDocView(novelId, activeDocId, "markdown")}
+            aria-pressed={viewMode === "markdown"}
+            className={cn(
+              "px-1.5 py-0.5",
+              viewMode === "markdown" && "bg-muted text-foreground"
+            )}
+          >
+            Markdown
+          </button>
+        </span>
+        {isChapter && (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-7 w-7 px-0"
+            aria-label="Version history"
+            title="Version history"
+            onClick={() => setHistoryDocId(activeDocId)}
+          >
+            <History className="h-4 w-4" aria-hidden="true" />
+          </Button>
         )}
         <Button
           variant="ghost"
@@ -419,8 +514,14 @@ export function DocPane({
       </div>
       </div>
 
-      {/* Body — the document. */}
-      <div className="nice-scroll min-h-0 flex-1 overflow-y-auto p-3">
+      {/* Body — the document. A chapter is the only BODY-ONLY document, so it
+          gets a flex column; every other kind keeps the scrolling projection. */}
+      <div
+        className={cn(
+          "nice-scroll min-h-0 flex-1",
+          isChapter ? "flex flex-col overflow-hidden" : "overflow-y-auto p-3"
+        )}
+      >
         {!activeNode ? (
           <p className="text-xs text-muted-foreground">
             Open a document from the tree on the left.
@@ -432,12 +533,12 @@ export function DocPane({
             // the store's selection, so an old tab can never show another
             // chapter's prose.
             selectedId={activeNode.ref}
-            onSelect={chapters.onSelect}
-            onAdd={chapters.onAdd}
-            onDelete={chapters.onDelete}
             onSave={chapters.onSave}
             onAiDraft={chapters.onAiDraft}
-            hideList
+            view={viewMode}
+            historyOpen={historyOpen}
+            onHistoryOpenChange={(open) => setHistoryDocId(open ? activeDocId : null)}
+            onStateChange={setChapterState}
           />
         ) : viewMode === "markdown" ? (
           <pre className="whitespace-pre-wrap break-words font-mono text-[13px] leading-[1.85]">
@@ -448,10 +549,18 @@ export function DocPane({
         )}
       </div>
 
-      {/* Status line — what this document is. */}
+      {/* Status line — what this document is. ONE component for every kind. */}
       <div className="border-t px-3 py-1.5 text-[11px] text-muted-foreground">
         {isChapter
-          ? `${isFinalDocument ? "locked" : "editable"} · the author's prose · ${statusMeta}`
+          ? isFinalDocument
+            ? `locked · the author's prose · ${formatWordCount(chapterState.words)} words`
+            : `editable · your prose · ${formatWordCount(chapterState.words)} words · ${
+                chapterState.saving
+                  ? "saving"
+                  : chapterState.dirty
+                    ? "unsaved"
+                    : "saved"
+              }`
           : `read-only · generated from ${kindLabel} · ${statusMeta}${focusNote}`}
       </div>
     </div>
