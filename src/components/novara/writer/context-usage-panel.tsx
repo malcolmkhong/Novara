@@ -49,7 +49,10 @@ import type {
   AccountUsageSnapshot,
   LedgerSurfaceUsage,
 } from "@/lib/usage/usage-shapes";
+import { surfaceLabel } from "@/lib/usage/usage-shapes";
 import { cn } from "@/lib/utils";
+import { UsageRow } from "@/components/novara/writer/usage-rows";
+import { ROW_HEAD, TEXT_CAPTION, TEXT_META, TEXT_MICRO, TEXT_NOTE, TEXT_PANEL_TITLE } from "@/components/novara/styles";
 
 const SECTION_META: {
   key: keyof ContextUsage["sections"];
@@ -64,24 +67,6 @@ const SECTION_META: {
   { key: "conversation", label: "Conversation", dot: "bg-rose-500", bar: "bg-rose-500" },
   { key: "mcp", label: "MCP", dot: "bg-zinc-400", bar: "bg-zinc-400" },
 ];
-
-/** Friendly labels for the app-wide ledger surfaces (P4 / T5). */
-const SURFACE_LABELS: Record<string, string> = {
-  agent: "Agent team runs",
-  draft: "Chapter drafts",
-  review: "Chapter reviews",
-  sediment: "Memory sediment",
-  studio: "Novel studio (init/plan/write)",
-  detect: "AI detectors",
-  generate: "Concept Q&A",
-  wizard: "Onboarding wizard",
-  "ai-team": "Onboarding team build",
-  other: "Other",
-};
-
-function surfaceLabel(surface: string): string {
-  return SURFACE_LABELS[surface] ?? surface;
-}
 
 function percent(tokens: number, used: number): string {
   if (used <= 0) return "0.0%";
@@ -243,7 +228,7 @@ export function ContextUsageSegment({
       <PopoverTrigger asChild>
         <button
           type="button"
-          className="inline cursor-pointer border-0 bg-transparent p-0 align-baseline text-[11px] font-normal leading-4 text-muted-foreground hover:underline focus-visible:underline"
+          className="inline cursor-pointer border-0 bg-transparent p-0 align-baseline text-caption font-normal leading-4 text-muted-foreground hover:underline focus-visible:underline"
           aria-label="Context usage — what each team call sends to the model"
           title={segmentTitle}
         >
@@ -252,25 +237,25 @@ export function ContextUsageSegment({
       </PopoverTrigger>
       <PopoverContent align="center" side="top" className="w-80 rounded-xl p-4">
         {/* Layer 1 — THIS CALL (or, before any call: the pre-run estimate) */}
-        <div className="flex items-baseline justify-between gap-2">
-          <p className="text-xs font-semibold">
+        <div className={ROW_HEAD}>
+          <p className={TEXT_PANEL_TITLE}>
             Context Usage
             {!isLive && usage && (
-              <span className="ml-1.5 rounded-full bg-amber-500/15 px-1.5 py-0.5 align-middle text-[9px] font-medium uppercase tracking-wide text-amber-700 dark:text-amber-400">
+              <span className="ml-1.5 rounded-full bg-warning-dot/15 px-1.5 py-0.5 align-middle text-micro font-medium uppercase tracking-wide text-warning-text-strong">
                 estimate
               </span>
             )}
           </p>
-          <p className="text-[10px] text-muted-foreground">{model.label}</p>
+          <p className={TEXT_MICRO}>{model.label}</p>
         </div>
         {/* Honest zero state: no usage events = no call has ever billed a token.
             The number below is what the FIRST call will send, not what was spent. */}
         {!isLive && usage && (
-          <div className="mt-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-2.5 py-2">
-            <p className="text-[11px] font-medium text-amber-700 dark:text-amber-400">
+          <div className="mt-2 rounded-lg border border-warning-dot/30 bg-warning-dot/10 px-2.5 py-2">
+            <p className="text-caption font-medium text-warning-text-strong">
               Nothing consumed yet — 0 API calls
             </p>
-            <p className="mt-0.5 text-[10px] leading-4 text-amber-700/80 dark:text-amber-400/80">
+            <p className="mt-0.5 text-tiny leading-4 text-warning-text-strong/80">
               This estimates what your first message will send. Fixed overhead — role
               card + tools + skills ≈{" "}
               {formatTokenCount(
@@ -284,12 +269,12 @@ export function ContextUsageSegment({
           {!isLive && usage ? "~" : ""}
           {formatTokenCount(used)}
           <span className="text-muted-foreground"> / {formatTokenCount(window_)}</span>
-          <span className="ml-2 text-xs text-muted-foreground">
+          <span className={cn("ml-2", TEXT_META)}>
             {usedPct.toFixed(1)}%
           </span>
         </p>
         {real && (
-          <p className="mt-0.5 font-mono text-[10px] text-muted-foreground">
+          <p className={cn("mt-0.5 font-mono", TEXT_MICRO)}>
             measured · output {formatTokenCount(real.completionTokens)} · billed{" "}
             {formatTokenCount(real.totalTokens)}
           </p>
@@ -317,19 +302,19 @@ export function ContextUsageSegment({
             const isMcp = key === "mcp";
             return (
               <li key={key} className="flex items-center gap-2 text-xs">
-                <span className={cn("h-2 w-2 shrink-0 rounded-full", dot)} aria-hidden="true" />
+                <span className={cn("size-2 shrink-0 rounded-full", dot)} aria-hidden="true" />
                 <span className={cn("flex-1", isMcp && "text-muted-foreground/70")}>
                   {label}
                   {isMcp && tokens === 0 && (
-                    <span className="ml-1.5 text-[10px] text-muted-foreground/70">
+                    <span className="ml-1.5 text-tiny text-muted-foreground/70">
                       not used — no MCP server in this system
                     </span>
                   )}
                 </span>
-                <span className={cn("font-mono text-[11px]", isMcp && tokens === 0 ? "text-muted-foreground/70" : "")}>
+                <span className={cn("font-mono text-caption", isMcp && tokens === 0 ? "text-muted-foreground/70" : "")}>
                   {formatTokenCount(tokens)}
                 </span>
-                <span className="w-10 text-right font-mono text-[11px] text-muted-foreground">
+                <span className={cn("w-10 text-right font-mono", TEXT_CAPTION)}>
                   {percent(tokens, usage?.used ?? 0)}
                 </span>
               </li>
@@ -340,20 +325,20 @@ export function ContextUsageSegment({
         {/* Layer 2 — THIS RUN (T2 + T3) */}
         {runStats.calls > 0 && (
           <div className="mt-3 border-t pt-2">
-            <div className="flex items-baseline justify-between gap-2">
-              <p className="text-xs font-semibold">
+            <div className={ROW_HEAD}>
+              <p className={TEXT_PANEL_TITLE}>
                 Run total
-                <span className="ml-1.5 font-normal text-[10px] text-muted-foreground">
+                <span className={cn("ml-1.5 font-normal", TEXT_MICRO)}>
                   {runStats.calls} {runStats.calls === 1 ? "call" : "calls"}
                 </span>
               </p>
               <p className="font-mono text-xs">{formatTokenCount(runStats.billedTokens)}</p>
             </div>
-            <div className="mt-1 flex items-center justify-between font-mono text-[10px] text-muted-foreground">
+            <div className={cn("mt-1 flex items-center justify-between font-mono", TEXT_MICRO)}>
               <span>prompt {formatTokenCount(runStats.promptTokens)}</span>
               <span>output {formatTokenCount(runStats.completionTokens)}</span>
             </div>
-            <p className="mt-1 text-[10px] leading-4 text-muted-foreground">
+            <p className={TEXT_NOTE}>
               {runStats.estimatedCalls === 0
                 ? "All calls measured from provider usage."
                 : `${runStats.measuredCalls} measured · ${runStats.estimatedCalls} estimated (pre-P4 event without provider usage).`}
@@ -363,15 +348,15 @@ export function ContextUsageSegment({
 
         {/* Layer 3 — ALL AI SURFACES on this account (persisted ledger, P5-b) */}
         <div className="mt-3 border-t pt-2">
-          <div className="flex items-baseline justify-between gap-2">
-            <p className="text-xs font-semibold">All AI surfaces</p>
-            <p className="max-w-[9rem] text-right text-[10px] leading-3 text-muted-foreground">
+          <div className={ROW_HEAD}>
+            <p className={TEXT_PANEL_TITLE}>All AI surfaces</p>
+            <p className="max-w-[9rem] text-right text-tiny leading-3 text-muted-foreground">
               this account · persisted ledger · not tied to this novel
             </p>
           </div>
           {globalState && globalState.surfaces.length > 0 ? (
             <>
-              <p className="mt-1 text-[10px] leading-4 text-muted-foreground">
+              <p className={TEXT_NOTE}>
                 Tracking began{" "}
                 {globalState.since
                   ? new Date(globalState.since).toLocaleDateString(undefined, {
@@ -384,20 +369,16 @@ export function ContextUsageSegment({
               </p>
               <ul className="mt-1.5 space-y-1">
                 {globalState.surfaces.map((surface: LedgerSurfaceUsage) => (
-                  <li key={surface.surface} className="flex items-center gap-2 text-[11px]">
-                    <span className="min-w-0 flex-1 truncate text-muted-foreground">
-                      {surfaceLabel(surface.surface)}
-                    </span>
-                    <span className="shrink-0 font-mono text-[10px] text-muted-foreground/70">
-                      ×{surface.calls}
-                    </span>
-                    <span className="w-12 text-right font-mono">
-                      {formatTokenCount(surface.totalTokens)}
-                    </span>
-                  </li>
+                  <UsageRow
+                    key={surface.surface}
+                    label={surfaceLabel(surface.surface)}
+                    calls={surface.calls}
+                    tokens={formatTokenCount(surface.totalTokens)}
+                    tokenWidth="w-12"
+                  />
                 ))}
               </ul>
-              <p className="mt-1.5 flex items-center justify-between font-mono text-[10px] text-muted-foreground">
+              <p className={cn("mt-1.5 flex items-center justify-between font-mono", TEXT_MICRO)}>
                 <span>
                   {globalState.totalCalls} calls · in {formatTokenCount(globalState.totalPromptTokens)} · out{" "}
                   {formatTokenCount(globalState.totalCompletionTokens)}
@@ -406,7 +387,7 @@ export function ContextUsageSegment({
               </p>
             </>
           ) : (
-            <p className="mt-1 text-[10px] leading-4 text-muted-foreground">
+            <p className={TEXT_NOTE}>
               {globalState
                 ? "No usage rows yet — persisted tracking began with Phase 5; calls before it were never recorded. Streaming surfaces record only when the provider returns usage."
                 : "Loading account usage…"}
@@ -414,7 +395,7 @@ export function ContextUsageSegment({
           )}
           {globalState && (
             <p
-              className="mt-1 cursor-help text-[10px] leading-4 text-muted-foreground/70"
+              className="mt-1 cursor-help text-tiny leading-4 text-muted-foreground/70"
               title={globalState.retention}
             >
               Details retained 90 days · totals survive permanently as daily summaries
@@ -422,7 +403,7 @@ export function ContextUsageSegment({
           )}
         </div>
 
-        <p className="mt-3 border-t pt-2 text-[10px] leading-4 text-muted-foreground">
+        <p className="mt-3 border-t pt-2 text-tiny leading-4 text-muted-foreground">
           {usage
             ? isLive
               ? isMeasured

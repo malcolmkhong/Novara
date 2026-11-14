@@ -1,7 +1,6 @@
 "use client";
 
 import { AnimatePresence, motion } from "framer-motion";
-
 import { useCallback, useEffect, useState } from "react";
 import { useHashRoute } from "@/hooks/use-hash-route";
 import { Navbar } from "./navbar";
@@ -17,9 +16,9 @@ import {
   getFirebaseAuth,
   onAuthFailure,
   signInWithGoogle,
-  type User,
 } from "@/lib/firebase/client";
 import { onAuthStateChanged } from "firebase/auth";
+import { SpinnerRing } from "@/components/novara/primitives";
 
 type AuthState = "loading" | "signed-out" | "signed-in";
 
@@ -96,7 +95,7 @@ export function NovaraApp() {
   if (authState === "loading") {
     return (
       <div className="flex min-h-screen items-center justify-center">
-        <span className="h-6 w-6 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+        <SpinnerRing size="md" />
       </div>
     );
   }

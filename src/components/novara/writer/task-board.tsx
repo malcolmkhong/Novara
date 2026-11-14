@@ -25,14 +25,15 @@ import type {
   AgentTaskStatus,
 } from "@/lib/novara/agent-types";
 import { cn } from "@/lib/utils";
+import { TEXT_META, TEXT_LABEL } from "@/components/novara/styles";
 
 /** Status → row icon + icon color for the Todos board. */
 const TASK_STATUS_ICON: Record<AgentTaskStatus, { icon: LucideIcon; iconClass: string }> = {
   pending: { icon: Circle, iconClass: "text-muted-foreground" },
   in_progress: { icon: Loader2, iconClass: "animate-spin text-primary" },
-  needs_approval: { icon: PauseCircle, iconClass: "text-amber-600" },
-  done: { icon: CheckCircle2, iconClass: "text-emerald-600" },
-  failed: { icon: XCircle, iconClass: "text-rose-600" },
+  needs_approval: { icon: PauseCircle, iconClass: "text-warning-text" },
+  done: { icon: CheckCircle2, iconClass: "text-success-text" },
+  failed: { icon: XCircle, iconClass: "text-danger-text" },
   blocked: { icon: Ban, iconClass: "text-muted-foreground" },
 };
 
@@ -40,10 +41,10 @@ const TASK_STATUS_ICON: Record<AgentTaskStatus, { icon: LucideIcon; iconClass: s
 const PARALLEL_RAIL_CLASS: Record<AgentTaskStatus, string> = {
   pending: "border-l-muted-foreground/40",
   in_progress: "border-l-primary/40",
-  needs_approval: "border-l-amber-400",
+  needs_approval: "border-l-warning-accent",
   blocked: "border-l-muted-foreground/40",
-  failed: "border-l-rose-400",
-  done: "border-l-emerald-400",
+  failed: "border-l-danger-accent",
+  done: "border-l-success-accent",
 };
 
 // Phase 5: member accent on each task row (matches the conversation bubbles).
@@ -74,9 +75,9 @@ export function TaskBoard({
   return (
     <Card>
       <CardHeader className="flex flex-row items-center gap-2">
-        <ClipboardList className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
+        <ClipboardList className="size-4 text-muted-foreground" aria-hidden="true" />
         <CardTitle className="text-base">Todos</CardTitle>
-        <Badge variant="outline" className="ml-auto font-mono text-[11px]">
+        <Badge variant="outline" className="ml-auto font-mono text-caption">
           {tasks.length}
         </Badge>
       </CardHeader>
@@ -84,9 +85,9 @@ export function TaskBoard({
         {runStatus === "awaiting_approval" && (
           <div
             role="status"
-            className="flex items-center gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-800"
+            className="flex items-center gap-2 rounded-md border border-warning-border bg-warning-surface px-3 py-2 text-xs leading-5 text-warning-text-heading"
           >
-            <Hand className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+            <Hand className="size-3.5 shrink-0" aria-hidden="true" />
             <span>Waiting for your approval — the run is paused at the settle gate.</span>
           </div>
         )}
@@ -105,7 +106,7 @@ export function TaskBoard({
                 isParallel &&
                 task.parallelGroup !== null &&
                 groupsAwaitingApproval.has(task.parallelGroup)
-                  ? "border-l-amber-400"
+                  ? "border-l-warning-accent"
                   : PARALLEL_RAIL_CLASS[task.status];
 
               return (
@@ -120,19 +121,19 @@ export function TaskBoard({
                 >
                   <div className="flex items-start gap-2">
                     <Icon
-                      className={cn("mt-0.5 h-4 w-4 shrink-0", iconClass)}
+                      className={cn("mt-0.5 size-4 shrink-0", iconClass)}
                       aria-hidden="true"
                     />
                     <div className="min-w-0 flex-1">
                       <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
-                        <span className="font-mono text-xs text-muted-foreground">
+                        <span className={cn("font-mono", TEXT_META)}>
                           {task.key}
                         </span>
-                        <span className="text-sm font-medium leading-5">{task.title}</span>
+                        <span className={cn(TEXT_LABEL, "leading-5")}>{task.title}</span>
                         {task.assignee !== "atlas" && (
                           <span
                             className={cn(
-                              "rounded px-1 py-px text-[10px] font-semibold uppercase tracking-wide",
+                              "rounded px-1 py-px text-tiny font-semibold uppercase tracking-wide",
                               ASSIGNEE_BADGE[task.assignee] ??
                                 "bg-muted text-muted-foreground"
                             )}
@@ -142,7 +143,7 @@ export function TaskBoard({
                         )}
                       </div>
                       {task.detail && (
-                        <p className="mt-0.5 line-clamp-2 text-xs text-muted-foreground">
+                        <p className={cn("mt-0.5 line-clamp-2", TEXT_META)}>
                           {task.detail}
                         </p>
                       )}
@@ -150,7 +151,7 @@ export function TaskBoard({
                     {task.artifactLabel && (
                       <Badge
                         variant="outline"
-                        className="mt-0.5 shrink-0 text-[10px] font-normal"
+                        className="mt-0.5 shrink-0 text-tiny font-normal"
                       >
                         {task.artifactLabel}
                       </Badge>

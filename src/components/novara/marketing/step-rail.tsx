@@ -21,6 +21,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { HOW_IT_WORKS } from "@/config/novara";
 import { cn } from "@/lib/utils";
 import { EASE_OUT_EXPO } from "./motion";
+import { TEXT_PROSE } from "@/components/novara/styles";
 
 export function StepRail() {
   const trackRef = useRef<HTMLDivElement>(null);
@@ -63,7 +64,7 @@ export function StepRail() {
               <li key={step.title} className="relative flex items-start gap-4 py-2.5">
                 <span
                   className={cn(
-                    "relative z-10 flex h-8 w-8 shrink-0 items-center justify-center rounded-full border text-xs font-semibold transition-colors duration-300",
+                    "relative z-10 flex size-8 shrink-0 items-center justify-center rounded-full border text-xs font-semibold transition-colors duration-300",
                     done && "border-primary bg-primary text-primary-foreground",
                     current &&
                       "border-primary bg-background text-primary ring-4 ring-primary/15",
@@ -71,7 +72,7 @@ export function StepRail() {
                   )}
                 >
                   {done ? (
-                    <Check className="h-3.5 w-3.5" aria-hidden="true" />
+                    <Check className="size-3.5" aria-hidden="true" />
                   ) : (
                     String(index + 1).padStart(2, "0")
                   )}
@@ -118,7 +119,7 @@ export function StepRail() {
                 </span>
                 <div>
                   <h3 className="font-display text-lg font-bold leading-snug">{step.title}</h3>
-                  <p className="mt-1.5 text-sm leading-relaxed text-muted-foreground">
+                  <p className={cn("mt-1.5", TEXT_PROSE)}>
                     {step.description}
                   </p>
                 </div>

@@ -42,7 +42,7 @@ export function ModeSwitch({
           onClick={() => onChange("approval")}
           className={cn(mode === "approval" ? SELECTED_CLASS : UNSELECTED_CLASS)}
         >
-          <ShieldCheck className="h-3.5 w-3.5" aria-hidden="true" />
+          <ShieldCheck className="size-3.5" aria-hidden="true" />
           Approval
         </Button>
         <Button
@@ -54,12 +54,12 @@ export function ModeSwitch({
           onClick={() => onChange("full_access")}
           className={cn(mode === "full_access" ? SELECTED_CLASS : UNSELECTED_CLASS)}
         >
-          <Zap className="h-3.5 w-3.5" aria-hidden="true" />
+          <Zap className="size-3.5" aria-hidden="true" />
           Full access
         </Button>
       </div>
       {showHint && (
-        <p className="text-[11px] leading-4 text-muted-foreground">{MODE_HINT[mode]}</p>
+        <p className="text-caption leading-4 text-muted-foreground">{MODE_HINT[mode]}</p>
       )}
     </div>
   );

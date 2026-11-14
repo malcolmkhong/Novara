@@ -19,7 +19,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   FolderTree,
-  Loader2,
   MessageSquare,
   PanelRight,
 } from "lucide-react";
@@ -69,6 +68,8 @@ import { ConversationPane } from "./conversation-pane";
 import { ExportDialog } from "./import-export";
 import { buildPinOptions } from "./prompt-box";
 import { ConfirmDialog } from "./ui-bits";
+import { Spinner, ToggleButton } from "@/components/novara/primitives";
+import { TEXT_CAPTION, TEXT_MICRO } from "@/components/novara/styles";
 
 type MobileView = "chat" | "assets";
 
@@ -599,26 +600,24 @@ export function WorkbenchShell({
             { id: "assets", label: "Assets", icon: FolderTree },
           ] as const
         ).map(({ id, label, icon: Icon }) => (
-          <button
+          <ToggleButton
             key={id}
-            type="button"
             onClick={() => setMobileView(id)}
-            aria-pressed={mobileView === id}
-            className={cn(
-              "flex min-h-11 flex-1 flex-col items-center justify-center gap-0.5 py-1.5 text-[10px] transition-colors",
-              mobileView === id ? "text-primary" : "text-muted-foreground"
-            )}
+            pressed={mobileView === id}
+            baseClassName="flex min-h-11 flex-1 flex-col items-center justify-center gap-0.5 py-1.5 text-tiny transition-colors"
+            activeClassName="text-primary"
+            inactiveClassName="text-muted-foreground"
           >
-            <Icon className="h-4 w-4" aria-hidden="true" />
+            <Icon className="size-4" aria-hidden="true" />
             {label}
-          </button>
+          </ToggleButton>
         ))}
         <button
           type="button"
           onClick={() => setPreviewOpen(true)}
-          className="flex min-h-11 flex-1 flex-col items-center justify-center gap-0.5 py-1.5 text-[10px] text-muted-foreground transition-colors"
+          className={cn("flex min-h-11 flex-1 flex-col items-center justify-center gap-0.5 py-1.5", TEXT_MICRO, "transition-colors")}
         >
-          <PanelRight className="h-4 w-4" aria-hidden="true" />
+          <PanelRight className="size-4" aria-hidden="true" />
           Documents
         </button>
       </nav>
@@ -678,7 +677,7 @@ export function WorkbenchShell({
                 placeholder="The promise this book makes: genre expectations, audience, style commitments, hard taboos… Read into every AI writing context."
                 aria-label="Story contract"
               />
-              <p className="text-[11px] text-muted-foreground">
+              <p className={TEXT_CAPTION}>
                 The writing team reads this before every chapter — keep promises
                 explicit (POV, tone, content lines it must never cross).
               </p>
@@ -694,7 +693,7 @@ export function WorkbenchShell({
               }}
               disabled={busy || !formTitle.trim()}
             >
-              {busy && <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />}
+              {busy && <Spinner size="lg" />}
               Save details
             </Button>
           </DialogFooter>

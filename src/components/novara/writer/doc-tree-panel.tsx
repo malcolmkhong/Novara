@@ -18,6 +18,7 @@ import type { PinnedRefType } from "@/lib/novara/agent-types";
 import { cn } from "@/lib/utils";
 import { BadgeIcons, type BadgeMap, type NodeBadge } from "./tree-badges";
 import { PinButton, StateChip } from "./ui-bits";
+import { TEXT_META, TEXT_MICRO } from "@/components/novara/styles";
 
 /** The pin target of a document row, or null when the row cannot be pinned. */
 function pinTargetFor(node: DocNode): { type: PinnedRefType; id: string; label: string } | null {
@@ -119,7 +120,7 @@ export function DocTreePanel({
 
   if (visible.length === 0) {
     return (
-      <p className="px-2 py-3 text-xs text-muted-foreground">
+      <p className={cn("px-2 py-3", TEXT_META)}>
         {searching ? "No files match your search." : "This novel has no documents yet."}
       </p>
     );
@@ -186,7 +187,7 @@ function TreeRow({
         >
           <ChevronRight
             className={cn(
-              "h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform",
+              "size-3.5 shrink-0 text-muted-foreground transition-transform",
               open && "rotate-90"
             )}
             aria-hidden="true"
@@ -196,7 +197,7 @@ function TreeRow({
           <span className="ml-auto flex shrink-0 items-center gap-1">
             {node.state && <StateChip status={node.state} />}
             {node.badge && (
-              <span className="rounded bg-muted px-1 text-[10px] font-normal text-muted-foreground">
+              <span className="rounded bg-muted px-1 text-tiny font-normal text-muted-foreground">
                 {node.badge}
               </span>
             )}
@@ -243,17 +244,17 @@ function TreeRow({
         style={depth > 0 ? { paddingLeft: `${8 + depth * 12}px` } : undefined}
       >
         <FileText
-          className="h-3.5 w-3.5 shrink-0 text-muted-foreground"
+          className="size-3.5 shrink-0 text-muted-foreground"
           aria-hidden="true"
         />
         <span className="truncate">{node.label}</span>
         {node.meta && (
-          <span className="shrink-0 text-[10px] text-muted-foreground">{node.meta}</span>
+          <span className={cn("shrink-0", TEXT_MICRO)}>{node.meta}</span>
         )}
         <span className="ml-auto flex shrink-0 items-center gap-1">
           {node.state && <StateChip status={node.state} />}
           {node.badge && (
-            <span className="rounded bg-muted px-1 text-[10px] font-normal text-muted-foreground">
+            <span className="rounded bg-muted px-1 text-tiny font-normal text-muted-foreground">
               {node.badge}
             </span>
           )}
@@ -265,7 +266,7 @@ function TreeRow({
           novelId={novelId}
           target={pin}
           label=""
-          className="h-6 w-6 shrink-0 px-0"
+          className="size-6 shrink-0 px-0"
         />
       )}
     </li>

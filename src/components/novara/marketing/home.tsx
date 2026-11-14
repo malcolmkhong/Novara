@@ -16,7 +16,6 @@
 import { motion } from "framer-motion";
 import { ArrowRight, Info, Target } from "lucide-react";
 import { BrandMark } from "@/components/novara/brand-logo";
-import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import {
   GENRES,
@@ -34,42 +33,11 @@ import { Hero } from "./hero";
 import { EASE_OUT_EXPO, Reveal, Stagger, StaggerItem } from "./motion";
 import { Pricing } from "./pricing";
 import { StepRail } from "./step-rail";
+import { Container, ICON_SQUARE, SectionIntro, StartCreatingButton } from "./kit";
+import { TEXT_HEADING, TEXT_LABEL, TEXT_LEAD, TEXT_PROSE, TEXT_VALUE } from "@/components/novara/styles";
 
 export interface HomePageProps {
   onEnterWriter: () => void;
-}
-
-const ICON_SQUARE =
-  "flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary";
-
-/** Fade a section in as it scrolls up. */
-function SectionIntro({
-  eyebrow,
-  title,
-  description,
-  headingId,
-}: {
-  eyebrow?: string;
-  title: string;
-  description?: string;
-  headingId: string;
-}) {
-  return (
-    <div className="mx-auto max-w-2xl text-center">
-      <Reveal>
-        {eyebrow && (
-          <p className="text-sm font-medium uppercase tracking-wide text-primary">{eyebrow}</p>
-        )}
-        <h2
-          id={headingId}
-          className="mt-2 font-display text-3xl font-bold tracking-tight sm:text-4xl"
-        >
-          {title}
-        </h2>
-        {description && <p className="mt-4 text-muted-foreground">{description}</p>}
-      </Reveal>
-    </div>
-  );
 }
 
 export function HomePage({ onEnterWriter }: HomePageProps) {
@@ -84,11 +52,11 @@ export function HomePage({ onEnterWriter }: HomePageProps) {
         aria-labelledby="home-problem-heading"
         className="py-20 sm:py-28"
       >
-        <div className="mx-auto max-w-6xl px-4 sm:px-6">
+        <Container>
           <div className="grid gap-12 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] lg:gap-16">
             <div className="lg:sticky lg:top-28 lg:self-start">
               <Reveal>
-                <p className="text-sm font-medium uppercase tracking-wide text-primary">
+                <p className={cn(TEXT_LABEL, "uppercase tracking-wide text-primary")}>
                   The problem
                 </p>
                 <h2
@@ -112,16 +80,16 @@ export function HomePage({ onEnterWriter }: HomePageProps) {
                     <Card className="group pointer-sheen overflow-hidden transition-[border-color,box-shadow,transform] duration-300 hover:-translate-y-1 hover:border-primary/30 hover:shadow-lg">
                       <CardContent className="flex gap-4">
                         <span className={ICON_SQUARE}>
-                          <Icon className="h-5 w-5" aria-hidden="true" />
+                          <Icon className="size-5" aria-hidden="true" />
                         </span>
                         <div>
                           <div className="flex items-baseline gap-3">
                             <span className="font-mono text-xs tabular-nums text-primary/50">
                               {String(index + 1).padStart(2, "0")}
                             </span>
-                            <h3 className="text-lg font-semibold">{problem.title}</h3>
+                            <h3 className={TEXT_LEAD}>{problem.title}</h3>
                           </div>
-                          <p className="mt-1.5 text-sm leading-relaxed text-muted-foreground">
+                          <p className={cn("mt-1.5", TEXT_PROSE)}>
                             {problem.description}
                           </p>
                         </div>
@@ -132,7 +100,7 @@ export function HomePage({ onEnterWriter }: HomePageProps) {
               })}
             </Stagger>
           </div>
-        </div>
+        </Container>
       </section>
 
       {/* S3 — The solution: pillars, then the delegation diagram. */}
@@ -141,7 +109,7 @@ export function HomePage({ onEnterWriter }: HomePageProps) {
         aria-labelledby="home-solution-heading"
         className="bg-secondary/50 py-20 sm:py-28"
       >
-        <div className="mx-auto max-w-6xl px-4 sm:px-6">
+        <Container>
           <SectionIntro
             eyebrow="The solution"
             title="Meet Novara AI — an AI-powered Novel Creation System"
@@ -172,10 +140,10 @@ export function HomePage({ onEnterWriter }: HomePageProps) {
                     </span>
                     <CardContent className="relative space-y-3">
                       <span className={ICON_SQUARE}>
-                        <Icon className="h-5 w-5" aria-hidden="true" />
+                        <Icon className="size-5" aria-hidden="true" />
                       </span>
-                      <h3 className="font-display text-xl font-bold">{pillar.title}</h3>
-                      <p className="text-sm leading-relaxed text-muted-foreground">
+                      <h3 className={TEXT_HEADING}>{pillar.title}</h3>
+                      <p className={TEXT_PROSE}>
                         {pillar.description}
                       </p>
                     </CardContent>
@@ -188,7 +156,7 @@ export function HomePage({ onEnterWriter }: HomePageProps) {
           <div className="mt-16">
             <AgentPipeline />
           </div>
-        </div>
+        </Container>
       </section>
 
       {/* S4 — The AI team: live consoles instead of static descriptions. */}
@@ -197,7 +165,7 @@ export function HomePage({ onEnterWriter }: HomePageProps) {
         aria-labelledby="home-team-heading"
         className="py-20 sm:py-28"
       >
-        <div className="mx-auto max-w-6xl px-4 sm:px-6">
+        <Container>
           <SectionIntro
             eyebrow="The AI Team"
             title="Five specialists. One shared story bible."
@@ -206,10 +174,10 @@ export function HomePage({ onEnterWriter }: HomePageProps) {
           <AgentTeam />
           <Reveal className="mx-auto mt-10 max-w-2xl text-center text-sm text-muted-foreground">
             All five agents read and write to{" "}
-            <span className="font-medium text-foreground">one shared story bible</span>{" "}
+            <span className={TEXT_VALUE}>one shared story bible</span>{" "}
             — so every hand-off between agents stays consistent.
           </Reveal>
-        </div>
+        </Container>
       </section>
 
       {/* S5 — How it works: a pinned rail that tracks scroll position. */}
@@ -218,13 +186,13 @@ export function HomePage({ onEnterWriter }: HomePageProps) {
         aria-labelledby="home-how-heading"
         className="bg-secondary/50 py-20 sm:py-28"
       >
-        <div className="mx-auto max-w-6xl px-4 sm:px-6">
+        <Container>
           <SectionIntro
             title="From concept to manuscript in eight steps"
             headingId="home-how-heading"
           />
           <StepRail />
-        </div>
+        </Container>
       </section>
 
       {/* S6 — What can you create: a bento grid plus a genre marquee. */}
@@ -233,7 +201,7 @@ export function HomePage({ onEnterWriter }: HomePageProps) {
         aria-labelledby="home-create-heading"
         className="overflow-hidden py-20 sm:py-28"
       >
-        <div className="mx-auto max-w-6xl px-4 sm:px-6">
+        <Container>
           <SectionIntro
             title="What can you create with Novara AI?"
             headingId="home-create-heading"
@@ -260,10 +228,10 @@ export function HomePage({ onEnterWriter }: HomePageProps) {
                   <Card className="group pointer-sheen h-full overflow-hidden transition-[border-color,box-shadow,transform] duration-300 hover:-translate-y-1 hover:border-primary/30 hover:shadow-xl">
                     <CardContent className="flex h-full flex-col space-y-3">
                       <span className={ICON_SQUARE}>
-                        <Icon className="h-5 w-5" aria-hidden="true" />
+                        <Icon className="size-5" aria-hidden="true" />
                       </span>
-                      <h3 className="font-display text-xl font-bold">{format.title}</h3>
-                      <p className="text-sm leading-relaxed text-muted-foreground">
+                      <h3 className={TEXT_HEADING}>{format.title}</h3>
+                      <p className={TEXT_PROSE}>
                         {format.description}
                       </p>
                     </CardContent>
@@ -281,7 +249,7 @@ export function HomePage({ onEnterWriter }: HomePageProps) {
             >
               <div className="flex h-full flex-col justify-center rounded-xl border border-primary/30 bg-primary/5 px-6 py-8">
                 <p className="flex flex-wrap items-center justify-center gap-2 text-center text-sm sm:text-lg">
-                  <Target className="h-4 w-4 shrink-0 text-primary" aria-hidden="true" />
+                  <Target className="size-4 shrink-0 text-primary" aria-hidden="true" />
                   <span>
                     <span className="font-semibold text-primary">Target:</span> one complete
                     ~100,000-word novel — foundation + outline + 40+ chapters + reviews
@@ -313,7 +281,7 @@ export function HomePage({ onEnterWriter }: HomePageProps) {
               </div>
             </div>
           </div>
-        </div>
+        </Container>
       </section>
 
       {/* S7 — Who is Novara for: rows, not cards. */}
@@ -322,7 +290,7 @@ export function HomePage({ onEnterWriter }: HomePageProps) {
         aria-labelledby="home-personas-heading"
         className="bg-secondary/50 py-20 sm:py-28"
       >
-        <div className="mx-auto max-w-6xl px-4 sm:px-6">
+        <Container>
           <SectionIntro
             title="Who is Novara AI for?"
             headingId="home-personas-heading"
@@ -345,16 +313,16 @@ export function HomePage({ onEnterWriter }: HomePageProps) {
                 >
                   <div className="group flex h-full items-start gap-4 rounded-xl border bg-card p-5 transition-[border-color,box-shadow,transform] duration-300 hover:-translate-y-0.5 hover:border-primary/35 hover:shadow-md">
                     <span className={ICON_SQUARE}>
-                      <Icon className="h-5 w-5" aria-hidden="true" />
+                      <Icon className="size-5" aria-hidden="true" />
                     </span>
                     <div className="min-w-0 flex-1">
                       <h3 className="font-semibold">{persona.title}</h3>
-                      <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
+                      <p className={cn("mt-1", TEXT_PROSE)}>
                         {persona.description}
                       </p>
                     </div>
                     <ArrowRight
-                      className="mt-1 h-4 w-4 shrink-0 text-muted-foreground opacity-0 transition-all duration-300 group-hover:translate-x-1 group-hover:opacity-100"
+                      className="mt-1 size-4 shrink-0 text-muted-foreground opacity-0 transition-[transform,opacity] duration-300 group-hover:translate-x-1 group-hover:opacity-100"
                       aria-hidden="true"
                     />
                   </div>
@@ -362,7 +330,7 @@ export function HomePage({ onEnterWriter }: HomePageProps) {
               );
             })}
           </div>
-        </div>
+        </Container>
       </section>
 
       {/* S8 — Monetization. */}
@@ -371,7 +339,7 @@ export function HomePage({ onEnterWriter }: HomePageProps) {
         aria-labelledby="home-monetization-heading"
         className="py-20 sm:py-28"
       >
-        <div className="mx-auto max-w-6xl px-4 sm:px-6">
+        <Container>
           <SectionIntro
             eyebrow="Monetization"
             title="From manuscript to income"
@@ -403,10 +371,10 @@ export function HomePage({ onEnterWriter }: HomePageProps) {
                     </span>
                     <div className="relative">
                       <span className={ICON_SQUARE}>
-                        <Icon className="h-5 w-5" aria-hidden="true" />
+                        <Icon className="size-5" aria-hidden="true" />
                       </span>
                       <h3 className="mt-3 font-semibold">{channel.title}</h3>
-                      <p className="mt-1.5 text-sm leading-relaxed text-muted-foreground">
+                      <p className={cn("mt-1.5", TEXT_PROSE)}>
                         {channel.description}
                       </p>
                     </div>
@@ -419,15 +387,15 @@ export function HomePage({ onEnterWriter }: HomePageProps) {
           <Reveal className="mx-auto mt-10 max-w-3xl">
             <div className="flex gap-3 rounded-lg border bg-muted/40 p-4">
               <Info
-                className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground"
+                className="mt-0.5 size-4 shrink-0 text-muted-foreground"
                 aria-hidden="true"
               />
-              <p className="text-sm leading-relaxed text-muted-foreground">
+              <p className={TEXT_PROSE}>
                 {MONETIZATION_DISCLAIMER}
               </p>
             </div>
           </Reveal>
-        </div>
+        </Container>
       </section>
 
       {/* S9 — Pricing. */}
@@ -442,18 +410,18 @@ export function HomePage({ onEnterWriter }: HomePageProps) {
         <div aria-hidden="true" className="pointer-events-none absolute inset-0">
           <div className="hero-grid absolute inset-0 opacity-60" />
           <motion.div
-            className="absolute -top-32 left-1/2 h-80 w-80 -translate-x-1/2 rounded-full bg-amber-500/20 blur-[120px]"
+            className="absolute -top-32 left-1/2 size-80 -translate-x-1/2 rounded-full bg-amber-500/20 blur-[120px]"
             animate={{ scale: [1, 1.14, 1], opacity: [0.65, 1, 0.65] }}
             transition={{ duration: 9, repeat: Infinity, ease: "easeInOut" }}
           />
-          <div className="absolute -bottom-28 right-[18%] h-64 w-64 rounded-full bg-orange-600/[0.12] blur-[110px]" />
+          <div className="absolute -bottom-28 right-[18%] size-64 rounded-full bg-orange-600/[0.12] blur-[110px]" />
           <div className="grain absolute inset-0" />
         </div>
 
         <div className="relative mx-auto max-w-3xl px-4 text-center sm:px-6">
           <Reveal>
-            <div className="mx-auto mb-8 flex h-14 w-14 items-center justify-center">
-              <BrandMark variant="dark" className="h-14 w-14" />
+            <div className="mx-auto mb-8 flex size-14 items-center justify-center">
+              <BrandMark variant="dark" className="size-14" />
             </div>
             <h2
               id="home-final-cta-heading"
@@ -466,13 +434,7 @@ export function HomePage({ onEnterWriter }: HomePageProps) {
               manuscript — free to start.
             </p>
             <div className="mt-9 flex justify-center">
-              <Button size="lg" className="sheen group" onClick={onEnterWriter}>
-                Start Creating
-                <ArrowRight
-                  className="h-4 w-4 transition-transform duration-300 group-hover:translate-x-1"
-                  aria-hidden="true"
-                />
-              </Button>
+              <StartCreatingButton onClick={onEnterWriter} />
             </div>
           </Reveal>
         </div>

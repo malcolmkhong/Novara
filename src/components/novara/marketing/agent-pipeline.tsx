@@ -154,7 +154,7 @@ export function AgentPipeline() {
                 x={agent.x}
                 y="192"
                 textAnchor="middle"
-                className="fill-muted-foreground font-sans text-[9px] font-semibold uppercase tracking-[0.18em]"
+                className="fill-muted-foreground font-sans text-micro font-semibold uppercase tracking-[0.18em]"
               >
                 Sub-agent
               </text>

@@ -12,8 +12,9 @@
 // instead of importing from each other (which would be a cycle).
 // ---------------------------------------------------------------------------
 
-import { Hand, Loader2 } from "lucide-react";
+import { Hand } from "lucide-react";
 import type { AgentTask, AgentTaskStatus } from "@/lib/novara/agent-types";
+import { Spinner } from "@/components/novara/primitives";
 
 export interface NodeBadge {
   taskKey: string;
@@ -95,16 +96,16 @@ export function BadgeIcons({ badges }: { badges: NodeBadge[] | undefined }) {
     <span className="flex shrink-0 items-center gap-1" aria-live="polite">
       {badges.map((b) =>
         b.status === "in_progress" ? (
-          <Loader2
-            key={b.taskKey}
-            className="h-3.5 w-3.5 animate-spin text-primary"
-            aria-label={`${b.taskKey} working on this asset`}
-            role="img"
-          />
+          <Spinner
+          key={b.taskKey}
+          size="md"
+          className="text-primary"
+          label={`${b.taskKey} working on this asset`}
+        />
         ) : (
           <Hand
             key={b.taskKey}
-            className="h-3.5 w-3.5 text-amber-600"
+            className="size-3.5 text-warning-text"
             aria-label={`${b.taskKey} waiting for approval on this asset`}
             role="img"
           />

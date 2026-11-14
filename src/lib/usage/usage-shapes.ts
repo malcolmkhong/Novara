@@ -181,6 +181,25 @@ export interface LedgerDailySummary {
 /** Ruled disclosure attached to every summary render. */
 export const DAILY_SUMMARY_NOTE = "summary — details retained 90 days";
 
+/** Friendly labels for the app-wide ledger surfaces (P4 / T5). */
+export const SURFACE_LABELS: Record<string, string> = {
+  agent: "Agent team runs",
+  draft: "Chapter drafts",
+  review: "Chapter reviews",
+  sediment: "Memory sediment",
+  studio: "Novel studio (init/plan/write)",
+  detect: "AI detectors",
+  generate: "Concept Q&A",
+  wizard: "Onboarding wizard",
+  "ai-team": "Onboarding team build",
+  other: "Other",
+};
+
+/** The display label for a ledger surface, falling back to the raw key. */
+export function surfaceLabel(surface: string): string {
+  return SURFACE_LABELS[surface] ?? surface;
+}
+
 export interface UsageHistoryBlock {
   /** The itemized-detail window in days (ruled: 31). */
   windowDays: number;

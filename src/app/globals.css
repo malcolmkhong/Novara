@@ -25,6 +25,40 @@
   --color-input: var(--input);
   --color-border: var(--border);
   --color-destructive: var(--destructive);
+  /* Status ramp. One vocabulary for success / warning / danger: a tinted
+     surface, a border, a marker dot and four text weights. The ramp is
+     declared once in :root and re-pointed by .dark, so a status colour is
+     never hard-coded in a component. */
+  --color-success-surface: var(--success-surface);
+  --color-success-surface-strong: var(--success-surface-strong);
+  --color-success-border: var(--success-border);
+  --color-success-border-strong: var(--success-border-strong);
+  --color-success-accent: var(--success-accent);
+  --color-success-dot: var(--success-dot);
+  --color-success-text: var(--success-text);
+  --color-success-text-strong: var(--success-text-strong);
+  --color-success-text-heading: var(--success-text-heading);
+  --color-success-text-deep: var(--success-text-deep);
+  --color-warning-surface: var(--warning-surface);
+  --color-warning-surface-strong: var(--warning-surface-strong);
+  --color-warning-border: var(--warning-border);
+  --color-warning-border-strong: var(--warning-border-strong);
+  --color-warning-accent: var(--warning-accent);
+  --color-warning-dot: var(--warning-dot);
+  --color-warning-text: var(--warning-text);
+  --color-warning-text-strong: var(--warning-text-strong);
+  --color-warning-text-heading: var(--warning-text-heading);
+  --color-warning-text-deep: var(--warning-text-deep);
+  --color-danger-surface: var(--danger-surface);
+  --color-danger-surface-strong: var(--danger-surface-strong);
+  --color-danger-border: var(--danger-border);
+  --color-danger-border-strong: var(--danger-border-strong);
+  --color-danger-accent: var(--danger-accent);
+  --color-danger-dot: var(--danger-dot);
+  --color-danger-text: var(--danger-text);
+  --color-danger-text-strong: var(--danger-text-strong);
+  --color-danger-text-heading: var(--danger-text-heading);
+  --color-danger-text-deep: var(--danger-text-deep);
   --color-accent-foreground: var(--accent-foreground);
   --color-accent: var(--accent);
   --color-muted-foreground: var(--muted-foreground);
@@ -60,6 +94,22 @@
   --animate-caret: caret 1.05s steps(1) infinite;
   --animate-sheen: sheen 2.6s ease-in-out infinite;
   --animate-pan: pan 20s ease-in-out infinite alternate;
+}
+
+/* -----------------------------------------------------------------------
+ * Type scale.
+ *
+ * The dense studio UI needs three steps below `text-xs` (12px) and one
+ * between `text-xs` and `text-sm` (14px). They are named here instead of
+ * being spelled as arbitrary pixel values in ~100 call sites, so the
+ * density scale has one owner. The values are the pixels they replaced:
+ *   micro 9px · tiny 10px · caption 11px · small 13px
+ * -------------------------------------------------------------------- */
+@theme {
+  --text-micro: 0.5625rem;
+  --text-tiny: 0.625rem;
+  --text-caption: 0.6875rem;
+  --text-small: 0.8125rem;
 }
 
 @keyframes marquee {
@@ -126,42 +176,215 @@
   --sidebar-accent: oklch(0.97 0 0);
   --sidebar-accent-foreground: oklch(0.205 0 0);
   --sidebar-border: oklch(0.922 0 0);
+  --sidebar-input: oklch(0.91 0.008 80);
   --sidebar-ring: oklch(0.708 0 0);
+
+  /* -----------------------------------------------------------------------
+   * Status ramp (light scheme).
+   *
+   * success / warning / danger share one ten-step ramp so every status
+   * surface in the app is drawn from the same ladder:
+   *   surface 50 · surface-strong 100 · border 200 · border-strong 300 ·
+   *   accent 400 · dot 500 · text 600 · text-strong 700 ·
+   *   text-heading 800 · text-deep 900
+   * The shades are the Tailwind emerald / amber / rose values, so the
+   * rendering is unchanged; only the ownership moved into the token layer.
+   * -------------------------------------------------------------------- */
+  --success-surface: oklch(0.979 0.021 166.113);
+  --success-surface-strong: oklch(0.95 0.052 163.051);
+  --success-border: oklch(0.905 0.093 164.15);
+  --success-border-strong: oklch(0.845 0.143 164.978);
+  --success-accent: oklch(0.765 0.177 163.223);
+  --success-dot: oklch(0.696 0.17 162.48);
+  --success-text: oklch(0.596 0.145 163.225);
+  --success-text-strong: oklch(0.508 0.118 165.612);
+  --success-text-heading: oklch(0.432 0.095 166.913);
+  --success-text-deep: oklch(0.378 0.077 168.94);
+
+  --warning-surface: oklch(0.987 0.022 95.277);
+  --warning-surface-strong: oklch(0.962 0.059 95.617);
+  --warning-border: oklch(0.924 0.12 95.746);
+  --warning-border-strong: oklch(0.879 0.169 91.605);
+  --warning-accent: oklch(0.828 0.189 84.429);
+  --warning-dot: oklch(0.769 0.188 70.08);
+  --warning-text: oklch(0.666 0.179 58.318);
+  --warning-text-strong: oklch(0.555 0.163 48.998);
+  --warning-text-heading: oklch(0.473 0.137 46.201);
+  --warning-text-deep: oklch(0.414 0.112 45.904);
+
+  --danger-surface: oklch(0.969 0.015 12.422);
+  --danger-surface-strong: oklch(0.941 0.03 12.58);
+  --danger-border: oklch(0.892 0.058 10.001);
+  --danger-border-strong: oklch(0.81 0.117 11.638);
+  --danger-accent: oklch(0.712 0.194 13.428);
+  --danger-dot: oklch(0.645 0.246 16.439);
+  --danger-text: oklch(0.586 0.253 17.585);
+  --danger-text-strong: oklch(0.514 0.222 16.935);
+  --danger-text-heading: oklch(0.455 0.188 13.697);
+  --danger-text-deep: oklch(0.41 0.159 10.272);
+
+  /* -----------------------------------------------------------------------
+   * Dark scheme.
+   *
+   * Every colour literal in this file lives in this token block. The `.dark`
+   * rule below only remaps the semantic names onto these, so a colour can
+   * never be changed in one place and forgotten in the other.
+   * -------------------------------------------------------------------- */
+  --dark-background: oklch(0.145 0 0);
+  --dark-foreground: oklch(0.985 0 0);
+  --dark-card: oklch(0.205 0 0);
+  --dark-card-foreground: oklch(0.985 0 0);
+  --dark-popover: oklch(0.205 0 0);
+  --dark-popover-foreground: oklch(0.985 0 0);
+  --dark-primary: oklch(0.922 0 0);
+  --dark-primary-foreground: oklch(0.205 0 0);
+  --dark-secondary: oklch(0.269 0 0);
+  --dark-secondary-foreground: oklch(0.985 0 0);
+  --dark-muted: oklch(0.269 0 0);
+  --dark-muted-foreground: oklch(0.708 0 0);
+  --dark-accent: oklch(0.269 0 0);
+  --dark-accent-foreground: oklch(0.985 0 0);
+  --dark-destructive: oklch(0.704 0.191 22.216);
+  --dark-border: oklch(1 0 0 / 10%);
+  --dark-input: oklch(1 0 0 / 15%);
+  --dark-ring: oklch(0.556 0 0);
+  --dark-chart-1: oklch(0.488 0.243 264.376);
+  --dark-chart-2: oklch(0.696 0.17 162.48);
+  --dark-chart-3: oklch(0.769 0.188 70.08);
+  --dark-chart-4: oklch(0.627 0.265 303.9);
+  --dark-chart-5: oklch(0.645 0.246 16.439);
+  --dark-sidebar: oklch(0.205 0 0);
+  --dark-sidebar-foreground: oklch(0.985 0 0);
+  --dark-sidebar-primary: oklch(0.488 0.243 264.376);
+  --dark-sidebar-primary-foreground: oklch(0.985 0 0);
+  --dark-sidebar-accent: oklch(0.269 0 0);
+  --dark-sidebar-accent-foreground: oklch(0.985 0 0);
+  --dark-sidebar-border: oklch(1 0 0 / 10%);
+  --dark-sidebar-input: oklch(1 0 0 / 15%);
+  --dark-sidebar-ring: oklch(0.556 0 0);
+
+  /* The status ramp in the dark scheme: the same ten steps, read from the
+     other end of each ladder so a tinted surface stays a tinted surface on
+     a dark ground. */
+  --dark-success-surface: oklch(0.262 0.051 172.552);
+  --dark-success-surface-strong: oklch(0.378 0.077 168.94);
+  --dark-success-border: oklch(0.432 0.095 166.913);
+  --dark-success-border-strong: oklch(0.508 0.118 165.612);
+  --dark-success-accent: oklch(0.765 0.177 163.223);
+  --dark-success-dot: oklch(0.696 0.17 162.48);
+  --dark-success-text: oklch(0.765 0.177 163.223);
+  --dark-success-text-strong: oklch(0.845 0.143 164.978);
+  --dark-success-text-heading: oklch(0.905 0.093 164.15);
+  --dark-success-text-deep: oklch(0.95 0.052 163.051);
+
+  --dark-warning-surface: oklch(0.279 0.077 45.635);
+  --dark-warning-surface-strong: oklch(0.414 0.112 45.904);
+  --dark-warning-border: oklch(0.473 0.137 46.201);
+  --dark-warning-border-strong: oklch(0.555 0.163 48.998);
+  --dark-warning-accent: oklch(0.828 0.189 84.429);
+  --dark-warning-dot: oklch(0.769 0.188 70.08);
+  --dark-warning-text: oklch(0.828 0.189 84.429);
+  --dark-warning-text-strong: oklch(0.879 0.169 91.605);
+  --dark-warning-text-heading: oklch(0.924 0.12 95.746);
+  --dark-warning-text-deep: oklch(0.962 0.059 95.617);
+
+  --dark-danger-surface: oklch(0.271 0.105 12.094);
+  --dark-danger-surface-strong: oklch(0.41 0.159 10.272);
+  --dark-danger-border: oklch(0.455 0.188 13.697);
+  --dark-danger-border-strong: oklch(0.514 0.222 16.935);
+  --dark-danger-accent: oklch(0.712 0.194 13.428);
+  --dark-danger-dot: oklch(0.645 0.246 16.439);
+  --dark-danger-text: oklch(0.712 0.194 13.428);
+  --dark-danger-text-strong: oklch(0.81 0.117 11.638);
+  --dark-danger-text-heading: oklch(0.892 0.058 10.001);
+  --dark-danger-text-deep: oklch(0.941 0.03 12.58);
+
+  /* -----------------------------------------------------------------------
+   * Decorative accents.
+   *
+   * Shared by both schemes: these paint flourishes (selection, scrollbars,
+   * gradients, the hero backdrop) rather than semantic surfaces, so they do
+   * not flip with the theme.
+   * -------------------------------------------------------------------- */
+  --warm-tint: oklch(0.87 0.07 88);
+  --warm-tint-foreground: oklch(0.25 0.05 50);
+  --scrollbar-thumb: oklch(0.82 0.01 80);
+  --scrollbar-thumb-hover: oklch(0.68 0.02 70);
+  --grid-line: oklch(1 0 0 / 0.045);
+  --ember-start: oklch(0.93 0.14 82);
+  --ember-mid: oklch(0.78 0.16 55);
+  --ember-end: oklch(0.7 0.14 38);
+  --sheen-highlight: oklch(1 0 0 / 0.28);
+  --sheen-glow: oklch(0.53 0.125 48 / 0.09);
+  --hero-glow-1: oklch(0.24 0.02 62);
+  --hero-glow-2: oklch(0.17 0.012 60);
+  --hero-glow-3: oklch(0.12 0.008 60);
+  --hero-shadow: rgba(0, 0, 0, 0.9);
 }
 
 .dark {
-  --background: oklch(0.145 0 0);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.205 0 0);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.205 0 0);
-  --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.922 0 0);
-  --primary-foreground: oklch(0.205 0 0);
-  --secondary: oklch(0.269 0 0);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.269 0 0);
-  --muted-foreground: oklch(0.708 0 0);
-  --accent: oklch(0.269 0 0);
-  --accent-foreground: oklch(0.985 0 0);
-  --destructive: oklch(0.704 0.191 22.216);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.556 0 0);
-  --chart-1: oklch(0.488 0.243 264.376);
-  --chart-2: oklch(0.696 0.17 162.48);
-  --chart-3: oklch(0.769 0.188 70.08);
-  --chart-4: oklch(0.627 0.265 303.9);
-  --chart-5: oklch(0.645 0.246 16.439);
-  --sidebar: oklch(0.205 0 0);
-  --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: oklch(0.488 0.243 264.376);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.269 0 0);
-  --sidebar-accent-foreground: oklch(0.985 0 0);
-  --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-input: oklch(1 0 0 / 15%);
-  --sidebar-ring: oklch(0.556 0 0);
+  --background: var(--dark-background);
+  --foreground: var(--dark-foreground);
+  --card: var(--dark-card);
+  --card-foreground: var(--dark-card-foreground);
+  --popover: var(--dark-popover);
+  --popover-foreground: var(--dark-popover-foreground);
+  --primary: var(--dark-primary);
+  --primary-foreground: var(--dark-primary-foreground);
+  --secondary: var(--dark-secondary);
+  --secondary-foreground: var(--dark-secondary-foreground);
+  --muted: var(--dark-muted);
+  --muted-foreground: var(--dark-muted-foreground);
+  --accent: var(--dark-accent);
+  --accent-foreground: var(--dark-accent-foreground);
+  --destructive: var(--dark-destructive);
+  --border: var(--dark-border);
+  --input: var(--dark-input);
+  --ring: var(--dark-ring);
+  --chart-1: var(--dark-chart-1);
+  --chart-2: var(--dark-chart-2);
+  --chart-3: var(--dark-chart-3);
+  --chart-4: var(--dark-chart-4);
+  --chart-5: var(--dark-chart-5);
+  --sidebar: var(--dark-sidebar);
+  --sidebar-foreground: var(--dark-sidebar-foreground);
+  --sidebar-primary: var(--dark-sidebar-primary);
+  --sidebar-primary-foreground: var(--dark-sidebar-primary-foreground);
+  --sidebar-accent: var(--dark-sidebar-accent);
+  --sidebar-accent-foreground: var(--dark-sidebar-accent-foreground);
+  --sidebar-border: var(--dark-sidebar-border);
+  --sidebar-input: var(--dark-sidebar-input);
+  --sidebar-ring: var(--dark-sidebar-ring);
+  --success-surface: var(--dark-success-surface);
+  --success-surface-strong: var(--dark-success-surface-strong);
+  --success-border: var(--dark-success-border);
+  --success-border-strong: var(--dark-success-border-strong);
+  --success-accent: var(--dark-success-accent);
+  --success-dot: var(--dark-success-dot);
+  --success-text: var(--dark-success-text);
+  --success-text-strong: var(--dark-success-text-strong);
+  --success-text-heading: var(--dark-success-text-heading);
+  --success-text-deep: var(--dark-success-text-deep);
+  --warning-surface: var(--dark-warning-surface);
+  --warning-surface-strong: var(--dark-warning-surface-strong);
+  --warning-border: var(--dark-warning-border);
+  --warning-border-strong: var(--dark-warning-border-strong);
+  --warning-accent: var(--dark-warning-accent);
+  --warning-dot: var(--dark-warning-dot);
+  --warning-text: var(--dark-warning-text);
+  --warning-text-strong: var(--dark-warning-text-strong);
+  --warning-text-heading: var(--dark-warning-text-heading);
+  --warning-text-deep: var(--dark-warning-text-deep);
+  --danger-surface: var(--dark-danger-surface);
+  --danger-surface-strong: var(--dark-danger-surface-strong);
+  --danger-border: var(--dark-danger-border);
+  --danger-border-strong: var(--dark-danger-border-strong);
+  --danger-accent: var(--dark-danger-accent);
+  --danger-dot: var(--dark-danger-dot);
+  --danger-text: var(--dark-danger-text);
+  --danger-text-strong: var(--dark-danger-text-strong);
+  --danger-text-heading: var(--dark-danger-text-heading);
+  --danger-text-deep: var(--dark-danger-text-deep);
 }
 
 @layer base {
@@ -172,8 +395,8 @@
     @apply bg-background text-foreground;
   }
   ::selection {
-    background: oklch(0.87 0.07 88);
-    color: oklch(0.25 0.05 50);
+    background: var(--warm-tint);
+    color: var(--warm-tint-foreground);
   }
   /* Display headings get optical sizing so the hero line does not look thin. */
   h1, h2, h3 {
@@ -209,7 +432,7 @@
 /* Slim, unobtrusive scrollbars for long lists and editors */
 .nice-scroll {
   scrollbar-width: thin;
-  scrollbar-color: oklch(0.82 0.01 80) transparent;
+  scrollbar-color: var(--scrollbar-thumb) transparent;
 }
 .nice-scroll::-webkit-scrollbar {
   width: 8px;
@@ -219,11 +442,11 @@
   background: transparent;
 }
 .nice-scroll::-webkit-scrollbar-thumb {
-  background: oklch(0.82 0.01 80);
+  background: var(--scrollbar-thumb);
   border-radius: 8px;
 }
 .nice-scroll::-webkit-scrollbar-thumb:hover {
-  background: oklch(0.68 0.02 70);
+  background: var(--scrollbar-thumb-hover);
 }
 
 /* ---------------------------------------------------------------------------
@@ -246,8 +469,8 @@
 /* Faint technical grid for dark hero surfaces. */
 .hero-grid {
   background-image:
-    linear-gradient(to right, oklch(1 0 0 / 0.045) 1px, transparent 1px),
-    linear-gradient(to bottom, oklch(1 0 0 / 0.045) 1px, transparent 1px);
+    linear-gradient(to right, var(--grid-line) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--grid-line) 1px, transparent 1px);
   background-size: 64px 64px;
   -webkit-mask-image: radial-gradient(ellipse 85% 65% at 50% 40%, black 20%, transparent 78%);
   mask-image: radial-gradient(ellipse 85% 65% at 50% 40%, black 20%, transparent 78%);
@@ -261,7 +484,7 @@
 
 /* Gradient text used for the hero headline accent and the final CTA. */
 .text-ember {
-  background: linear-gradient(104deg, oklch(0.93 0.14 82) 0%, oklch(0.78 0.16 55) 42%, oklch(0.7 0.14 38) 100%);
+  background: linear-gradient(104deg, var(--ember-start) 0%, var(--ember-mid) 42%, var(--ember-end) 100%);
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
@@ -283,7 +506,7 @@
   background: linear-gradient(
     90deg,
     transparent,
-    oklch(1 0 0 / 0.28),
+    var(--sheen-highlight),
     transparent
   );
   pointer-events: none;
@@ -307,7 +530,7 @@
   transition: opacity 300ms ease;
   background: radial-gradient(
     320px circle at var(--mx, 50%) var(--my, 50%),
-    oklch(0.53 0.125 48 / 0.09),
+    var(--sheen-glow),
     transparent 70%
   );
   pointer-events: none;
@@ -389,7 +612,7 @@
 }
 .novara-prose blockquote {
   margin: 1em 0;
-  border-left: 3px solid oklch(0.87 0.07 88);
+  border-left: 3px solid var(--warm-tint);
   padding: 0.15em 0 0.15em 1em;
   font-style: italic;
   color: var(--muted-foreground);

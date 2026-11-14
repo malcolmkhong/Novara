@@ -10,6 +10,9 @@ import {
 } from "@/components/ui/card";
 import { BRAND, ROADMAP } from "@/config/novara";
 import { cn } from "@/lib/utils";
+import { TEXT_PROSE } from "@/components/novara/styles";
+
+
 
 const PRINCIPLES = [
   {
@@ -30,8 +33,8 @@ const PRINCIPLES = [
 ];
 
 const STATUS_STYLES: Record<string, string> = {
-  live: "bg-emerald-100 text-emerald-800 border-emerald-200",
-  "in-progress": "bg-amber-100 text-amber-800 border-amber-200",
+  live: "bg-success-surface-strong text-success-text-heading border-success-border",
+  "in-progress": "bg-warning-surface-strong text-warning-text-heading border-warning-border",
   planned: "bg-muted text-muted-foreground",
 };
 
@@ -69,7 +72,7 @@ export function AboutPage({ onEnterWriter }: AboutPageProps) {
               <CardTitle className="font-display text-lg">{p.title}</CardTitle>
             </CardHeader>
             <CardContent>
-              <p className="text-sm leading-relaxed text-muted-foreground">
+              <p className={TEXT_PROSE}>
                 {p.description}
               </p>
             </CardContent>
@@ -97,14 +100,14 @@ export function AboutPage({ onEnterWriter }: AboutPageProps) {
                 </span>
                 <Badge
                   variant="outline"
-                  className={cn("text-[11px]", STATUS_STYLES[phase.status])}
+                  className={cn("text-caption", STATUS_STYLES[phase.status])}
                 >
                   {STATUS_LABELS[phase.status]}
                 </Badge>
               </div>
               <div>
                 <h3 className="font-semibold">{phase.title}</h3>
-                <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
+                <p className={cn("mt-1", TEXT_PROSE)}>
                   {phase.description}
                 </p>
               </div>

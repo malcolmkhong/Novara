@@ -17,6 +17,9 @@ import { NovelDashboard } from "./novel-dashboard";
 import { WorkbenchShell } from "./workbench-shell";
 import { UserMenu } from "@/components/novara/user-menu";
 import { applyFontScale, readFontScale } from "@/lib/novara/settings";
+import { SpinnerRing } from "@/components/novara/primitives";
+import { cn } from "@/lib/utils";
+import { TEXT_META } from "@/components/novara/styles";
 
 export function WriterApp({ onExit }: { onExit: () => void }) {
   const { toast } = useToast();
@@ -145,12 +148,12 @@ export function WriterApp({ onExit }: { onExit: () => void }) {
       <header className="sticky top-0 z-40 border-b bg-background/85 backdrop-blur">
         <div className="mx-auto flex h-14 max-w-6xl items-center gap-3 px-4 sm:px-6">
           <Button variant="ghost" size="sm" onClick={detail ? closeNovel : onExit}>
-            <ArrowLeft className="h-4 w-4" aria-hidden="true" />
+            <ArrowLeft className="size-4" aria-hidden="true" />
             {detail ? "All novels" : "Website"}
           </Button>
           <div className="flex items-center gap-2">
-            <span className="flex h-7 w-7 items-center justify-center rounded-md bg-primary text-primary-foreground">
-              <PenLine className="h-3.5 w-3.5" aria-hidden="true" />
+            <span className="flex size-7 items-center justify-center rounded-md bg-primary text-primary-foreground">
+              <PenLine className="size-3.5" aria-hidden="true" />
             </span>
             <span className="font-display font-bold">AI Writer</span>
           </div>
@@ -166,10 +169,7 @@ export function WriterApp({ onExit }: { onExit: () => void }) {
       >
         {opening ? (
           <div className="flex h-64 items-center justify-center gap-2 text-sm text-muted-foreground">
-            <span
-              className="h-5 w-5 animate-spin rounded-full border-2 border-primary border-t-transparent"
-              aria-hidden="true"
-            />
+            <SpinnerRing size="sm" />
             Opening novel…
           </div>
         ) : detail ? (
@@ -198,7 +198,7 @@ export function WriterApp({ onExit }: { onExit: () => void }) {
             {/* Step 62 — the dashboard has no rail, so the user menu lives at
                 the bottom-left of the footer strip. */}
             <UserMenu />
-            <p className="min-w-0 flex-1 text-center text-xs text-muted-foreground">
+            <p className={cn("min-w-0 flex-1 text-center", TEXT_META)}>
               Novara AI Writer — preview build · Full authentication and payments
               arrive later · Export backups regularly
             </p>

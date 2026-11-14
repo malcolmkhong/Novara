@@ -14,12 +14,14 @@
 
 import { motion, useReducedMotion } from "framer-motion";
 import { useEffect, useState } from "react";
-import { Check, Loader2 } from "lucide-react";
+import { Check } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { AI_TEAM } from "@/config/novara";
 import { cn } from "@/lib/utils";
 import { EASE_OUT_EXPO } from "./motion";
+import { Spinner } from "@/components/novara/primitives";
+import { TEXT_PROSE, TEXT_LABEL, TEXT_HEADING } from "@/components/novara/styles";
 
 const ATLAS_TASKS = [
   "Decompose premise into acts",
@@ -48,15 +50,15 @@ function AtlasConsole({ step }: { step: number }) {
         const done = index < step;
         const running = index === step;
         return (
-          <li key={task} className="flex items-center gap-2 font-mono text-[11px]">
+          <li key={task} className="flex items-center gap-2 font-mono text-caption">
             {done ? (
-              <Check className="h-3 w-3 shrink-0 text-emerald-500" aria-hidden="true" />
+              <Check className="size-3 shrink-0 text-emerald-500" aria-hidden="true" />
             ) : running ? (
-              <Loader2 className="h-3 w-3 shrink-0 animate-spin text-primary" aria-hidden="true" />
+              <Spinner size="sm" className="shrink-0 text-primary" />
             ) : (
               <span
                 aria-hidden="true"
-                className="h-3 w-3 shrink-0 rounded-full border border-border"
+                className="size-3 shrink-0 rounded-full border border-border"
               />
             )}
             <span className={cn(done ? "text-muted-foreground line-through" : "text-foreground")}>
@@ -90,7 +92,7 @@ function SageConsole() {
   const shown = reduce ? SAGE_PROSE : typed;
 
   return (
-    <p className="font-mono text-[11px] leading-relaxed text-muted-foreground">
+    <p className="font-mono text-caption leading-relaxed text-muted-foreground">
       {shown}
       <span
         aria-hidden="true"
@@ -103,11 +105,12 @@ function SageConsole() {
 function NovaConsole({ step }: { step: number }) {
   const found = step % 2 === 1;
   return (
-    <div className="space-y-1.5 font-mono text-[11px]">
+    <div className="space-y-1.5 font-mono text-caption">
       <div className="flex items-center gap-2 text-muted-foreground">
-        <Loader2
-          className={cn("h-3 w-3 shrink-0 text-primary", found ? "animate-spin" : "opacity-40")}
-          aria-hidden="true"
+        <Spinner
+          size="sm"
+          spin={found}
+          className={cn("shrink-0 text-primary", !found && "opacity-40")}
         />
         <span>searching story bible</span>
       </div>
@@ -127,12 +130,12 @@ function NovaConsole({ step }: { step: number }) {
 function PrismConsole({ step }: { step: number }) {
   const flagged = step % 2 === 1;
   return (
-    <div className="space-y-1.5 font-mono text-[11px]">
+    <div className="space-y-1.5 font-mono text-caption">
       <div className="flex items-center gap-2 text-muted-foreground">
         <span
           aria-hidden="true"
           className={cn(
-            "h-1.5 w-1.5 rounded-full",
+            "size-1.5 rounded-full",
             flagged ? "bg-amber-500" : "bg-muted-foreground/40",
           )}
         />
@@ -152,20 +155,20 @@ function PrismConsole({ step }: { step: number }) {
 
 function ForgeConsole({ step }: { step: number }) {
   return (
-    <ul className="space-y-1.5 font-mono text-[11px]">
+    <ul className="space-y-1.5 font-mono text-caption">
       {FORGE_EXPORTS.map((file, index) => {
         const done = index < step;
         const running = index === step;
         return (
           <li key={file} className="flex items-center gap-2">
             {done ? (
-              <Check className="h-3 w-3 shrink-0 text-emerald-500" aria-hidden="true" />
+              <Check className="size-3 shrink-0 text-emerald-500" aria-hidden="true" />
             ) : running ? (
-              <Loader2 className="h-3 w-3 shrink-0 animate-spin text-primary" aria-hidden="true" />
+              <Spinner size="sm" className="shrink-0 text-primary" />
             ) : (
               <span
                 aria-hidden="true"
-                className="h-3 w-3 shrink-0 rounded-full border border-border"
+                className="size-3 shrink-0 rounded-full border border-border"
               />
             )}
             <span className={cn(done ? "text-muted-foreground" : "text-foreground")}>{file}</span>
@@ -198,10 +201,10 @@ function ActivityConsole({ agent }: { agent: string }) {
 
   return (
     <div className="mt-auto rounded-lg border bg-muted/40 p-3">
-      <div className="mb-2 flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
-        <span aria-hidden="true" className="relative flex h-1.5 w-1.5">
+      <div className="mb-2 flex items-center gap-2 text-tiny font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+        <span aria-hidden="true" className="relative flex size-1.5">
           <span className="absolute inline-flex h-full w-full animate-pulse-ring rounded-full bg-primary" />
-          <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-primary" />
+          <span className="relative inline-flex size-1.5 rounded-full bg-primary" />
         </span>
         {CONSOLE_HEADERS[agent] ?? "Working"}
       </div>
@@ -249,21 +252,21 @@ export function AgentTeam() {
               >
                 <div className={cn("flex flex-col gap-3", wide && "lg:flex-1")}>
                   <div className="flex items-start justify-between gap-3">
-                    <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary transition-transform duration-300 group-hover:-rotate-6 group-hover:scale-105">
-                      <Icon className="h-5 w-5" aria-hidden="true" />
+                    <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary transition-transform duration-300 group-hover:-rotate-6 group-hover:scale-105">
+                      <Icon className="size-5" aria-hidden="true" />
                     </span>
                     <Badge
                       variant="outline"
-                      className="text-[10px] uppercase tracking-wide text-muted-foreground"
+                      className="text-tiny uppercase tracking-wide text-muted-foreground"
                     >
                       {agent.role}
                     </Badge>
                   </div>
-                  <h3 className="font-display text-xl font-bold">{agent.name}</h3>
-                  <p className="text-sm leading-relaxed text-muted-foreground">
+                  <h3 className={TEXT_HEADING}>{agent.name}</h3>
+                  <p className={TEXT_PROSE}>
                     {agent.description}
                   </p>
-                  <p className="text-sm font-medium text-primary">
+                  <p className={cn(TEXT_LABEL, "text-primary")}>
                     Delivers: {agent.delivers}
                   </p>
                 </div>

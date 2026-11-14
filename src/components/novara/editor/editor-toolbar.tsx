@@ -12,6 +12,7 @@ import {
 import { applyMagic, type MagicAction } from "@/lib/novara/editor-magic";
 import { markdownToEditorContent } from "@/lib/novara/editor-schema";
 import { cn } from "@/lib/utils";
+import { TEXT_MICRO } from "@/components/novara/styles";
 
 export interface EditorActiveState {
   bold: boolean;
@@ -91,7 +92,7 @@ export function EditorToolbar({
       size="icon"
       variant="ghost"
       className={cn(
-        "h-6 w-6 rounded-sm p-0 text-[11px]",
+        "h-6 w-6 rounded-sm p-0 text-caption",
         active[key] && "bg-muted text-foreground"
       )}
       aria-label={label}
@@ -100,13 +101,13 @@ export function EditorToolbar({
       disabled={disabled}
       onClick={run}
     >
-      <Icon className="h-3 w-3" aria-hidden="true" />
+      <Icon className="size-3" aria-hidden="true" />
     </Button>
   );
 
   return (
     <div
-      className="flex h-8 shrink-0 items-center gap-1 border-b bg-muted/20 px-3 text-[11px]"
+      className="flex h-8 shrink-0 items-center gap-1 border-b bg-muted/20 px-3 text-caption"
       role="toolbar"
       aria-label="Chapter formatting"
     >
@@ -126,16 +127,16 @@ export function EditorToolbar({
             type="button"
             size="sm"
             variant="ghost"
-            className="h-6 gap-1 rounded-sm px-2 text-[11px]"
+            className="h-6 gap-1 rounded-sm px-2 text-caption"
             disabled={disabled}
             aria-label="Magic transforms"
           >
-            <WandSparkles className="h-3 w-3" aria-hidden="true" />
+            <WandSparkles className="size-3" aria-hidden="true" />
             Magic
           </Button>
         </PopoverTrigger>
         <PopoverContent align="start" side="bottom" className="w-64 p-1.5">
-          <p className="px-2 py-1 text-[11px] font-medium text-muted-foreground">
+          <p className="px-2 py-1 text-caption font-medium text-muted-foreground">
             Selection only · one undo step
           </p>
           {MAGIC_ITEMS.map((item) => (
@@ -144,16 +145,16 @@ export function EditorToolbar({
               type="button"
               disabled={!hasSelection}
               onClick={() => runMagic(item.action)}
-              className="flex w-full flex-col items-start gap-0.5 rounded-sm px-2 py-1.5 text-left text-[11px] transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
+              className="flex w-full flex-col items-start gap-0.5 rounded-sm px-2 py-1.5 text-left text-caption transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
             >
               <span className="font-medium">{item.label}</span>
-              <span className="text-[10px] text-muted-foreground">{item.hint}</span>
+              <span className={TEXT_MICRO}>{item.hint}</span>
             </button>
           ))}
         </PopoverContent>
       </Popover>
       {!hasSelection && (
-        <span className="text-[10px] text-muted-foreground">
+        <span className={TEXT_MICRO}>
           Select text to use Magic
         </span>
       )}

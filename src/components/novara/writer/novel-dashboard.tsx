@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { BookOpen, Loader2, Plus, Sparkles, Trash2, Upload } from "lucide-react";
+import { BookOpen, Plus, Sparkles, Trash2, Upload } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -29,6 +29,9 @@ import { formatWordCount } from "@/lib/novara/words";
 import { ImportDialog } from "./import-export";
 import { CreateWizard } from "./create-wizard";
 import { ConfirmDialog, ListSkeleton } from "./ui-bits";
+import { Spinner } from "@/components/novara/primitives";
+import { cn } from "@/lib/utils";
+import { TEXT_META, TEXT_CAPTION } from "@/components/novara/styles";
 
 interface NovelDashboardProps {
   novels: NovelSummary[];
@@ -97,15 +100,15 @@ export function NovelDashboard({
         </div>
         <div className="flex gap-2">
           <Button variant="outline" onClick={() => setImportOpen(true)}>
-            <Upload className="h-4 w-4" aria-hidden="true" />
+            <Upload className="size-4" aria-hidden="true" />
             Import backup
           </Button>
           <Button variant="outline" onClick={() => setWizardOpen(true)}>
-            <Sparkles className="h-4 w-4" aria-hidden="true" />
+            <Sparkles className="size-4" aria-hidden="true" />
             New with AI team
           </Button>
           <Button onClick={() => setCreateOpen(true)}>
-            <Plus className="h-4 w-4" aria-hidden="true" />
+            <Plus className="size-4" aria-hidden="true" />
             New novel
           </Button>
         </div>
@@ -115,8 +118,8 @@ export function NovelDashboard({
         <ListSkeleton rows={3} />
       ) : novels.length === 0 ? (
         <div className="flex flex-col items-center gap-4 rounded-xl border border-dashed p-12 text-center">
-          <div className="flex h-14 w-14 items-center justify-center rounded-full bg-amber-100 text-primary">
-            <BookOpen className="h-6 w-6" aria-hidden="true" />
+          <div className="flex size-14 items-center justify-center rounded-full bg-amber-100 text-primary">
+            <BookOpen className="size-6" aria-hidden="true" />
           </div>
           <div>
             <h2 className="font-display text-lg font-semibold">
@@ -129,11 +132,11 @@ export function NovelDashboard({
           </div>
           <div className="flex gap-2">
             <Button onClick={() => setCreateOpen(true)}>
-              <Plus className="h-4 w-4" aria-hidden="true" />
+              <Plus className="size-4" aria-hidden="true" />
               New novel
             </Button>
             <Button variant="outline" onClick={() => setImportOpen(true)}>
-              <Upload className="h-4 w-4" aria-hidden="true" />
+              <Upload className="size-4" aria-hidden="true" />
               Import backup
             </Button>
           </div>
@@ -147,7 +150,7 @@ export function NovelDashboard({
             return (
               <Card
                 key={novel.id}
-                className="group cursor-pointer transition-all hover:-translate-y-0.5 hover:shadow-md"
+                className="group cursor-pointer transition-[transform,box-shadow] hover:-translate-y-0.5 hover:shadow-md"
                 onClick={() => onOpen(novel.id)}
               >
                 <CardHeader className="pb-3">
@@ -171,16 +174,16 @@ export function NovelDashboard({
                       }}
                       className="rounded p-1 text-muted-foreground opacity-0 transition-opacity hover:text-destructive focus-visible:opacity-100 group-hover:opacity-100"
                     >
-                      <Trash2 className="h-4 w-4" aria-hidden="true" />
+                      <Trash2 className="size-4" aria-hidden="true" />
                     </span>
                   </div>
                   <div className="flex flex-wrap items-center gap-1.5">
                     {novel.genre && (
-                      <Badge variant="outline" className="text-[11px]">
+                      <Badge variant="outline" className="text-caption">
                         {novel.genre}
                       </Badge>
                     )}
-                    <Badge variant="outline" className="text-[11px] text-muted-foreground">
+                    <Badge variant="outline" className={TEXT_CAPTION}>
                       {novel.status}
                     </Badge>
                   </div>
@@ -191,7 +194,7 @@ export function NovelDashboard({
                   )}
                 </CardHeader>
                 <CardContent className="pb-3">
-                  <div className="flex items-center justify-between text-xs text-muted-foreground">
+                  <div className={cn("flex items-center justify-between", TEXT_META)}>
                     <span>
                       {novel.chapterCount} chapter
                       {novel.chapterCount === 1 ? "" : "s"}
@@ -199,11 +202,11 @@ export function NovelDashboard({
                     <span>{formatWordCount(novel.totalWords)} words</span>
                   </div>
                   <Progress value={pct} className="mt-2 h-1.5" aria-label={`${pct}% of target length`} />
-                  <p className="mt-1 text-[11px] text-muted-foreground">
+                  <p className={cn("mt-1", TEXT_CAPTION)}>
                     {pct}% of {formatWordCount(novel.targetWords)}-word target
                   </p>
                 </CardContent>
-                <CardFooter className="text-xs text-muted-foreground">
+                <CardFooter className={TEXT_META}>
                   Updated{" "}
                   {new Date(novel.updatedAt).toLocaleDateString("en-US", {
                     month: "short",
@@ -272,7 +275,7 @@ export function NovelDashboard({
           </div>
           <DialogFooter>
             <Button onClick={submitCreate} disabled={busy || !title.trim()}>
-              {busy && <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />}
+              {busy && <Spinner size="lg" />}
               Create novel
             </Button>
           </DialogFooter>

@@ -10,7 +10,7 @@
 
 import { AnimatePresence, motion } from "framer-motion";
 import { useState } from "react";
-import { Check, Sparkles } from "lucide-react";
+import { Sparkles } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -23,6 +23,8 @@ import {
 } from "@/config/subscription-plans";
 import { cn } from "@/lib/utils";
 import { EASE_OUT_EXPO } from "./motion";
+import { Container, FeatureList, SectionIntro } from "./kit";
+import { TEXT_META, TEXT_HEADING, TEXT_LABEL } from "@/components/novara/styles";
 
 function CycleToggle({
   cycle,
@@ -51,7 +53,9 @@ function CycleToggle({
             aria-pressed={active}
             onClick={() => onChange(option.id)}
             className={cn(
-              "relative z-10 rounded-full px-4 py-1.5 text-sm font-medium transition-colors duration-200",
+              "relative z-10 rounded-full px-4 py-1.5",
+              TEXT_LABEL,
+              "transition-colors duration-200",
               active ? "text-primary-foreground" : "text-muted-foreground hover:text-foreground",
             )}
           >
@@ -79,19 +83,15 @@ export function Pricing({ onEnterWriter }: { onEnterWriter: () => void }) {
       aria-labelledby="home-plans-heading"
       className="bg-secondary/50 py-20 sm:py-28"
     >
-      <div className="mx-auto max-w-6xl px-4 sm:px-6">
-        <div className="mx-auto max-w-2xl text-center">
-          <p className="text-sm font-medium uppercase tracking-wide text-primary">Pricing</p>
-          <h2
-            id="home-plans-heading"
-            className="mt-2 font-display text-3xl font-bold tracking-tight sm:text-4xl"
-          >
-            Plans that grow with your manuscript
-          </h2>
-          <p className="mx-auto mt-4 max-w-lg text-muted-foreground">
-            Start free, then move up when the draft gets long. Every plan
-            includes the full writing workspace.
-          </p>
+      <Container>
+        <SectionIntro
+          eyebrow="Pricing"
+          title="Plans that grow with your manuscript"
+          description="Start free, then move up when the draft gets long. Every plan includes the full writing workspace."
+          headingId="home-plans-heading"
+          reveal={false}
+          descriptionClassName="mx-auto max-w-lg"
+        >
           <div className="mt-7 flex flex-col items-center gap-3">
             <CycleToggle cycle={cycle} onChange={setCycle} />
             <AnimatePresence mode="wait">
@@ -109,7 +109,7 @@ export function Pricing({ onEnterWriter }: { onEnterWriter: () => void }) {
               )}
             </AnimatePresence>
           </div>
-        </div>
+        </SectionIntro>
 
         <div className="mt-12 grid gap-6 md:grid-cols-3">
           {SUBSCRIPTION_PLANS.map((plan, index) => {
@@ -150,7 +150,7 @@ export function Pricing({ onEnterWriter }: { onEnterWriter: () => void }) {
                     </Badge>
                   )}
                   <CardContent className="flex h-full flex-col">
-                    <h3 className="font-display text-xl font-bold">{plan.name}</h3>
+                    <h3 className={TEXT_HEADING}>{plan.name}</h3>
                     <p className="mt-1 text-sm text-muted-foreground">{plan.tagline}</p>
 
                     <div className="mt-5 flex items-baseline gap-1.5">
@@ -169,20 +169,14 @@ export function Pricing({ onEnterWriter }: { onEnterWriter: () => void }) {
                       <span className="text-sm text-muted-foreground">/ month</span>
                     </div>
                     {annualTotal && (
-                      <p className="mt-1 text-xs text-muted-foreground">{annualTotal}</p>
+                      <p className={cn("mt-1", TEXT_META)}>{annualTotal}</p>
                     )}
 
-                    <ul className="mt-6 flex-1 space-y-2.5 text-sm">
-                      {plan.features.slice(0, 5).map((feature) => (
-                        <li key={feature} className="flex items-start gap-2">
-                          <Check
-                            className="mt-0.5 h-4 w-4 shrink-0 text-primary"
-                            aria-hidden="true"
-                          />
-                          <span className="text-muted-foreground">{feature}</span>
-                        </li>
-                      ))}
-                    </ul>
+                    <FeatureList
+                      items={plan.features.slice(0, 5)}
+                      className="mt-6 flex-1 space-y-2.5 text-sm"
+                      textClassName="text-muted-foreground"
+                    />
 
                     <div className="mt-7">
                       {plan.ctaAvailable ? (
@@ -211,16 +205,16 @@ export function Pricing({ onEnterWriter }: { onEnterWriter: () => void }) {
             <a href="#/plans">
               View All Plans
               <Sparkles
-                className="h-4 w-4 transition-transform duration-300 group-hover:rotate-12"
+                className="size-4 transition-transform duration-300 group-hover:rotate-12"
                 aria-hidden="true"
               />
             </a>
           </Button>
-          <p className="mt-4 text-xs text-muted-foreground">
+          <p className={cn("mt-4", TEXT_META)}>
             {PAYMENT_GATEWAY_STATUS.label} — plans are not yet purchasable.
           </p>
         </div>
-      </div>
+      </Container>
     </section>
   );
 }

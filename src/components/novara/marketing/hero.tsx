@@ -23,6 +23,8 @@ import { Button } from "@/components/ui/button";
 import { BRAND, HERO_STATS } from "@/config/novara";
 import { cn } from "@/lib/utils";
 import { CountUp, EASE_OUT_EXPO, MaskLine } from "./motion";
+import { Container, StartCreatingButton } from "./kit";
+import { TEXT_HEADING } from "@/components/novara/styles";
 
 const MOCK_CHAPTERS = [
   { name: "Chapter 1", words: "2,412" },
@@ -80,7 +82,7 @@ function HeroBackdrop({
     <div aria-hidden="true" className="pointer-events-none absolute inset-0 overflow-hidden">
       {/* Warm-tinted base. A flat slab of stone-950 read as a hole in the
           page; this reads as a lit surface. */}
-      <div className="absolute inset-0 bg-[radial-gradient(115%_85%_at_50%_-12%,oklch(0.24_0.02_62)_0%,oklch(0.17_0.012_60)_42%,oklch(0.12_0.008_60)_100%)]" />
+      <div className="absolute inset-0 bg-[radial-gradient(115%_85%_at_50%_-12%,var(--hero-glow-1)_0%,var(--hero-glow-2)_42%,var(--hero-glow-3)_100%)]" />
 
       <div className="hero-grid absolute inset-0 opacity-70" />
 
@@ -95,7 +97,7 @@ function HeroBackdrop({
       </motion.div>
 
       {/* Vignette keeps the focus in the middle of the frame. */}
-      <div className="absolute inset-0 bg-[radial-gradient(ellipse_75%_60%_at_50%_45%,transparent_30%,oklch(0.12_0.008_60)_100%)] opacity-80" />
+      <div className="absolute inset-0 bg-[radial-gradient(ellipse_75%_60%_at_50%_45%,transparent_30%,var(--hero-glow-3)_100%)] opacity-80" />
 
       {!reduce && <div className="grain absolute inset-0" />}
     </div>
@@ -126,17 +128,17 @@ function HeroMock() {
   return (
     <div
       aria-hidden="true"
-      className="relative w-full overflow-hidden rounded-2xl border border-stone-800/80 bg-stone-900/60 shadow-[0_30px_80px_-30px_rgba(0,0,0,0.9)] backdrop-blur-sm"
+      className="relative w-full overflow-hidden rounded-2xl border border-stone-800/80 bg-stone-900/60 shadow-[0_30px_80px_-30px_var(--hero-shadow)] backdrop-blur-sm"
     >
       <div className="flex items-center gap-2 border-b border-stone-800/80 px-4 py-3">
-        <span aria-hidden="true" className="h-2.5 w-2.5 rounded-full bg-stone-700" />
-        <span aria-hidden="true" className="h-2.5 w-2.5 rounded-full bg-stone-700" />
-        <span aria-hidden="true" className="h-2.5 w-2.5 rounded-full bg-stone-700" />
+        <span aria-hidden="true" className="size-2.5 rounded-full bg-stone-700" />
+        <span aria-hidden="true" className="size-2.5 rounded-full bg-stone-700" />
+        <span aria-hidden="true" className="size-2.5 rounded-full bg-stone-700" />
         <span className="ml-3 text-xs text-stone-400">Novara AI — Writer</span>
-        <span className="ml-auto inline-flex items-center gap-1.5 rounded-full border border-amber-500/25 bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium text-amber-300">
-          <span className="relative flex h-1.5 w-1.5">
+        <span className="ml-auto inline-flex items-center gap-1.5 rounded-full border border-amber-500/25 bg-amber-500/10 px-2 py-0.5 text-tiny font-medium text-amber-300">
+          <span className="relative flex size-1.5">
             <span className="absolute inline-flex h-full w-full animate-pulse-ring rounded-full bg-amber-400" />
-            <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-amber-400" />
+            <span className="relative inline-flex size-1.5 rounded-full bg-amber-400" />
           </span>
           LIVE
         </span>
@@ -144,7 +146,7 @@ function HeroMock() {
 
       <div className="flex">
         <div className="w-32 shrink-0 border-r border-stone-800/80 p-4 sm:w-40">
-          <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-stone-500">
+          <p className="text-tiny font-semibold uppercase tracking-[0.14em] text-stone-500">
             Chapters
           </p>
           <div className="mt-3 space-y-1.5">
@@ -167,7 +169,7 @@ function HeroMock() {
                   >
                     {chapter.name}
                   </div>
-                  <div className="relative text-[11px] text-stone-500">{chapter.words} words</div>
+                  <div className="relative text-caption text-stone-500">{chapter.words} words</div>
                 </div>
               );
             })}
@@ -179,8 +181,8 @@ function HeroMock() {
             <span className="truncate text-xs font-medium text-stone-400">
               {MOCK_CHAPTERS[chapterIndex].name} · Draft
             </span>
-            <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-stone-700 px-2 py-0.5 text-[10px] text-stone-400">
-              <span aria-hidden="true" className="h-1 w-1 rounded-full bg-amber-400" />
+            <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-stone-700 px-2 py-0.5 text-tiny text-stone-400">
+              <span aria-hidden="true" className="size-1 rounded-full bg-amber-400" />
               Drafting
             </span>
           </div>
@@ -212,7 +214,7 @@ function HeroMock() {
             <span
               key={agent.name}
               className={cn(
-                "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] transition-colors duration-300",
+                "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-caption transition-colors duration-300",
                 active
                   ? "border-amber-500/40 bg-amber-500/10 text-amber-200"
                   : "border-stone-800 bg-stone-900/60 text-stone-500",
@@ -221,7 +223,7 @@ function HeroMock() {
               <span
                 aria-hidden="true"
                 className={cn(
-                  "h-1.5 w-1.5 rounded-full transition-colors duration-300",
+                  "size-1.5 rounded-full transition-colors duration-300",
                   active ? "bg-amber-300" : "bg-stone-700",
                 )}
               />
@@ -258,7 +260,7 @@ export function Hero({ onEnterWriter }: { onEnterWriter: () => void }) {
     >
       <HeroBackdrop pointerX={pointerX} pointerY={pointerY} />
 
-      <div className="relative mx-auto max-w-6xl px-4 pb-16 pt-28 sm:px-6 sm:pt-32 lg:pb-24 lg:pt-36">
+      <Container className="relative pb-16 pt-28 sm:pt-32 lg:pb-24 lg:pt-36">
         <div className="grid items-center gap-14 lg:grid-cols-[1.02fr_1fr] lg:gap-16">
           <div>
             <motion.div
@@ -267,9 +269,9 @@ export function Hero({ onEnterWriter }: { onEnterWriter: () => void }) {
               transition={{ duration: 0.6, delay: 0.05, ease: EASE_OUT_EXPO }}
               className="inline-flex items-center gap-2 rounded-full border border-amber-400/25 bg-amber-400/[0.07] px-3.5 py-1.5 text-xs font-medium text-amber-200 backdrop-blur-sm"
             >
-              <span aria-hidden="true" className="relative flex h-1.5 w-1.5">
+              <span aria-hidden="true" className="relative flex size-1.5">
                 <span className="absolute inline-flex h-full w-full animate-pulse-ring rounded-full bg-amber-400" />
-                <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-amber-400" />
+                <span className="relative inline-flex size-1.5 rounded-full bg-amber-400" />
               </span>
               AI-Powered Novel Writing Team
             </motion.div>
@@ -307,13 +309,7 @@ export function Hero({ onEnterWriter }: { onEnterWriter: () => void }) {
               transition={{ duration: 0.75, delay: 0.44, ease: EASE_OUT_EXPO }}
               className="mt-8 flex flex-wrap items-center gap-3"
             >
-              <Button size="lg" className="sheen group" onClick={onEnterWriter}>
-                Start Creating
-                <ArrowRight
-                  className="h-4 w-4 transition-transform duration-300 group-hover:translate-x-1"
-                  aria-hidden="true"
-                />
-              </Button>
+              <StartCreatingButton onClick={onEnterWriter} />
               <Button
                 size="lg"
                 variant="outline"
@@ -323,7 +319,7 @@ export function Hero({ onEnterWriter }: { onEnterWriter: () => void }) {
                 <a href="#/product">
                   Explore Features
                   <ArrowRight
-                    className="h-4 w-4 transition-transform duration-300 group-hover:translate-x-1"
+                    className="size-4 transition-transform duration-300 group-hover:translate-x-1"
                     aria-hidden="true"
                   />
                 </a>
@@ -338,7 +334,7 @@ export function Hero({ onEnterWriter }: { onEnterWriter: () => void }) {
             >
               {HERO_STATS.map((stat) => (
                 <div key={stat.label} className="min-w-0">
-                  <div className="font-display text-xl font-bold text-amber-400">
+                  <div className={cn(TEXT_HEADING, "text-amber-400")}>
                     {stat.count && stat.count > 0 ? (
                       <>
                         {stat.prefix}
@@ -374,7 +370,7 @@ export function Hero({ onEnterWriter }: { onEnterWriter: () => void }) {
             </div>
           </motion.div>
         </div>
-      </div>
+      </Container>
 
       {/* Screen-reader description of what the decorative mock shows. */}
       <p className="sr-only">

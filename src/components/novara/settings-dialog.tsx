@@ -47,6 +47,8 @@ import { Separator } from "@/components/ui/separator";
 import { InvoiceReconciliation, UsagePanel } from "@/components/novara/writer/usage-panel";
 import type { AccountUsageSnapshot } from "@/lib/usage/usage-shapes";
 import { cn } from "@/lib/utils";
+import { ToggleButton } from "@/components/novara/primitives";
+import { ROW_HEAD, TEXT_CAPTION, TEXT_LABEL, TEXT_MICRO, TEXT_PANEL_TITLE, TEXT_SECTION } from "@/components/novara/styles";
 
 export type SettingsPane = "account" | "appearance" | "credits" | "about";
 
@@ -84,7 +86,7 @@ function Row({
       <div className="min-w-0 sm:w-48 sm:shrink-0">
         <p className="text-sm">{label}</p>
         {hint ? (
-          <p className="text-[11px] leading-4 text-muted-foreground">{hint}</p>
+          <p className="text-caption leading-4 text-muted-foreground">{hint}</p>
         ) : null}
       </div>
       <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2 sm:justify-end">
@@ -96,7 +98,7 @@ function Row({
 
 function SectionTitle({ children }: { children: React.ReactNode }) {
   return (
-    <p className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+    <p className={TEXT_SECTION}>
       {children}
     </p>
   );
@@ -124,7 +126,7 @@ function Disclosure({
       >
         <ChevronRight
           className={cn(
-            "h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform",
+            "size-3.5 shrink-0 text-muted-foreground transition-transform",
             open && "rotate-90",
           )}
           aria-hidden="true"
@@ -248,7 +250,7 @@ export function SettingsDialog({
       >
         <DialogHeader className="shrink-0 border-b px-4 py-3 sm:px-6">
           <DialogTitle className="text-base">Settings</DialogTitle>
-          <DialogDescription className="text-[11px]">
+          <DialogDescription className="text-caption">
             Your account, your credits and your preferences.
           </DialogDescription>
         </DialogHeader>
@@ -269,7 +271,9 @@ export function SettingsDialog({
                   onClick={() => onPaneChange(entry.id)}
                   aria-current={active ? "page" : undefined}
                   className={cn(
-                    "inline-flex shrink-0 items-center rounded-md border border-transparent px-2 py-1 text-sm font-medium whitespace-nowrap transition-colors focus-visible:ring-2 focus-visible:ring-ring",
+                    "inline-flex shrink-0 items-center rounded-md border border-transparent px-2 py-1",
+                    TEXT_LABEL,
+                    "whitespace-nowrap transition-colors focus-visible:ring-2 focus-visible:ring-ring",
                     active
                       ? "bg-muted text-foreground shadow-sm"
                       : "text-muted-foreground hover:bg-accent hover:text-accent-foreground",
@@ -294,7 +298,7 @@ export function SettingsDialog({
                 </Row>
                 <Separator />
                 <Row label="Sign-in method">
-                  <Badge variant="outline" className="text-[11px]">
+                  <Badge variant="outline" className="text-caption">
                     Signed in with Google
                   </Badge>
                 </Row>
@@ -320,23 +324,19 @@ export function SettingsDialog({
                     {FONT_SCALE_OPTIONS.map((option) => {
                       const active = fontScale === option.id;
                       return (
-                        <button
+                        <ToggleButton
                           key={option.id}
-                          type="button"
-                          aria-pressed={active}
+                          pressed={active}
                           onClick={() => {
                             setFontScale(option.id);
                             writeFontScale(option.id);
                           }}
-                          className={cn(
-                            "px-2 py-1 text-[11px] font-medium transition-colors focus-visible:ring-2 focus-visible:ring-ring",
-                            active
-                              ? "bg-muted text-foreground"
-                              : "text-muted-foreground hover:bg-accent hover:text-accent-foreground",
-                          )}
+                          baseClassName="px-2 py-1 text-caption font-medium transition-colors focus-visible:ring-2 focus-visible:ring-ring"
+                          activeClassName="bg-muted text-foreground"
+                          inactiveClassName="text-muted-foreground hover:bg-accent hover:text-accent-foreground"
                         >
                           {option.label}
-                        </button>
+                        </ToggleButton>
                       );
                     })}
                   </div>
@@ -358,7 +358,7 @@ export function SettingsDialog({
                   ) : credits?.unlimited ? (
                     <>
                       <p className="text-sm">Unlimited</p>
-                      <p className="mt-0.5 text-[11px] text-muted-foreground">
+                      <p className={cn("mt-0.5", TEXT_CAPTION)}>
                         {usedToday} credits used today
                       </p>
                     </>
@@ -377,7 +377,7 @@ export function SettingsDialog({
                         aria-label={`${balance ?? 0} of ${allowance} credits left today`}
                       />
                       {resetLabel ? (
-                        <p className="mt-1.5 text-[11px] text-muted-foreground">
+                        <p className={cn("mt-1.5", TEXT_CAPTION)}>
                           resets {resetLabel}
                         </p>
                       ) : null}
@@ -388,12 +388,12 @@ export function SettingsDialog({
                 {/* TODAY — plain words, no money */}
                 <Separator />
                 <div className="py-3">
-                  <div className="flex items-baseline justify-between gap-2">
-                    <p className="text-xs font-semibold">Today</p>
-                    <p className="text-[10px] text-muted-foreground">calls</p>
+                  <div className={ROW_HEAD}>
+                    <p className={TEXT_PANEL_TITLE}>Today</p>
+                    <p className={TEXT_MICRO}>calls</p>
                   </div>
                   {todayRows.length === 0 ? (
-                    <p className="mt-1 text-[11px] text-muted-foreground">
+                    <p className={cn("mt-1", TEXT_CAPTION)}>
                       No AI calls recorded today.
                     </p>
                   ) : (
@@ -423,7 +423,7 @@ export function SettingsDialog({
                   <UsagePanel snapshot={snapshot} />
                 </Disclosure>
                 <Separator />
-                <p className="py-3 text-[11px] text-muted-foreground">
+                <p className={cn("py-3", TEXT_CAPTION)}>
                   Usage details are kept for 90 days.
                 </p>
 
@@ -473,7 +473,7 @@ export function SettingsDialog({
                 </Row>
                 <Separator />
                 <Row label="Build">
-                  <Badge variant="outline" className="text-[11px]">
+                  <Badge variant="outline" className="text-caption">
                     Preview build
                   </Badge>
                 </Row>

@@ -26,7 +26,6 @@ import {
   ArrowUp,
   Check,
   ChevronDown,
-  Loader2,
   Mic,
   Plus,
   ShieldCheck,
@@ -65,7 +64,10 @@ import {
   type SlashCommand,
 } from "./slash-commands";
 import { ModelPicker } from "./model-picker";
+import { CHEVRON_ICON } from "./ui-bits";
 import { cn } from "@/lib/utils";
+import { IconTooltip, Spinner } from "@/components/novara/primitives";
+import { TEXT_META, TEXT_CAPTION, TEXT_MICRO, TEXT_LABEL } from "@/components/novara/styles";
 
 // ---------------------------------------------------------------------------
 // Pin options — flat, grouped menu source built from the loaded NovelDetail.
@@ -464,22 +466,24 @@ export function PromptBox({
             <Badge
               key={`${ref.type}:${ref.id}`}
               variant="outline"
-              className="h-6 max-w-[240px] gap-1 bg-primary/5 pr-1 text-[11px]"
+              className="h-6 max-w-[240px] gap-1 bg-primary/5 pr-1 text-caption"
             >
               <span className="truncate">{ref.label}</span>
-              <button
-                type="button"
-                className="rounded-full p-0.5 hover:bg-muted"
-                aria-label={`Unpin — ${ref.label}`}
-                onClick={() => onTogglePin(ref)}
-              >
-                <X className="h-3 w-3" aria-hidden="true" />
-              </button>
+              <IconTooltip label={`Unpin — ${ref.label}`}>
+                <button
+                  type="button"
+                  className="rounded-full p-0.5 hover:bg-muted"
+                  aria-label={`Unpin — ${ref.label}`}
+                  onClick={() => onTogglePin(ref)}
+                >
+                  <X className="size-3" aria-hidden="true" />
+                </button>
+              </IconTooltip>
             </Badge>
           ))}
           <button
             type="button"
-            className="rounded px-1 text-[11px] text-muted-foreground hover:text-foreground"
+            className={cn("rounded px-1", TEXT_CAPTION, "hover:text-foreground")}
             onClick={onClearPins}
           >
             Clear
@@ -505,7 +509,7 @@ export function PromptBox({
               aria-label="Pin context — attach chapters, characters, world entries"
               title="Pin context — or type @ in the composer"
             >
-              <Plus className="h-4.5 w-4.5" aria-hidden="true" />
+              <Plus className="size-4.5" aria-hidden="true" />
             </Button>
           </PopoverTrigger>
           <PopoverContent align="start" className="w-80 p-0">
@@ -527,7 +531,7 @@ export function PromptBox({
                         >
                           <Check
                             className={cn(
-                              "mr-2 h-4 w-4 shrink-0",
+                              "mr-2 size-4 shrink-0",
                               pinned ? "opacity-100" : "opacity-0"
                             )}
                             aria-hidden="true"
@@ -556,13 +560,13 @@ export function PromptBox({
               className="h-8 gap-1.5 rounded-full px-3 text-xs"
               aria-label={`Run permission: ${MODE_META[mode].label}`}
             >
-              <ModeIcon className="h-3.5 w-3.5" aria-hidden="true" />
+              <ModeIcon className="size-3.5" aria-hidden="true" />
               {MODE_META[mode].label}
-              <ChevronDown className="h-3 w-3 opacity-60" aria-hidden="true" />
+              <ChevronDown className={CHEVRON_ICON} aria-hidden="true" />
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-72">
-            <DropdownMenuLabel className="text-[11px] text-muted-foreground">
+            <DropdownMenuLabel className={TEXT_CAPTION}>
               Preference is saved for this novel
             </DropdownMenuLabel>
             {(Object.keys(MODE_META) as AgentRunMode[]).map((m) => {
@@ -574,15 +578,15 @@ export function PromptBox({
                   className="items-start gap-2 py-2"
                   onSelect={() => onModeChange(m)}
                 >
-                  <Icon className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+                  <Icon className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
                   <span className="flex-1">
-                    <span className="block text-sm font-medium">{meta.label}</span>
-                    <span className="block text-[11px] leading-4 text-muted-foreground">
+                    <span className={cn("block", TEXT_LABEL)}>{meta.label}</span>
+                    <span className="block text-caption leading-4 text-muted-foreground">
                       {meta.hint}
                     </span>
                   </span>
                   {m === mode && (
-                    <Check className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+                    <Check className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
                   )}
                 </DropdownMenuItem>
               );
@@ -603,7 +607,7 @@ export function PromptBox({
           aria-label="Voice input — arrives later"
           title="Voice input arrives later"
         >
-          <Mic className="h-4 w-4" aria-hidden="true" />
+          <Mic className="size-4" aria-hidden="true" />
         </Button>
 
         {/* 7 — send */}
@@ -617,9 +621,9 @@ export function PromptBox({
           title="Run team — ⌘/Ctrl + Enter"
         >
           {submitting ? (
-            <Loader2 className="h-4.5 w-4.5 animate-spin" aria-hidden="true" />
+            <Spinner size="xl" />
           ) : (
-            <ArrowUp className="h-4.5 w-4.5" aria-hidden="true" />
+            <ArrowUp className="size-4.5" aria-hidden="true" />
           )}
         </Button>
       </div>
@@ -651,7 +655,7 @@ export function PromptBox({
               className="max-h-64 overflow-y-auto"
             >
               {filteredCommands.length === 0 ? (
-                <p className="px-3 py-4 text-center text-xs text-muted-foreground">
+                <p className={cn("px-3 py-4 text-center", TEXT_META)}>
                   Unknown command — try /next /write /review /outline /recap
                   /doctor
                 </p>
@@ -679,16 +683,16 @@ export function PromptBox({
                         {cmd.command}
                       </span>
                       {cmd.paramHint && (
-                        <span className="rounded bg-muted px-1 text-[10px] text-muted-foreground">
+                        <span className={cn("rounded bg-muted px-1", TEXT_MICRO)}>
                           {cmd.paramHint}
                         </span>
                       )}
-                      <span className="min-w-0 flex-1 truncate text-[11px] text-muted-foreground">
+                      <span className={cn("min-w-0 flex-1 truncate", TEXT_CAPTION)}>
                         {cmd.description}
                       </span>
                     </span>
                     {cmd.detail && (
-                      <span className="block text-[10px] leading-4 text-muted-foreground/70">
+                      <span className="block text-tiny leading-4 text-muted-foreground/70">
                         {cmd.detail}
                       </span>
                     )}
@@ -705,13 +709,13 @@ export function PromptBox({
               className="max-h-64 overflow-y-auto"
             >
               {filteredPins.length === 0 ? (
-                <p className="px-3 py-6 text-center text-xs text-muted-foreground">
+                <p className={cn("px-3 py-6 text-center", TEXT_META)}>
                   Nothing matches “{token?.query.trim()}” in this novel.
                 </p>
               ) : (
                 pinGroups.map(({ group, options, offset }) => (
                   <div key={group} role="presentation" className="px-1 py-1">
-                    <p className="px-2 pb-0.5 pt-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/70">
+                    <p className="px-2 pb-0.5 pt-1.5 text-tiny font-semibold uppercase tracking-wide text-muted-foreground/70">
                       {group}
                     </p>
                     {options.map((opt, i) => {
@@ -737,13 +741,13 @@ export function PromptBox({
                         >
                           <Check
                             className={cn(
-                              "h-3.5 w-3.5 shrink-0",
+                              "size-3.5 shrink-0",
                               pinned ? "text-primary" : "opacity-0"
                             )}
                             aria-hidden="true"
                           />
                           <span className="min-w-0 flex-1 truncate">{opt.label}</span>
-                          <span className="shrink-0 text-[10px] text-muted-foreground/70">
+                          <span className="shrink-0 text-tiny text-muted-foreground/70">
                             {opt.group}
                           </span>
                         </button>
@@ -754,7 +758,7 @@ export function PromptBox({
               )}
             </div>
           )}
-          <div className="flex items-center gap-3 border-t px-3 py-1.5 text-[10px] text-muted-foreground">
+          <div className={cn("flex items-center gap-3 border-t px-3 py-1.5", TEXT_MICRO)}>
             <span>
               <kbd className="rounded border bg-muted px-1">↑</kbd>{" "}
               <kbd className="rounded border bg-muted px-1">↓</kbd> navigate

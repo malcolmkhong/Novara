@@ -18,6 +18,7 @@ import { BrandMark } from "./brand-logo";
 import type { SiteRoute } from "@/hooks/use-hash-route";
 import { cn } from "@/lib/utils";
 import { EASE_OUT_EXPO } from "./marketing/motion";
+import { TEXT_HEADING, TEXT_LABEL } from "@/components/novara/styles";
 
 interface NavbarProps {
   route: SiteRoute;
@@ -72,10 +73,10 @@ export function Navbar({ route, onEnterWriter }: NavbarProps) {
           className="group flex items-center gap-2.5"
           aria-label={`${BRAND.name} home`}
         >
-          <span className="flex h-9 w-9 items-center justify-center transition-transform duration-300 group-hover:scale-105">
-            <BrandMark className="h-8 w-8" />
+          <span className="flex size-9 items-center justify-center transition-transform duration-300 group-hover:scale-105">
+            <BrandMark className="size-8" />
           </span>
-          <span className="font-display text-xl font-bold tracking-tight">
+          <span className={cn(TEXT_HEADING, "tracking-tight")}>
             {BRAND.name}
           </span>
         </a>
@@ -89,7 +90,9 @@ export function Navbar({ route, onEnterWriter }: NavbarProps) {
                 href={hrefFor(link.route)}
                 aria-current={active ? "page" : undefined}
                 className={cn(
-                  "relative rounded-md px-3 py-2 text-sm font-medium transition-colors duration-200",
+                  "relative rounded-md px-3 py-2",
+                  TEXT_LABEL,
+                  "transition-colors duration-200",
                   active
                     ? "text-primary"
                     : "text-muted-foreground hover:bg-accent hover:text-foreground",
@@ -120,7 +123,7 @@ export function Navbar({ route, onEnterWriter }: NavbarProps) {
             aria-label={open ? "Close menu" : "Open menu"}
             onClick={() => setOpen((v) => !v)}
           >
-            {open ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
+            {open ? <X className="size-5" /> : <Menu className="size-5" />}
           </Button>
         </div>
       </div>
@@ -147,7 +150,9 @@ export function Navbar({ route, onEnterWriter }: NavbarProps) {
                   animate={{ opacity: 1, x: 0 }}
                   transition={{ duration: 0.28, delay: index * 0.05, ease: EASE_OUT_EXPO }}
                   className={cn(
-                    "rounded-md px-3 py-2.5 text-sm font-medium transition-colors",
+                    "rounded-md px-3 py-2.5",
+                    TEXT_LABEL,
+                    "transition-colors",
                     route === link.route
                       ? "text-primary"
                       : "text-muted-foreground hover:bg-accent hover:text-foreground",

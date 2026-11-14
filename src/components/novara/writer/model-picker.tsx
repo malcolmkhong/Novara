@@ -10,6 +10,7 @@
 // ---------------------------------------------------------------------------
 
 import { Check, ChevronDown, CircleOff } from "lucide-react";
+import { CHEVRON_ICON } from "./ui-bits";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -27,6 +28,7 @@ import {
   type ModelSelection,
 } from "@/lib/novara/models";
 import { cn } from "@/lib/utils";
+import { TEXT_CAPTION, TEXT_MICRO, TEXT_LABEL } from "@/components/novara/styles";
 
 export function ModelPicker({
   selection,
@@ -46,18 +48,18 @@ export function ModelPicker({
           type="button"
           variant="outline"
           size="sm"
-          className="h-8 gap-1.5 rounded-full px-2.5 text-[11px] font-medium"
+          className="h-8 gap-1.5 rounded-full px-2.5 text-caption font-medium"
           aria-label={`Model: ${selected.label}${showThinkingSuffix ? `, thinking ${levelMeta.label}` : ""}`}
         >
           {selected.label}
           {showThinkingSuffix && (
             <span className="text-muted-foreground">· {levelMeta.label}</span>
           )}
-          <ChevronDown className="h-3 w-3 opacity-60" aria-hidden="true" />
+          <ChevronDown className={CHEVRON_ICON} aria-hidden="true" />
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-72">
-        <DropdownMenuLabel className="text-[11px] text-muted-foreground">
+        <DropdownMenuLabel className={TEXT_CAPTION}>
           Model
         </DropdownMenuLabel>
         {MODEL_REGISTRY.map((model) => {
@@ -77,22 +79,22 @@ export function ModelPicker({
               {model.available ? (
                 <Check
                   className={cn(
-                    "mt-0.5 h-4 w-4 shrink-0",
+                    "mt-0.5 size-4 shrink-0",
                     isSelected ? "opacity-100" : "opacity-0"
                   )}
                   aria-hidden="true"
                 />
               ) : (
-                <CircleOff className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+                <CircleOff className="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
               )}
               <span className="min-w-0 flex-1">
                 <span className="flex items-baseline gap-2">
-                  <span className="text-sm font-medium">{model.label}</span>
-                  <span className="text-[10px] text-muted-foreground">
+                  <span className={TEXT_LABEL}>{model.label}</span>
+                  <span className={TEXT_MICRO}>
                     {model.vendor} · {formatTokenCount(model.contextWindow)} ctx
                   </span>
                 </span>
-                <span className="block text-[11px] leading-4 text-muted-foreground">
+                <span className="block text-caption leading-4 text-muted-foreground">
                   {model.note}
                   {!model.available && " — coming soon."}
                 </span>
@@ -102,7 +104,7 @@ export function ModelPicker({
         })}
 
         <DropdownMenuSeparator />
-        <DropdownMenuLabel className="text-[11px] text-muted-foreground">
+        <DropdownMenuLabel className={TEXT_CAPTION}>
           Thinking level — {selected.label}
         </DropdownMenuLabel>
         {selected.thinkingLevels.map((level) => {
@@ -116,14 +118,14 @@ export function ModelPicker({
             >
               <Check
                 className={cn(
-                  "mt-0.5 h-4 w-4 shrink-0",
+                  "mt-0.5 size-4 shrink-0",
                   isSelected ? "opacity-100" : "opacity-0"
                 )}
                 aria-hidden="true"
               />
               <span className="min-w-0 flex-1">
-                <span className="block text-sm font-medium">{meta.label}</span>
-                <span className="block text-[11px] leading-4 text-muted-foreground">
+                <span className={cn("block", TEXT_LABEL)}>{meta.label}</span>
+                <span className="block text-caption leading-4 text-muted-foreground">
                   {meta.hint}
                 </span>
               </span>
@@ -132,7 +134,7 @@ export function ModelPicker({
         })}
 
         <DropdownMenuSeparator />
-        <p className="px-2 py-1.5 text-[11px] leading-4 text-muted-foreground">
+        <p className="px-2 py-1.5 text-caption leading-4 text-muted-foreground">
           Preference is saved for this novel.
         </p>
       </DropdownMenuContent>

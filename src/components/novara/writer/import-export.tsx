@@ -8,7 +8,6 @@ import {
   Download,
   FileText,
   FileUp,
-  Loader2,
   TriangleAlert,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -30,6 +29,9 @@ import type {
   NovelSummary,
 } from "@/lib/novara/types";
 import { formatWordCount } from "@/lib/novara/words";
+import { Spinner } from "@/components/novara/primitives";
+import { cn } from "@/lib/utils";
+import { CELL_TILE, TEXT_LABEL, TEXT_LEAD, TEXT_META } from "@/components/novara/styles";
 
 // ---------------------------------------------------------------------------
 // Export: fetch the versioned JSON backup, show it, allow download / copy.
@@ -150,7 +152,7 @@ export function ExportDialog({
 
         {busy ? (
           <div className="flex items-center justify-center gap-2 py-10 text-sm text-muted-foreground">
-            <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+            <Spinner size="lg" />
             Preparing backup…
           </div>
         ) : json ? (
@@ -166,7 +168,7 @@ export function ExportDialog({
 
         <DialogFooter className="flex-row gap-2 sm:justify-end">
           <Button variant="outline" onClick={copy} disabled={!json}>
-            <ClipboardCopy className="h-4 w-4" aria-hidden="true" />
+            <ClipboardCopy className="size-4" aria-hidden="true" />
             {copied ? "Copied" : "Copy JSON"}
           </Button>
           <Button
@@ -175,14 +177,14 @@ export function ExportDialog({
             disabled={mdBusy}
           >
             {mdBusy ? (
-              <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+              <Spinner size="lg" />
             ) : (
-              <FileText className="h-4 w-4" aria-hidden="true" />
+              <FileText className="size-4" aria-hidden="true" />
             )}
             Markdown
           </Button>
           <Button onClick={download} disabled={!json}>
-            <Download className="h-4 w-4" aria-hidden="true" />
+            <Download className="size-4" aria-hidden="true" />
             Download file
           </Button>
         </DialogFooter>
@@ -268,7 +270,7 @@ export function ImportDialog({
                 onClick={() => fileRef.current?.click()}
                 className="flex w-full flex-col items-center gap-2 rounded-lg border border-dashed p-6 text-sm text-muted-foreground transition-colors hover:bg-accent"
               >
-                <FileUp className="h-6 w-6 text-primary" aria-hidden="true" />
+                <FileUp className="size-6 text-primary" aria-hidden="true" />
                 Choose a .json backup file
               </button>
               <input
@@ -283,7 +285,7 @@ export function ImportDialog({
               <div className="space-y-2">
                 <label
                   htmlFor="import-json"
-                  className="text-sm font-medium"
+                  className={TEXT_LABEL}
                 >
                   …or paste the backup JSON
                 </label>
@@ -306,7 +308,7 @@ export function ImportDialog({
 
             <DialogFooter>
               <Button onClick={doImport} disabled={busy || !raw.trim()}>
-                {busy && <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />}
+                {busy && <Spinner size="lg" />}
                 {busy ? "Importing…" : "Import novel"}
               </Button>
             </DialogFooter>
@@ -325,14 +327,14 @@ export function ImportDialog({
               <div
                 className={`flex items-center gap-2 rounded-md border p-3 text-sm ${
                   result.report.integrityOk
-                    ? "border-emerald-200 bg-emerald-50 text-emerald-900"
-                    : "border-amber-300 bg-amber-50 text-amber-900"
+                    ? "border-success-border bg-success-surface text-success-text-deep"
+                    : "border-warning-border-strong bg-warning-surface text-warning-text-deep"
                 }`}
               >
                 {result.report.integrityOk ? (
-                  <CheckCircle2 className="h-4 w-4" aria-hidden="true" />
+                  <CheckCircle2 className="size-4" aria-hidden="true" />
                 ) : (
-                  <TriangleAlert className="h-4 w-4" aria-hidden="true" />
+                  <TriangleAlert className="size-4" aria-hidden="true" />
                 )}
                 {result.report.integrityOk
                   ? "Integrity check passed — all declared counts match."
@@ -340,44 +342,44 @@ export function ImportDialog({
               </div>
 
               <dl className="grid grid-cols-2 gap-3 text-sm sm:grid-cols-3">
-                <div className="rounded-md border p-3">
-                  <dt className="text-xs text-muted-foreground">Chapters</dt>
-                  <dd className="text-lg font-semibold">
+                <div className={CELL_TILE}>
+                  <dt className={TEXT_META}>Chapters</dt>
+                  <dd className={TEXT_LEAD}>
                     {result.report.counts.chapters}
                   </dd>
                 </div>
-                <div className="rounded-md border p-3">
-                  <dt className="text-xs text-muted-foreground">Characters</dt>
-                  <dd className="text-lg font-semibold">
+                <div className={CELL_TILE}>
+                  <dt className={TEXT_META}>Characters</dt>
+                  <dd className={TEXT_LEAD}>
                     {result.report.counts.characters}
                   </dd>
                 </div>
-                <div className="rounded-md border p-3">
-                  <dt className="text-xs text-muted-foreground">World entries</dt>
-                  <dd className="text-lg font-semibold">
+                <div className={CELL_TILE}>
+                  <dt className={TEXT_META}>World entries</dt>
+                  <dd className={TEXT_LEAD}>
                     {result.report.counts.worldEntries}
                   </dd>
                 </div>
-                <div className="rounded-md border p-3">
-                  <dt className="text-xs text-muted-foreground">Outline beats</dt>
-                  <dd className="text-lg font-semibold">
+                <div className={CELL_TILE}>
+                  <dt className={TEXT_META}>Outline beats</dt>
+                  <dd className={TEXT_LEAD}>
                     {result.report.counts.outlineBeats}
                   </dd>
                 </div>
-                <div className="rounded-md border p-3">
-                  <dt className="text-xs text-muted-foreground">Total words</dt>
-                  <dd className="text-lg font-semibold">
+                <div className={CELL_TILE}>
+                  <dt className={TEXT_META}>Total words</dt>
+                  <dd className={TEXT_LEAD}>
                     {formatWordCount(result.report.totalWords)}
                   </dd>
                 </div>
               </dl>
 
               {result.report.warnings.length > 0 && (
-                <ul className="space-y-1.5 rounded-md border bg-muted/40 p-3 text-xs text-muted-foreground">
+                <ul className={cn("space-y-1.5 rounded-md border bg-muted/40 p-3", TEXT_META)}>
                   {result.report.warnings.map((w) => (
                     <li key={w} className="flex gap-2">
                       <TriangleAlert
-                        className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-600"
+                        className="mt-0.5 size-3.5 shrink-0 text-warning-text"
                         aria-hidden="true"
                       />
                       {w}
@@ -393,7 +395,7 @@ export function ImportDialog({
               </Button>
               <Button onClick={() => onImported(result.novel.id)}>
                 Open novel
-                <ArrowRight className="h-4 w-4" aria-hidden="true" />
+                <ArrowRight className="size-4" aria-hidden="true" />
               </Button>
             </DialogFooter>
           </>

@@ -25,7 +25,6 @@ import {
   Check,
   Copy,
   History,
-  Loader2,
   Lock,
   Maximize2,
   Minimize2,
@@ -64,6 +63,8 @@ import { cn } from "@/lib/utils";
 import { ChapterEditor, type ChapterDocumentState } from "./chapter-editor";
 import { MarkdownDocument } from "./markdown-document";
 import { PinButton, StateChip } from "./ui-bits";
+import { IconTooltip, Spinner, ToggleButton } from "@/components/novara/primitives";
+import { TEXT_META, TEXT_CAPTION, TEXT_MICRO } from "@/components/novara/styles";
 
 /** Stable empty list — a fresh array on every selector call breaks zustand's
  * snapshot identity (React Compiler loop guard). */
@@ -345,14 +346,14 @@ export function DocPane({
           onClick={() => setRailCollapsed(novelId, !railCollapsed)}
         >
           {railCollapsed ? (
-            <PanelLeftOpen className="h-4 w-4" aria-hidden="true" />
+            <PanelLeftOpen className="size-4" aria-hidden="true" />
           ) : (
-            <PanelLeftClose className="h-4 w-4" aria-hidden="true" />
+            <PanelLeftClose className="size-4" aria-hidden="true" />
           )}
         </Button>
         <div className="nice-scroll flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
           {openDocs.length === 0 && (
-            <span className="px-2 py-1.5 text-[11px] text-muted-foreground">
+            <span className={cn("px-2 py-1.5", TEXT_CAPTION)}>
               No open document
             </span>
           )}
@@ -363,7 +364,7 @@ export function DocPane({
               <span
                 key={id}
                 className={cn(
-                  "flex h-7 shrink-0 items-center gap-1 border-b-2 px-2 text-[11px]",
+                  "flex h-7 shrink-0 items-center gap-1 border-b-2 px-2 text-caption",
                   active
                     ? "border-primary text-foreground"
                     : "border-transparent text-muted-foreground"
@@ -377,14 +378,16 @@ export function DocPane({
                 >
                   {node?.label ?? id}
                 </button>
-                <button
-                  type="button"
-                  onClick={() => closeDoc(novelId, id)}
-                  aria-label={`Close ${node?.label ?? id}`}
-                  className="rounded p-0.5 hover:bg-muted"
-                >
-                  <X className="h-3 w-3" aria-hidden="true" />
-                </button>
+                <IconTooltip label={`Close ${node?.label ?? id}`}>
+                  <button
+                    type="button"
+                    onClick={() => closeDoc(novelId, id)}
+                    aria-label={`Close ${node?.label ?? id}`}
+                    className="rounded p-0.5 hover:bg-muted"
+                  >
+                    <X className="size-3" aria-hidden="true" />
+                  </button>
+                </IconTooltip>
               </span>
             );
           })}
@@ -395,10 +398,10 @@ export function DocPane({
           History (chapters only), copy and fullscreen. ONE chrome for EVERY
           document kind, chapters included. */}
       <div className="flex flex-1 flex-wrap content-start items-start gap-1.5 border-b px-2 py-1.5">
-        <span className="max-w-[150px] truncate font-mono text-[11px] text-muted-foreground">
+        <span className={cn("max-w-[150px] truncate font-mono", TEXT_CAPTION)}>
           {path}
         </span>
-        <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+        <span className={cn("rounded bg-muted px-1.5 py-0.5", TEXT_MICRO)}>
           {kindLabel}
         </span>
         {activeState && <StateChip status={activeState} />}
@@ -406,16 +409,16 @@ export function DocPane({
           <Button
             variant="outline"
             size="sm"
-            className="h-7 px-2 text-[11px]"
+            className="h-7 px-2 text-caption"
             onClick={() => void reopen()}
             disabled={reopening}
             aria-label="Reopen to edit"
             title="Reopen to edit"
           >
             {reopening ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+              <Spinner size="md" />
             ) : (
-              <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />
+              <RotateCcw className="size-3.5" aria-hidden="true" />
             )}
             Reopen to edit
           </Button>
@@ -424,16 +427,16 @@ export function DocPane({
           <Button
             variant="outline"
             size="sm"
-            className="h-7 px-2 text-[11px]"
+            className="h-7 px-2 text-caption"
             onClick={() => void markFinal()}
             disabled={finalizing}
             aria-label="Mark as final"
             title="Mark as final — locks the chapter and projects its memory"
           >
             {finalizing ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+              <Spinner size="md" />
             ) : (
-              <Lock className="h-3.5 w-3.5" aria-hidden="true" />
+              <Lock className="size-3.5" aria-hidden="true" />
             )}
             Mark final
           </Button>
@@ -443,33 +446,27 @@ export function DocPane({
             novelId={novelId}
             target={pinTarget}
             label="Pin"
-            className="h-7 gap-1 px-1.5 text-[11px]"
+            className="h-7 gap-1 px-1.5 text-caption"
           />
         )}
         <span className="flex-1" />
-        <span className="flex items-center rounded border text-[11px]">
-          <button
-            type="button"
+        <span className="flex items-center rounded border text-caption">
+          <ToggleButton
             onClick={() => activeDocId && setDocView(novelId, activeDocId, "document")}
-            aria-pressed={viewMode === "document"}
-            className={cn(
-              "px-1.5 py-0.5",
-              viewMode === "document" && "bg-muted text-foreground"
-            )}
+            pressed={viewMode === "document"}
+            baseClassName="px-1.5 py-0.5"
+            activeClassName="bg-muted text-foreground"
           >
             Document
-          </button>
-          <button
-            type="button"
+          </ToggleButton>
+          <ToggleButton
             onClick={() => activeDocId && setDocView(novelId, activeDocId, "markdown")}
-            aria-pressed={viewMode === "markdown"}
-            className={cn(
-              "px-1.5 py-0.5",
-              viewMode === "markdown" && "bg-muted text-foreground"
-            )}
+            pressed={viewMode === "markdown"}
+            baseClassName="px-1.5 py-0.5"
+            activeClassName="bg-muted text-foreground"
           >
             Markdown
-          </button>
+          </ToggleButton>
         </span>
         {isChapter && (
           <Button
@@ -480,7 +477,7 @@ export function DocPane({
             title="Version history"
             onClick={() => setHistoryDocId(activeDocId)}
           >
-            <History className="h-4 w-4" aria-hidden="true" />
+            <History className="size-4" aria-hidden="true" />
           </Button>
         )}
         <Button
@@ -492,9 +489,9 @@ export function DocPane({
           onClick={() => void copyMarkdown()}
         >
           {copied ? (
-            <Check className="h-4 w-4 text-primary" aria-hidden="true" />
+            <Check className="size-4 text-primary" aria-hidden="true" />
           ) : (
-            <Copy className="h-4 w-4" aria-hidden="true" />
+            <Copy className="size-4" aria-hidden="true" />
           )}
         </Button>
         <Button
@@ -506,9 +503,9 @@ export function DocPane({
           onClick={() => setFull((f) => !f)}
         >
           {full ? (
-            <Minimize2 className="h-4 w-4" aria-hidden="true" />
+            <Minimize2 className="size-4" aria-hidden="true" />
           ) : (
-            <Maximize2 className="h-4 w-4" aria-hidden="true" />
+            <Maximize2 className="size-4" aria-hidden="true" />
           )}
         </Button>
       </div>
@@ -523,7 +520,7 @@ export function DocPane({
         )}
       >
         {!activeNode ? (
-          <p className="text-xs text-muted-foreground">
+          <p className={TEXT_META}>
             Open a document from the tree on the left.
           </p>
         ) : isChapter ? (
@@ -541,7 +538,7 @@ export function DocPane({
             onStateChange={setChapterState}
           />
         ) : viewMode === "markdown" ? (
-          <pre className="whitespace-pre-wrap break-words font-mono text-[13px] leading-[1.85]">
+          <pre className="whitespace-pre-wrap break-words font-mono text-small leading-[1.85]">
             {rendered?.markdown ?? ""}
           </pre>
         ) : (
@@ -550,7 +547,7 @@ export function DocPane({
       </div>
 
       {/* Status line — what this document is. ONE component for every kind. */}
-      <div className="border-t px-3 py-1.5 text-[11px] text-muted-foreground">
+      <div className={cn("border-t px-3 py-1.5", TEXT_CAPTION)}>
         {isChapter
           ? isFinalDocument
             ? `locked · the author's prose · ${formatWordCount(chapterState.words)} words`

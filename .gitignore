@@ -91,3 +91,5 @@ public/_plate-*.jpg
 public/_sheet.html
 scripts/.tmp-*.cjs
 scripts/.opt.json
+# AutoClaw runtime state (session transcripts, background logs): never commit.
+.zwork/

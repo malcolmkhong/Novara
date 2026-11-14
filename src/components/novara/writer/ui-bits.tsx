@@ -18,6 +18,13 @@ import { useWriterStore } from "@/hooks/use-writer-store";
 import { cn } from "@/lib/utils";
 
 /**
+ * The chevron that marks a collapsed disclosure (a model picker, a pinned
+ * chip). It lives in one place so the two disclosure widgets cannot drift
+ * apart in size or opacity.
+ */
+export const CHEVRON_ICON = "size-3 opacity-60";
+
+/**
  * Pin-to-Chat toggle (Phase 8) — pins/unpins one context ref for the novel.
  * Pinned refs appear as chips in the conversation composer and are resolved
  * server-side when the run starts (client content is never trusted).
@@ -57,9 +64,9 @@ export function PinButton({
       onClick={() => togglePin(novelId, target)}
     >
       {pinned ? (
-        <PinOff className="h-3.5 w-3.5" aria-hidden="true" />
+        <PinOff className="size-3.5" aria-hidden="true" />
       ) : (
-        <Pin className="h-3.5 w-3.5" aria-hidden="true" />
+        <Pin className="size-3.5" aria-hidden="true" />
       )}
       {label}
     </Button>
@@ -105,7 +112,7 @@ export function ConfirmDialog({
 
 const STATE_STYLES: Record<CanonState, string> = {
   draft: "bg-muted text-muted-foreground",
-  final: "bg-emerald-100 text-emerald-800 border-emerald-200",
+  final: "bg-success-surface-strong text-success-text-heading border-success-border",
 };
 
 /**
@@ -127,7 +134,7 @@ export function StateChip({
   return (
     <Badge
       variant="outline"
-      className={cn("text-[11px]", STATE_STYLES[status], className)}
+      className={cn("text-caption", STATE_STYLES[status], className)}
     >
       {canonStateLabel(status)}
     </Badge>

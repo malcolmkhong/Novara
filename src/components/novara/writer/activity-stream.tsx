@@ -71,9 +71,9 @@ export function ActivityStream({
   return (
     <Card className={className}>
       <CardHeader className="flex flex-row items-center gap-2">
-        <Activity className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
+        <Activity className="size-4 text-muted-foreground" aria-hidden="true" />
         <CardTitle className="text-base">Activity</CardTitle>
-        <Badge variant="outline" className="ml-auto font-mono text-[11px]">
+        <Badge variant="outline" className="ml-auto font-mono text-caption">
           {events.length}
         </Badge>
       </CardHeader>
@@ -100,9 +100,9 @@ export function ActivityStream({
                   >
                     <Icon
                       className={cn(
-                        "mt-0.5 h-3.5 w-3.5 shrink-0",
+                        "mt-0.5 size-3.5 shrink-0",
                         event.kind === "error"
-                          ? "text-rose-600"
+                          ? "text-danger-text"
                           : "text-muted-foreground",
                       )}
                       aria-hidden="true"
@@ -118,7 +118,7 @@ export function ActivityStream({
                     </span>
                     <time
                       dateTime={event.createdAt}
-                      className="shrink-0 font-mono text-[10px] leading-5 text-muted-foreground"
+                      className="shrink-0 font-mono text-tiny leading-5 text-muted-foreground"
                     >
                       {formatTimestamp(event.createdAt)}
                     </time>

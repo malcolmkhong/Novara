@@ -1,6 +1,6 @@
 "use client";
 
-import { Check, CreditCard, Info } from "lucide-react";
+import { CreditCard, Info } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -18,6 +18,8 @@ import {
   formatPrice,
 } from "@/config/subscription-plans";
 import { cn } from "@/lib/utils";
+import { Container, FeatureList } from "./kit";
+import { TEXT_HEADING, TEXT_META, TEXT_VALUE } from "@/components/novara/styles";
 
 interface PlansPageProps {
   onEnterWriter: () => void;
@@ -25,7 +27,7 @@ interface PlansPageProps {
 
 export function PlansPage({ onEnterWriter }: PlansPageProps) {
   return (
-    <div className="mx-auto max-w-6xl px-4 py-16 sm:px-6">
+    <Container className="py-16">
       {/* Header */}
       <div className="mx-auto max-w-2xl text-center">
         <Badge variant="outline" className="mb-4">
@@ -40,8 +42,8 @@ export function PlansPage({ onEnterWriter }: PlansPageProps) {
       </div>
 
       {/* Payment gateway status — honest notice */}
-      <Alert className="mx-auto mt-8 max-w-3xl border-amber-300 bg-amber-50/60 text-amber-950 dark:bg-amber-950/20 dark:text-amber-100">
-        <CreditCard className="h-4 w-4" aria-hidden="true" />
+      <Alert className="mx-auto mt-8 max-w-3xl border-warning-border-strong bg-warning-surface/60 text-warning-text-deep">
+        <CreditCard className="size-4" aria-hidden="true" />
         <AlertTitle>{PAYMENT_GATEWAY_STATUS.label}</AlertTitle>
         <AlertDescription>{PAYMENT_GATEWAY_STATUS.note}</AlertDescription>
       </Alert>
@@ -62,7 +64,7 @@ export function PlansPage({ onEnterWriter }: PlansPageProps) {
               </Badge>
             )}
             <CardHeader className="pb-4 text-center">
-              <h2 className="font-display text-xl font-bold">{plan.name}</h2>
+              <h2 className={TEXT_HEADING}>{plan.name}</h2>
               <p className="min-h-10 text-sm text-muted-foreground">
                 {plan.tagline}
               </p>
@@ -74,34 +76,27 @@ export function PlansPage({ onEnterWriter }: PlansPageProps) {
               </div>
             </CardHeader>
             <CardContent className="flex-1">
-              <ul className="space-y-2.5 text-sm">
-                {plan.features.map((feature) => (
-                  <li key={feature} className="flex items-start gap-2">
-                    <Check
-                      className="mt-0.5 h-4 w-4 shrink-0 text-primary"
-                      aria-hidden="true"
-                    />
-                    <span>{feature}</span>
-                  </li>
-                ))}
-              </ul>
+              <FeatureList
+                items={plan.features}
+                className="space-y-2.5 text-sm"
+              />
               <Separator className="my-5" />
-              <dl className="space-y-2 text-xs text-muted-foreground">
+              <dl className={cn("space-y-2", TEXT_META)}>
                 <div className="flex justify-between">
                   <dt>Novels</dt>
-                  <dd className="font-medium text-foreground">
+                  <dd className={TEXT_VALUE}>
                     {formatLimit(plan.limits.novels)}
                   </dd>
                 </div>
                 <div className="flex justify-between">
                   <dt>AI draft words</dt>
-                  <dd className="font-medium text-foreground">
+                  <dd className={TEXT_VALUE}>
                     {formatLimit(plan.limits.aiDraftWordsPerMonth)} / mo
                   </dd>
                 </div>
                 <div className="flex justify-between">
                   <dt>Agent team</dt>
-                  <dd className="font-medium text-foreground">
+                  <dd className={TEXT_VALUE}>
                     {plan.limits.agentTeam === "all"
                       ? "All 5 agents"
                       : "Core agents"}
@@ -109,7 +104,7 @@ export function PlansPage({ onEnterWriter }: PlansPageProps) {
                 </div>
                 <div className="flex justify-between">
                   <dt>Support</dt>
-                  <dd className="font-medium text-foreground">
+                  <dd className={TEXT_VALUE}>
                     {plan.limits.support}
                   </dd>
                 </div>
@@ -125,7 +120,7 @@ export function PlansPage({ onEnterWriter }: PlansPageProps) {
                   <Button className="w-full" disabled>
                     {plan.ctaLabel}
                   </Button>
-                  <p className="text-xs text-muted-foreground">
+                  <p className={TEXT_META}>
                     Available after payment gateway launch
                   </p>
                 </>
@@ -138,7 +133,7 @@ export function PlansPage({ onEnterWriter }: PlansPageProps) {
       {/* Notes */}
       <div className="mx-auto mt-12 max-w-3xl space-y-4">
         <div className="flex gap-3 rounded-lg border bg-card p-4 text-sm text-muted-foreground">
-          <Info className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+          <Info className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
           <p>
             Usage limits are part of the plan design and will be enforced once
             accounts and subscriptions are introduced. The current preview
@@ -147,7 +142,7 @@ export function PlansPage({ onEnterWriter }: PlansPageProps) {
           </p>
         </div>
         <div className="flex gap-3 rounded-lg border bg-card p-4 text-sm text-muted-foreground">
-          <Info className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+          <Info className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
           <p>
             Your novels, chapters, characters and world settings always belong
             to you. Every plan includes portable JSON backups so you can export
@@ -155,6 +150,6 @@ export function PlansPage({ onEnterWriter }: PlansPageProps) {
           </p>
         </div>
       </div>
-    </div>
+    </Container>
   );
 }

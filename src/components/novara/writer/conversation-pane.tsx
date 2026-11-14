@@ -20,7 +20,6 @@ import {
   ChevronDown,
   ChevronRight,
   Info,
-  Loader2,
   MessageSquare,
   PanelRight,
   PenLine,
@@ -59,7 +58,6 @@ import {
 } from "@/lib/novara/models";
 import type { CreditsSnapshot } from "@/lib/usage/usage-shapes";
 import type { NovelMeta } from "@/lib/novara/types";
-import type { CenterView } from "@/config/writer";
 import { AGENT_BACKEND_LABEL, RUN_STATUS_META } from "@/config/writer";
 import { cn } from "@/lib/utils";
 import { ActivityStream } from "./activity-stream";
@@ -67,6 +65,8 @@ import { ContextUsageSegment } from "./context-usage-panel";
 import { ModeSwitch } from "./mode-switch";
 import { PromptBox, type PinOption } from "./prompt-box";
 import { TaskBoard } from "./task-board";
+import { Spinner } from "@/components/novara/primitives";
+import { TEXT_META, TEXT_CAPTION } from "@/components/novara/styles";
 
 const ACTIVE_STATUSES: readonly AgentRunStatus[] = [
   "running",
@@ -168,7 +168,7 @@ function RunSummaryLine({
         <span className="ml-auto flex shrink-0 items-center gap-1">
           Report
           <ChevronRight
-            className={cn("h-3.5 w-3.5 transition-transform", expanded && "rotate-90")}
+            className={cn("size-3.5 transition-transform", expanded && "rotate-90")}
             aria-hidden="true"
           />
         </span>
@@ -225,7 +225,7 @@ function FinalReportCard({ report }: { report: RunFinalReport }) {
               key={k}
               className="flex items-baseline justify-between gap-2 border-b border-dashed pb-1"
             >
-              <span className="text-xs text-muted-foreground">{k}</span>
+              <span className={TEXT_META}>{k}</span>
               <span className="font-mono text-xs">
                 {report.reported[k] ?? "—"} → {report.verified[k] ?? "—"}
               </span>
@@ -238,10 +238,10 @@ function FinalReportCard({ report }: { report: RunFinalReport }) {
             {report.blockingIssues.map((issue) => (
               <li
                 key={issue}
-                className="flex items-start gap-1.5 text-xs text-rose-700"
+                className="flex items-start gap-1.5 text-xs text-danger-text-strong"
               >
                 <AlertTriangle
-                  className="mt-0.5 h-3.5 w-3.5 shrink-0"
+                  className="mt-0.5 size-3.5 shrink-0"
                   aria-hidden="true"
                 />
                 <span>{issue}</span>
@@ -251,13 +251,13 @@ function FinalReportCard({ report }: { report: RunFinalReport }) {
         )}
 
         {allMatch && (
-          <p className="flex items-center gap-1.5 text-xs text-emerald-700">
-            <CheckCircle2 className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+          <p className="flex items-center gap-1.5 text-xs text-success-text-strong">
+            <CheckCircle2 className="size-3.5 shrink-0" aria-hidden="true" />
             All reported numbers match DB-verified values.
           </p>
         )}
 
-        <p className="text-[11px] text-muted-foreground">
+        <p className={TEXT_CAPTION}>
           Verified against the database — reported (model) vs measured (DB) per line.
         </p>
       </CardContent>
@@ -318,15 +318,15 @@ function ProcessBlock({ events }: { events: AgentEvent[] }) {
         aria-expanded={open}
         className="flex w-full items-center gap-2 px-3 py-2 text-left"
       >
-        <Icon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+        <Icon className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
         <span className="flex-1 text-xs font-medium text-muted-foreground">
           {label}
           <span className="ml-1.5 font-mono">({events.length})</span>
         </span>
         {open ? (
-          <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" aria-hidden="true" />
+          <ChevronDown className="size-3.5 text-muted-foreground" aria-hidden="true" />
         ) : (
-          <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" aria-hidden="true" />
+          <ChevronRight className="size-3.5 text-muted-foreground" aria-hidden="true" />
         )}
       </button>
       {open && (
@@ -338,7 +338,7 @@ function ProcessBlock({ events }: { events: AgentEvent[] }) {
             >
               <Icon
                 className={cn(
-                  "mt-0.5 h-3 w-3 shrink-0",
+                  "mt-0.5 size-3 shrink-0",
                   event.kind === "write" ? "text-primary" : "text-muted-foreground"
                 )}
                 aria-hidden="true"
@@ -371,7 +371,7 @@ function ConversationStream({ events }: { events: AgentEvent[] }) {
             <div key={event.id} className="flex items-start gap-2">
               <span
                 className={cn(
-                  "flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[10px] font-bold uppercase",
+                  "flex size-6 shrink-0 items-center justify-center rounded-full text-tiny font-bold uppercase",
                   ACTOR_AVATAR[actor] ?? "bg-primary/10 text-primary"
                 )}
                 aria-hidden="true"
@@ -381,7 +381,7 @@ function ConversationStream({ events }: { events: AgentEvent[] }) {
               <div className="max-w-[85%] rounded-lg rounded-tl-sm border bg-card px-3 py-2 text-[15px] leading-[1.7]">
                 <span
                   className={cn(
-                    "mb-0.5 block text-[10px] font-semibold uppercase tracking-wide",
+                    "mb-0.5 block text-tiny font-semibold uppercase tracking-wide",
                     ACTOR_NAME[actor] ?? "text-muted-foreground"
                   )}
                 >
@@ -397,9 +397,9 @@ function ConversationStream({ events }: { events: AgentEvent[] }) {
             <div
               key={event.id}
               role="alert"
-              className="flex items-start gap-2 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs leading-5 text-rose-800"
+              className="flex items-start gap-2 rounded-lg border border-danger-border bg-danger-surface px-3 py-2 text-xs leading-5 text-danger-text-heading"
             >
-              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+              <AlertTriangle className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
               <span className="font-medium">{event.summary}</span>
             </div>
           );
@@ -412,8 +412,8 @@ function ConversationStream({ events }: { events: AgentEvent[] }) {
               ? CheckCircle2
               : Info;
         return (
-          <div key={event.id} className="flex items-center gap-2 pl-8 text-xs text-muted-foreground">
-            <Icon className="h-3 w-3 shrink-0" aria-hidden="true" />
+          <div key={event.id} className={cn("flex items-center gap-2 pl-8", TEXT_META)}>
+            <Icon className="size-3 shrink-0" aria-hidden="true" />
             <span>{event.summary}</span>
           </div>
         );
@@ -447,27 +447,27 @@ function ApprovalCard({
     <div
       ref={cardRef}
       role="alert"
-      className="rounded-lg border border-amber-300 bg-amber-50 p-3"
+      className="rounded-lg border border-warning-border-strong bg-warning-surface p-3"
     >
       <div className="flex items-start gap-2">
-        <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" aria-hidden="true" />
+        <ShieldCheck className="mt-0.5 size-4 shrink-0 text-warning-text" aria-hidden="true" />
         <div className="min-w-0 flex-1">
-          <p className="text-sm font-semibold text-amber-900">{request.title}</p>
+          <p className="text-sm font-semibold text-warning-text-deep">{request.title}</p>
           <div className="mt-1 flex flex-wrap items-center gap-2">
-            <span className="text-xs font-medium text-amber-900">
+            <span className="text-xs font-medium text-warning-text-deep">
               Will write to {request.targetLabel}
             </span>
             {request.wordCount != null && (
-              <Badge variant="outline" className="text-[10px] font-normal">
+              <Badge variant="outline" className="text-tiny font-normal">
                 ~{request.wordCount} words
               </Badge>
             )}
           </div>
         </div>
       </div>
-      <p className="mt-2 text-xs leading-5 text-amber-800">{request.summary}</p>
-      <p className="mt-1.5 flex items-center gap-1 text-[11px] text-amber-700">
-        <Info className="h-3 w-3 shrink-0" aria-hidden="true" />
+      <p className="mt-2 text-xs leading-5 text-warning-text-heading">{request.summary}</p>
+      <p className="mt-1.5 flex items-center gap-1 text-caption text-warning-text-strong">
+        <Info className="size-3 shrink-0" aria-hidden="true" />
         Rejecting pauses the run — nothing has been written either way.
       </p>
       <div className="mt-3 flex justify-end gap-2">
@@ -475,7 +475,7 @@ function ApprovalCard({
           Reject
         </Button>
         <Button ref={approveRef} size="sm" onClick={onApprove} disabled={busy}>
-          {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />}
+          {busy && <Spinner size="md" />}
           Approve
         </Button>
       </div>
@@ -508,11 +508,11 @@ function RunCard({
   return (
     <div className="mx-auto w-full max-w-[680px] rounded-2xl border bg-card px-3 py-2.5">
       <div className="flex items-center gap-2 px-1">
-        <p className="min-w-0 flex-1 truncate border-l-2 border-primary/40 pl-2 text-xs text-muted-foreground">
+        <p className={cn("min-w-0 flex-1 truncate border-l-2 border-primary/40 pl-2", TEXT_META)}>
           “{goal}”
         </p>
         <Button variant="outline" size="sm" onClick={onCancel} aria-label="Cancel run">
-          <X className="h-3.5 w-3.5" aria-hidden="true" />
+          <X className="size-3.5" aria-hidden="true" />
           Cancel
         </Button>
       </div>
@@ -573,7 +573,7 @@ function ComposerStatusLine({
     : null;
 
   return (
-    <p className="mx-auto mt-1.5 w-full max-w-[680px] truncate text-center text-[11px] text-muted-foreground">
+    <p className={cn("mx-auto mt-1.5 w-full max-w-[680px] truncate text-center", TEXT_CAPTION)}>
       <ContextUsageSegment
         novelId={novelId}
         modelId={modelId}
@@ -873,7 +873,7 @@ export function ConversationPane({
               onClick={onOpenPreview}
               aria-label="Open artifact panel"
             >
-              <PanelRight className="h-4 w-4" aria-hidden="true" />
+              <PanelRight className="size-4" aria-hidden="true" />
             </Button>
           )}
           {/* Chat / Board — one 32px segmented control. The track is a plain
@@ -896,7 +896,7 @@ export function ConversationPane({
                 size="sm"
                 variant="ghost"
                 className={cn(
-                  "h-full gap-1 rounded-none px-2.5 text-[13px] leading-none",
+                  "h-full gap-1 rounded-none px-2.5 text-small leading-none",
                   view === id
                     ? "bg-muted font-medium text-foreground"
                     : "text-muted-foreground hover:bg-muted/50 hover:text-foreground",
@@ -904,7 +904,7 @@ export function ConversationPane({
                 aria-pressed={view === id}
                 onClick={() => setView(novel.id, id)}
               >
-                <Icon className="h-3.5 w-3.5" aria-hidden="true" />
+                <Icon className="size-3.5" aria-hidden="true" />
                 {label}
               </Button>
             ))}
@@ -916,9 +916,9 @@ export function ConversationPane({
       {AGENT_BACKEND === "mock" && (
         <div
           role="note"
-          className="flex items-start gap-2 border-b bg-amber-50 px-3 py-1.5 text-[11px] leading-4 text-amber-800"
+          className="flex items-start gap-2 border-b bg-warning-surface px-3 py-1.5 text-caption leading-4 text-warning-text-heading"
         >
-          <Info className="mt-0.5 h-3 w-3 shrink-0" aria-hidden="true" />
+          <Info className="mt-0.5 size-3 shrink-0" aria-hidden="true" />
           <span>{AGENT_BACKEND_LABEL} — simulated, nothing touches your novel.</span>
         </div>
       )}
@@ -942,7 +942,7 @@ export function ConversationPane({
             <button
               type="button"
               onClick={handleReviewApproval}
-              className="mb-2 flex w-full items-center gap-2 rounded-lg border border-primary/40 bg-primary/5 px-3 py-2 text-left text-[13px] font-medium text-primary hover:bg-primary/10"
+              className="mb-2 flex w-full items-center gap-2 rounded-lg border border-primary/40 bg-primary/5 px-3 py-2 text-left text-small font-medium text-primary hover:bg-primary/10"
             >
               {pendingApprovalCount} approval{pendingApprovalCount === 1 ? "" : "s"} waiting — Review
             </button>
@@ -971,7 +971,7 @@ export function ConversationPane({
                   that used to carry this button is gone. */}
               {detail.run.status === "paused" && (
                 <Button variant="outline" size="sm" className="mt-2" onClick={handleCancelRun}>
-                  <X className="h-3.5 w-3.5" aria-hidden="true" />
+                  <X className="size-3.5" aria-hidden="true" />
                   Discard paused run
                 </Button>
               )}
@@ -983,7 +983,7 @@ export function ConversationPane({
               {!detail ? (
                 <div className="flex min-h-[320px] flex-col items-center justify-center px-6 text-center">
                   <h2 className="text-[17px] font-medium">Give the team a goal</h2>
-                  <p className="mt-1.5 max-w-[420px] text-[13px] text-muted-foreground">
+                  <p className="mt-1.5 max-w-[420px] text-small text-muted-foreground">
                     Describe what you want written, or point at a chapter or outline beat.
                   </p>
                   <div className="mt-4 flex flex-wrap justify-center gap-2">
@@ -1004,8 +1004,8 @@ export function ConversationPane({
                 <>
                   <ConversationStream events={events} />
                   {detail?.run.status === "running" && (
-                    <div className="flex items-center gap-2 pl-8 text-xs text-muted-foreground">
-                      <Loader2 className="h-3 w-3 animate-spin" aria-hidden="true" />
+                    <div className={cn("flex items-center gap-2 pl-8", TEXT_META)}>
+                      <Spinner size="sm" />
                       Working…
                     </div>
                   )}

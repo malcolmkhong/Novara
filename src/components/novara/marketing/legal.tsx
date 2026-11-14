@@ -2,6 +2,8 @@
 
 import { Badge } from "@/components/ui/badge";
 import { BRAND } from "@/config/novara";
+import { cn } from "@/lib/utils";
+import { TEXT_PROSE } from "@/components/novara/styles";
 
 type LegalKind = "terms" | "privacy";
 
@@ -111,7 +113,7 @@ export function LegalPage({ kind }: { kind: LegalKind }) {
             {section.body.map((paragraph, i) => (
               <p
                 key={i}
-                className="mt-3 text-sm leading-relaxed text-muted-foreground"
+                className={cn("mt-3", TEXT_PROSE)}
               >
                 {paragraph}
               </p>

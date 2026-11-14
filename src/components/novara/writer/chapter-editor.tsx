@@ -15,7 +15,6 @@ import { useEffect, useRef, useState } from "react";
 import {
   ChevronDown,
   ChevronUp,
-  Loader2,
   RotateCcw,
   ScrollText,
   Sparkles,
@@ -39,6 +38,8 @@ import { cn } from "@/lib/utils";
 import { RichEditor } from "@/components/novara/editor/rich-editor";
 import { ConfirmDialog } from "./ui-bits";
 import { MarkdownDocument } from "./markdown-document";
+import { Spinner } from "@/components/novara/primitives";
+import { TEXT_META, TEXT_LABEL } from "@/components/novara/styles";
 
 export interface ChapterDocumentState {
   words: number;
@@ -83,6 +84,8 @@ export function ChapterEditor({
 }: ChapterEditorProps) {
   const { toast } = useToast();
   const selected = chapters.find((c) => c.id === selectedId) ?? null;
+  /** The selected chapter's id, or null when no chapter is selected. */
+  const selectedChapterId = selected?.id ?? null;
   const isFinal = selected?.status === "final";
 
   const [content, setContent] = useState("");
@@ -121,7 +124,17 @@ export function ChapterEditor({
 
   // Switching chapters replaces the local buffer. The pane's tab owns which
   // chapter is open, so an old tab can never show another chapter's prose.
+  //
+  // The buffer resets when the open chapter changes, not whenever that
+  // chapter's stored prose changes: an external update (a save from the
+  // agent, a restored version) must not clobber keystrokes the user is
+  // still typing. `loadedChapterRef` carries that intent explicitly, so the
+  // effect can list its real dependencies without re-running on every
+  // content change.
+  const loadedChapterRef = useRef<{ id: string | null } | null>(null);
   useEffect(() => {
+    if (loadedChapterRef.current?.id === selectedId) return;
+    loadedChapterRef.current = { id: selectedId };
     if (timer.current) {
       clearTimeout(timer.current);
       timer.current = null;
@@ -131,7 +144,7 @@ export function ChapterEditor({
     setBrief(selected?.brief ?? "");
     setDirty(false);
     setActiveVersion(null);
-  }, [selectedId]);
+  }, [selectedId, selected?.brief, selected?.content]);
 
   useEffect(() => {
     stateRef.current?.({ words: countWords(content), dirty, saving, content });
@@ -270,13 +283,13 @@ export function ChapterEditor({
   };
 
   useEffect(() => {
-    if (!historyOpen || !selected) return;
+    if (!historyOpen || !selectedChapterId) return;
     let cancelled = false;
     setVersionsLoading(true);
     setVersionsError(null);
     setVersions(null);
     setActiveVersion(null);
-    void getChapterVersions(selected.id)
+    void getChapterVersions(selectedChapterId)
       .then((r) => {
         if (!cancelled) setVersions(r.versions);
       })
@@ -289,7 +302,7 @@ export function ChapterEditor({
     return () => {
       cancelled = true;
     };
-  }, [historyOpen, selectedId]);
+  }, [historyOpen, selectedChapterId]);
 
   const restoreVersion = async (version: ChapterVersionRow) => {
     if (!selected) return;
@@ -318,7 +331,7 @@ export function ChapterEditor({
 
   if (!selected) {
     return (
-      <p className="text-xs text-muted-foreground">
+      <p className={TEXT_META}>
         Select a chapter — or add a new one — to start writing.
       </p>
     );
@@ -349,12 +362,12 @@ export function ChapterEditor({
                 aria-expanded={briefOpen}
                 className="flex items-center gap-1.5 py-0.5 text-left text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
               >
-                <ScrollText className="h-3.5 w-3.5" aria-hidden="true" />
+                <ScrollText className="size-3.5" aria-hidden="true" />
                 Brief / Outline
                 {briefOpen ? (
-                  <ChevronUp className="h-3.5 w-3.5" aria-hidden="true" />
+                  <ChevronUp className="size-3.5" aria-hidden="true" />
                 ) : (
-                  <ChevronDown className="h-3.5 w-3.5" aria-hidden="true" />
+                  <ChevronDown className="size-3.5" aria-hidden="true" />
                 )}
               </button>
               <span className="flex-1" />
@@ -363,29 +376,29 @@ export function ChapterEditor({
                   <Button
                     size="sm"
                     variant="ghost"
-                    className="h-7 gap-1 px-1.5 text-[11px]"
+                    className="h-7 gap-1 px-1.5 text-caption"
                     onClick={() => setConfirmAbDraft(true)}
                     disabled={drafting || abDrafting || saving}
                     aria-label="Generate two AI draft alternatives"
                   >
                     {abDrafting ? (
-                      <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+                      <Spinner size="md" />
                     ) : (
-                      <SplitSquareHorizontal className="h-3.5 w-3.5" aria-hidden="true" />
+                      <SplitSquareHorizontal className="size-3.5" aria-hidden="true" />
                     )}
                     A/B Draft
                   </Button>
                   <Button
                     size="sm"
                     variant="ghost"
-                    className="h-7 gap-1 px-1.5 text-[11px]"
+                    className="h-7 gap-1 px-1.5 text-caption"
                     onClick={() => setConfirmDraft(true)}
                     disabled={drafting || abDrafting || saving}
                   >
                     {drafting ? (
-                      <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+                      <Spinner size="md" />
                     ) : (
-                      <Sparkles className="h-3.5 w-3.5" aria-hidden="true" />
+                      <Sparkles className="size-3.5" aria-hidden="true" />
                     )}
                     AI Draft
                   </Button>
@@ -420,7 +433,7 @@ export function ChapterEditor({
           className="nice-scroll min-h-[320px] flex-1 overflow-y-auto px-4 py-3"
           aria-label="Chapter markdown source"
         >
-          <pre className="mx-auto max-w-prose whitespace-pre-wrap break-words font-mono text-[13px] leading-[1.85]">
+          <pre className="mx-auto max-w-prose whitespace-pre-wrap break-words font-mono text-small leading-[1.85]">
             {content || "Nothing here yet — switch to Document to start this chapter."}
           </pre>
         </div>
@@ -470,8 +483,8 @@ export function ChapterEditor({
             {abResult?.variants?.slice(0, 2).map((variant, i) => (
               <div key={i} className="flex min-h-0 flex-col rounded-lg border bg-muted/20">
                 <div className="flex items-center justify-between border-b px-3 py-2">
-                  <span className="text-sm font-medium">Draft {String.fromCharCode(65 + i)}</span>
-                  <span className="text-xs text-muted-foreground">
+                  <span className={TEXT_LABEL}>Draft {String.fromCharCode(65 + i)}</span>
+                  <span className={TEXT_META}>
                     {formatWordCount(variant.wordCount)} words
                   </span>
                 </div>
@@ -511,7 +524,7 @@ export function ChapterEditor({
               className="flex items-center justify-center gap-2 py-10 text-sm text-muted-foreground"
               role="status"
             >
-              <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+              <Spinner size="lg" />
               Loading versions…
             </div>
           ) : versionsError ? (
@@ -536,7 +549,7 @@ export function ChapterEditor({
                       )}
                     >
                       <span className="font-mono text-xs">Draft {version.draftNo}</span>
-                      <span className="shrink-0 text-xs text-muted-foreground">
+                      <span className={cn("shrink-0", TEXT_META)}>
                         {formatWordCount(version.wordCount)} words
                       </span>
                       <Badge
@@ -547,11 +560,11 @@ export function ChapterEditor({
                               ? "default"
                               : "secondary"
                         }
-                        className="text-[11px]"
+                        className="text-caption"
                       >
                         {version.createdBy}
                       </Badge>
-                      <span className="ml-auto truncate text-xs text-muted-foreground">
+                      <span className={cn("ml-auto truncate", TEXT_META)}>
                         {new Date(version.createdAt).toLocaleString()}
                       </span>
                       <Button
@@ -580,9 +593,9 @@ export function ChapterEditor({
                       title={isFinal ? "Reopen to edit before restoring" : undefined}
                     >
                       {restoring ? (
-                        <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+                        <Spinner size="lg" />
                       ) : (
-                        <RotateCcw className="h-4 w-4" aria-hidden="true" />
+                        <RotateCcw className="size-4" aria-hidden="true" />
                       )}
                       Restore this draft
                     </Button>

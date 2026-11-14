@@ -47,7 +47,6 @@
 // ---------------------------------------------------------------------------
 
 import { useEffect, useState } from "react";
-import { Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -66,24 +65,11 @@ import type {
   LedgerSurfaceUsage,
   UsageHistoryBlock,
 } from "@/lib/usage/usage-shapes";
-
-/** Friendly labels for the app-wide ledger surfaces (P4 / T5). */
-const SURFACE_LABELS: Record<string, string> = {
-  agent: "Agent team runs",
-  draft: "Chapter drafts",
-  review: "Chapter reviews",
-  sediment: "Memory sediment",
-  studio: "Novel studio (init/plan/write)",
-  detect: "AI detectors",
-  generate: "Concept Q&A",
-  wizard: "Onboarding wizard",
-  "ai-team": "Onboarding team build",
-  other: "Other",
-};
-
-function surfaceLabel(surface: string): string {
-  return SURFACE_LABELS[surface] ?? surface;
-}
+import { surfaceLabel } from "@/lib/usage/usage-shapes";
+import { Spinner } from "@/components/novara/primitives";
+import { UsageRow } from "@/components/novara/writer/usage-rows";
+import { cn } from "@/lib/utils";
+import { ROW_HEAD, TEXT_MICRO, TEXT_NOTE, TEXT_PANEL_TITLE, TEXT_SECTION } from "@/components/novara/styles";
 
 /**
  * §5.2 verdict, verbatim from the P3 meter investigation. Step 64: the
@@ -164,10 +150,10 @@ export function UsagePanel({
 
   return (
     <div>
-      <div className="flex items-baseline justify-between gap-2">
-        <p className="text-xs font-semibold">Usage &amp; balance</p>
+      <div className={ROW_HEAD}>
+        <p className={TEXT_PANEL_TITLE}>Usage &amp; balance</p>
         {guestAt ? (
-          <p className="text-[10px] text-muted-foreground">
+          <p className={TEXT_MICRO}>
             {`guest since ${new Date(guestAt).toLocaleDateString()}`}
           </p>
         ) : null}
@@ -175,40 +161,40 @@ export function UsagePanel({
 
       {/* Account usage — the persisted ledger, every surface (Ruling 2) */}
       <div className="mt-3">
-        <div className="flex items-baseline justify-between gap-2">
-          <p className="text-xs font-semibold">Account usage</p>
-          <p className="max-w-[10rem] text-right text-[10px] leading-3 text-muted-foreground">
+        <div className={ROW_HEAD}>
+          <p className={TEXT_PANEL_TITLE}>Account usage</p>
+          <p className="max-w-[10rem] text-right text-tiny leading-3 text-muted-foreground">
             persisted ledger · all surfaces
           </p>
         </div>
         {failed ? (
-          <p className="mt-1 text-[10px] leading-4 text-destructive">
+          <p className="mt-1 text-tiny leading-4 text-destructive">
             Usage ledger could not be loaded — nothing is shown rather than
             showing stale numbers.
           </p>
         ) : !snapshot ? (
-          <p className="mt-1 text-[10px] leading-4 text-muted-foreground">
+          <p className={TEXT_NOTE}>
             Loading account usage…
           </p>
         ) : snapshot.totalCalls === 0 ? (
-          <p className="mt-1 text-[10px] leading-4 text-muted-foreground">
+          <p className={TEXT_NOTE}>
             No usage rows yet — persisted tracking began with Phase 5; calls
             before it were never recorded (no backfill).
           </p>
         ) : (
           <>
-            <p className="mt-1.5 flex items-center justify-between font-mono text-[11px]">
+            <p className="mt-1.5 flex items-center justify-between font-mono text-caption">
               <span>
                 {snapshot.totalCalls} calls
                 {snapshot.failedCalls > 0 && (
-                  <span className="ml-1 font-sans text-[10px] text-muted-foreground">
+                  <span className={cn("ml-1 font-sans", TEXT_MICRO)}>
                     (incl. {snapshot.failedCalls} failed · 0 tokens)
                   </span>
                 )}
               </span>
               <span>Σ {formatTokenCount(snapshot.totalTokens)} tok</span>
             </p>
-            <p className="mt-0.5 flex items-center justify-between font-mono text-[10px] text-muted-foreground">
+            <p className={cn("mt-0.5 flex items-center justify-between font-mono", TEXT_MICRO)}>
               <span>
                 in {formatTokenCount(snapshot.totalPromptTokens)} · out{" "}
                 {formatTokenCount(snapshot.totalCompletionTokens)}
@@ -216,9 +202,9 @@ export function UsagePanel({
             </p>
 
             {/* P5-c account ESTIMATE — upper bound over PRICED groups only */}
-            <p className="mt-1 flex items-center justify-between font-mono text-[10px]">
+            <p className="mt-1 flex items-center justify-between font-mono text-tiny">
               <span>{formatEstimateUsd(snapshot.estimate.usd)}</span>
-              <span className="font-sans text-[9px] text-muted-foreground">
+              <span className="font-sans text-micro text-muted-foreground">
                 {snapshot.estimate.unpricedGroups > 0
                   ? `${snapshot.estimate.unpricedGroups} model group${
                       snapshot.estimate.unpricedGroups === 1 ? "" : "s"
@@ -228,63 +214,51 @@ export function UsagePanel({
             </p>
 
             <div className="mt-2 pr-1">
-              <p className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+              <p className={TEXT_SECTION}>
                 By surface
               </p>
               <ul className="mt-1 space-y-1">
                 {snapshot.surfaces.map((surface: LedgerSurfaceUsage) => (
-                  <li
+                  <UsageRow
                     key={surface.surface}
-                    className="flex items-center gap-2 text-[11px]"
-                  >
-                    <span className="min-w-0 flex-1 truncate text-muted-foreground">
-                      {surfaceLabel(surface.surface)}
-                    </span>
-                    <span className="shrink-0 font-mono text-[10px] text-muted-foreground/70">
-                      ×{surface.calls}
-                    </span>
-                    <span className="w-14 text-right font-mono">
-                      {formatTokenCount(surface.totalTokens)}
-                    </span>
-                  </li>
+                    label={surfaceLabel(surface.surface)}
+                    calls={surface.calls}
+                    tokens={formatTokenCount(surface.totalTokens)}
+                  />
                 ))}
               </ul>
 
               {snapshot.models.length > 0 && (
                 <>
-                  <p className="mt-2 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                  <p className={cn("mt-2", TEXT_SECTION)}>
                     By model · ESTIMATE (upper bound)
                   </p>
                   <ul className="mt-1 space-y-1">
                     {snapshot.models.map((model) => (
-                      <li
+                      <UsageRow
                         key={model.modelId}
-                        className="flex items-center gap-2 text-[11px]"
-                      >
-                        <span className="min-w-0 flex-1 truncate text-muted-foreground">
-                          {modelLabel(model)}
-                        </span>
-                        <span className="shrink-0 font-mono text-[10px] text-muted-foreground/70">
-                          ×{model.calls}
-                          {model.failedCalls > 0 && (
+                        label={modelLabel(model)}
+                        calls={model.calls}
+                        tokens={formatTokenCount(model.totalTokens)}
+                        callsSuffix={
+                          model.failedCalls > 0 ? (
                             <span className="font-sans">
                               {" "}
                               ({model.failedCalls} failed · 0 tok)
                             </span>
-                          )}
-                        </span>
-                        <span className="w-14 text-right font-mono">
-                          {formatTokenCount(model.totalTokens)}
-                        </span>
-                        <span className="w-20 shrink-0 text-right font-mono text-[10px]">
-                          {model.priced && model.estimatedUsd !== null
-                            ? formatEstimateUsdCompact(model.estimatedUsd)
-                            : "unpriced model"}
-                        </span>
-                      </li>
+                          ) : null
+                        }
+                        trailing={
+                          <span className="w-20 shrink-0 text-right font-mono text-tiny">
+                            {model.priced && model.estimatedUsd !== null
+                              ? formatEstimateUsdCompact(model.estimatedUsd)
+                              : "unpriced model"}
+                          </span>
+                        }
+                      />
                     ))}
                   </ul>
-                  <p className="mt-1 text-[9px] leading-3 text-muted-foreground/80">
+                  <p className="mt-1 text-micro leading-3 text-muted-foreground/80">
                     Measured tokens × sourced price table ({snapshot.estimate.pricingVersion});
                     the cached-input discount is invisible to us, so every
                     figure is an upper bound. Unpriced rows have NO sourced
@@ -295,25 +269,17 @@ export function UsagePanel({
 
               {snapshot.novels.length > 0 && (
                 <>
-                  <p className="mt-2 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                  <p className={cn("mt-2", TEXT_SECTION)}>
                     By novel
                   </p>
                   <ul className="mt-1 space-y-1">
                     {snapshot.novels.map((novel) => (
-                      <li
+                      <UsageRow
                         key={novel.novelId}
-                        className="flex items-center gap-2 text-[11px]"
-                      >
-                        <span className="min-w-0 flex-1 truncate text-muted-foreground">
-                          {novel.deleted ? "(deleted novel)" : novel.title}
-                        </span>
-                        <span className="shrink-0 font-mono text-[10px] text-muted-foreground/70">
-                          ×{novel.calls}
-                        </span>
-                        <span className="w-14 text-right font-mono">
-                          {formatTokenCount(novel.totalTokens)}
-                        </span>
-                      </li>
+                        label={novel.deleted ? "(deleted novel)" : novel.title}
+                        calls={novel.calls}
+                        tokens={formatTokenCount(novel.totalTokens)}
+                      />
                     ))}
                   </ul>
                 </>
@@ -328,7 +294,7 @@ export function UsagePanel({
                 snapshot.history.summaries.length > 0 ||
                 snapshot.history.retainedNotItemized > 0) && (
                 <>
-                  <p className="mt-2 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                  <p className={cn("mt-2", TEXT_SECTION)}>
                     Transaction history · last {snapshot.history.windowDays} days
                   </p>
                   {snapshot.history.rows.length > 0 && (
@@ -336,12 +302,12 @@ export function UsagePanel({
                       {snapshot.history.rows.map((row) => (
                         <li
                           key={row.id}
-                          className="flex items-center justify-between gap-2 text-[10px]"
+                          className="flex items-center justify-between gap-2 text-tiny"
                         >
                           <span className="min-w-0 flex-1 truncate font-mono text-muted-foreground">
                             {historyLine(row)}
                           </span>
-                          <span className="shrink-0 font-mono text-[10px]">
+                          <span className="shrink-0 font-mono text-tiny">
                             {row.status === "failed" ? "—" : formatTokenCount(row.totalTokens)}
                           </span>
                         </li>
@@ -349,14 +315,14 @@ export function UsagePanel({
                     </ul>
                   )}
                   {snapshot.history.omitted > 0 && (
-                    <p className="mt-0.5 text-[9px] text-muted-foreground/80">
+                    <p className="mt-0.5 text-micro text-muted-foreground/80">
                       +{snapshot.history.omitted} more call
                       {snapshot.history.omitted === 1 ? "" : "s"} inside the window — the
                       CSV statement lists every retained line.
                     </p>
                   )}
                   {snapshot.history.retainedNotItemized > 0 && (
-                    <p className="mt-0.5 text-[9px] leading-3 text-muted-foreground/80">
+                    <p className="mt-0.5 text-micro leading-3 text-muted-foreground/80">
                       {snapshot.history.retainedNotItemized} retained call
                       {snapshot.history.retainedNotItemized === 1 ? "" : "s"} older than{" "}
                       {snapshot.history.windowDays} days (details kept 90 days) — not
@@ -365,19 +331,19 @@ export function UsagePanel({
                   )}
                   {snapshot.history.summaries.length > 0 && (
                     <>
-                      <p className="mt-2 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                      <p className={cn("mt-2", TEXT_SECTION)}>
                         Older days · {snapshot.history.summaryNote}
                       </p>
                       <ul className="mt-1 space-y-0.5">
                         {snapshot.history.summaries.map((s) => (
                           <li
                             key={`${s.day}|${s.surface}|${s.novelKey}|${s.modelId}`}
-                            className="flex items-center justify-between gap-2 text-[10px]"
+                            className="flex items-center justify-between gap-2 text-tiny"
                           >
                             <span className="min-w-0 flex-1 truncate font-mono text-muted-foreground">
                               {summaryLine(s)}
                             </span>
-                            <span className="w-16 shrink-0 text-right font-mono text-[9px] text-muted-foreground/80">
+                            <span className="w-16 shrink-0 text-right font-mono text-micro text-muted-foreground/80">
                               {s.estimatedUsd !== null
                                 ? formatEstimateUsdCompact(s.estimatedUsd)
                                 : "unpriced"}
@@ -400,7 +366,7 @@ export function UsagePanel({
           generated in memory, nothing persisted server-side). */}
       {snapshot && (
         <div className="mt-3 border-t pt-2">
-          <p className="text-[10px] leading-4 text-muted-foreground">
+          <p className="text-tiny leading-4 text-muted-foreground">
             {snapshot.totalCalls > 0 && began
               ? `Tracking began ${began} — calls before that date were not recorded. `
               : "Persisted tracking began with Phase 5 — calls before it were not recorded. "}
@@ -409,7 +375,7 @@ export function UsagePanel({
           <a
             href="/api/usage/statement"
             download
-            className="mt-1.5 inline-flex h-7 items-center justify-center rounded-md border px-2.5 text-[11px] font-medium outline-none transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
+            className="mt-1.5 inline-flex h-7 items-center justify-center rounded-md border px-2.5 text-caption font-medium outline-none transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
             aria-label="Download the full usage statement as CSV"
           >
             Export statement (CSV)
@@ -504,8 +470,8 @@ export function InvoiceReconciliation() {
 
   return (
     <div>
-      <p className="text-xs font-semibold">Invoice reconciliation</p>
-      <p className="mt-0.5 text-[10px] leading-4 text-muted-foreground">
+      <p className={TEXT_PANEL_TITLE}>Invoice reconciliation</p>
+      <p className="mt-0.5 text-tiny leading-4 text-muted-foreground">
         Paste the provider console&apos;s spend figure for a period — it is
         stored verbatim against our ESTIMATE for the same tracked rows. The
         delta is display math on two labeled figures, not a defect claim: our
@@ -513,7 +479,7 @@ export function InvoiceReconciliation() {
         upper bound.
       </p>
       {invoiceFailed ? (
-        <p className="mt-1 text-[10px] leading-4 text-destructive">
+        <p className="mt-1 text-tiny leading-4 text-destructive">
           Reconciliation history could not be loaded — nothing is shown
           rather than stale figures.
         </p>
@@ -525,7 +491,7 @@ export function InvoiceReconciliation() {
               onChange={(event) => setPeriodLabel(event.target.value)}
               placeholder="period, e.g. 2026-11 (console's billing month)"
               aria-label="Period the pasted figure covers"
-              className="h-7 text-[11px]"
+              className="h-7 text-caption"
               maxLength={64}
             />
             <Input
@@ -534,34 +500,34 @@ export function InvoiceReconciliation() {
               placeholder="console spend figure, e.g. 12.34"
               aria-label="Actual spend figure from the provider console"
               inputMode="decimal"
-              className="h-7 text-[11px]"
+              className="h-7 text-caption"
               maxLength={16}
             />
             <Button
               type="button"
               size="sm"
-              className="h-7 text-[11px]"
+              className="h-7 text-caption"
               disabled={saving}
               onClick={saveFigure}
             >
               {saving && (
-                <Loader2 className="mr-1 h-3 w-3 animate-spin" aria-hidden="true" />
+                <Spinner size="sm" className="mr-1" />
               )}
               Record figure
             </Button>
           </div>
           {formError && (
-            <p className="mt-1 text-[10px] leading-4 text-destructive">{formError}</p>
+            <p className="mt-1 text-tiny leading-4 text-destructive">{formError}</p>
           )}
           {lastSaved && !formError && (
-            <p className="mt-1 text-[10px] leading-4 text-emerald-700 dark:text-emerald-400">
+            <p className="mt-1 text-tiny leading-4 text-success-text-strong">
               {lastSaved}
             </p>
           )}
 
           {invoices && invoices.entries.length > 0 && (
             <div className="mt-2 pr-1">
-              <p className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+              <p className={TEXT_SECTION}>
                 Recorded comparisons ({invoices.totalEntries})
               </p>
               <ul className="mt-1 space-y-1.5">
@@ -575,7 +541,7 @@ export function InvoiceReconciliation() {
                   return (
                     <li
                       key={entry.id}
-                      className="rounded-md border px-2 py-1.5 text-[10px] leading-4"
+                      className="rounded-md border px-2 py-1.5 text-tiny leading-4"
                     >
                       <p className="font-medium">{entry.periodLabel}</p>
                       <p className="mt-0.5 font-mono">
@@ -592,7 +558,7 @@ export function InvoiceReconciliation() {
                           {formatDeltaUsd(delta)}
                         </p>
                       )}
-                      <p className="mt-0.5 text-[9px] text-muted-foreground/80">
+                      <p className="mt-0.5 text-micro text-muted-foreground/80">
                         at save: {entry.trackedRows} tracked rows · prices{" "}
                         {entry.pricingVersion}
                         {entry.note ? ` · ${entry.note}` : ""}

@@ -1,11 +1,12 @@
 "use client";
 
+
+
 import type { LucideIcon } from "lucide-react";
 import {
   ArrowDown,
   ArrowRight,
   BookOpen,
-  Check,
   FileDown,
   PenLine,
   ShieldCheck,
@@ -16,6 +17,9 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { Container, FeatureList, ICON_SQUARE_ACCENT, SectionIntro } from "./kit";
+import { cn } from "@/lib/utils";
+import { TEXT_META, TEXT_PROSE, TEXT_LABEL } from "@/components/novara/styles";
 
 export interface ProductPageProps {
   onEnterWriter: () => void;
@@ -177,7 +181,7 @@ function StatusBadge({ status }: { status: InsideStatus }) {
     return (
       <Badge
         variant="outline"
-        className="border-amber-200 bg-amber-100 text-amber-800"
+        className="border-warning-border bg-warning-surface-strong text-warning-text-heading"
       >
         In development
       </Badge>
@@ -187,11 +191,11 @@ function StatusBadge({ status }: { status: InsideStatus }) {
     <>
       <Badge
         variant="outline"
-        className="border-emerald-200 bg-emerald-100 text-emerald-800"
+        className="border-success-border bg-success-surface-strong text-success-text-heading"
       >
         <span
           aria-hidden="true"
-          className="h-1.5 w-1.5 rounded-full bg-emerald-500"
+          className="size-1.5 rounded-full bg-success-dot"
         />
         Live
       </Badge>
@@ -203,10 +207,7 @@ function StatusBadge({ status }: { status: InsideStatus }) {
 }
 
 const CARD_HOVER =
-  "transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md";
-
-const ICON_SQUARE =
-  "flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-amber-100 text-amber-900";
+  "transition-[transform,box-shadow] duration-200 hover:-translate-y-0.5 hover:shadow-md";
 
 export function ProductPage({ onEnterWriter }: ProductPageProps) {
   return (
@@ -216,9 +217,9 @@ export function ProductPage({ onEnterWriter }: ProductPageProps) {
         aria-labelledby="product-heading"
         className="py-16 sm:py-20"
       >
-        <div className="mx-auto max-w-6xl px-4 sm:px-6">
+        <Container>
           <div className="mx-auto max-w-3xl text-center">
-            <p className="text-sm font-medium uppercase tracking-wide text-primary">
+            <p className={cn(TEXT_LABEL, "uppercase tracking-wide text-primary")}>
               The Product
             </p>
             <h1
@@ -241,7 +242,7 @@ export function ProductPage({ onEnterWriter }: ProductPageProps) {
               </Button>
             </div>
           </div>
-        </div>
+        </Container>
       </section>
 
       {/* P2 — Pipeline at a glance */}
@@ -249,28 +250,23 @@ export function ProductPage({ onEnterWriter }: ProductPageProps) {
         aria-labelledby="product-pipeline-heading"
         className="bg-secondary/50 py-16 sm:py-20"
       >
-        <div className="mx-auto max-w-6xl px-4 sm:px-6">
-          <div className="mx-auto max-w-2xl text-center">
-            <h2
-              id="product-pipeline-heading"
-              className="font-display text-3xl font-bold tracking-tight sm:text-4xl"
-            >
-              The pipeline at a glance
-            </h2>
-            <p className="mt-4 text-muted-foreground">
-              Every novel moves through the same eight stages — each with a
-              clear owner and a verifiable result.
-            </p>
-          </div>
+        <Container>
+          <SectionIntro
+            title="The pipeline at a glance"
+            headingId="product-pipeline-heading"
+            headingSpacing="flush"
+            reveal={false}
+            description="Every novel moves through the same eight stages — each with a clear owner and a verifiable result."
+          />
           <div className="mt-10 rounded-xl border bg-card p-6 sm:p-8">
             <ol className="flex flex-wrap items-center gap-y-4">
               {PIPELINE_STAGES.map((stage, index) => (
                 <li key={stage} className="flex items-center">
                   <div className="flex items-center gap-2.5">
-                    <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-primary/40 bg-primary/10 font-display text-sm font-bold text-primary">
+                    <span className="flex size-9 shrink-0 items-center justify-center rounded-full border border-primary/40 bg-primary/10 font-display text-sm font-bold text-primary">
                       {index + 1}
                     </span>
-                    <span className="text-sm font-medium">{stage}</span>
+                    <span className={TEXT_LABEL}>{stage}</span>
                   </div>
                   {index < PIPELINE_STAGES.length - 1 && (
                     <span
@@ -282,7 +278,7 @@ export function ProductPage({ onEnterWriter }: ProductPageProps) {
               ))}
             </ol>
           </div>
-        </div>
+        </Container>
       </section>
 
       {/* P3 — AI Team collaboration */}
@@ -290,7 +286,7 @@ export function ProductPage({ onEnterWriter }: ProductPageProps) {
         aria-labelledby="product-collab-heading"
         className="py-16 sm:py-20"
       >
-        <div className="mx-auto max-w-6xl px-4 sm:px-6">
+        <Container>
           <div className="grid items-start gap-10 lg:grid-cols-2">
             <div>
               <h2
@@ -307,12 +303,12 @@ export function ProductPage({ onEnterWriter }: ProductPageProps) {
                 {COLLAB_POINTS.map((point) => (
                   <li key={point.title} className="flex gap-3">
                     <ArrowRight
-                      className="mt-0.5 h-5 w-5 shrink-0 text-primary"
+                      className="mt-0.5 size-5 shrink-0 text-primary"
                       aria-hidden="true"
                     />
                     <div>
                       <h3 className="font-semibold">{point.title}</h3>
-                      <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
+                      <p className={cn("mt-1", TEXT_PROSE)}>
                         {point.description}
                       </p>
                     </div>
@@ -331,12 +327,12 @@ export function ProductPage({ onEnterWriter }: ProductPageProps) {
                       <span className="font-display text-xs font-bold text-primary">
                         {String(index + 1).padStart(2, "0")}
                       </span>
-                      <span className="text-sm font-medium">{step}</span>
+                      <span className={TEXT_LABEL}>{step}</span>
                     </div>
                     {index < HANDOFF_CHAIN.length - 1 && (
                       <ArrowDown
                         aria-hidden="true"
-                        className="my-1.5 ml-6 h-4 w-4 text-primary/50"
+                        className="my-1.5 ml-6 size-4 text-primary/50"
                       />
                     )}
                   </li>
@@ -344,7 +340,7 @@ export function ProductPage({ onEnterWriter }: ProductPageProps) {
               </ol>
             </div>
           </div>
-        </div>
+        </Container>
       </section>
 
       {/* P4 — What is inside today */}
@@ -352,19 +348,14 @@ export function ProductPage({ onEnterWriter }: ProductPageProps) {
         aria-labelledby="product-inside-heading"
         className="bg-secondary/50 py-16 sm:py-20"
       >
-        <div className="mx-auto max-w-6xl px-4 sm:px-6">
-          <div className="mx-auto max-w-2xl text-center">
-            <h2
-              id="product-inside-heading"
-              className="font-display text-3xl font-bold tracking-tight sm:text-4xl"
-            >
-              What&apos;s inside Novara AI
-            </h2>
-            <p className="mt-4 text-muted-foreground">
-              An honest look at what works today — and what is still on the
-              way.
-            </p>
-          </div>
+        <Container>
+          <SectionIntro
+            title="What&apos;s inside Novara AI"
+            headingId="product-inside-heading"
+            headingSpacing="flush"
+            reveal={false}
+            description="An honest look at what works today — and what is still on the way."
+          />
           <div className="mt-10 grid gap-5 sm:mt-12 sm:grid-cols-2">
             {INSIDE_ITEMS.map((item) => {
               const Icon = item.icon;
@@ -377,14 +368,14 @@ export function ProductPage({ onEnterWriter }: ProductPageProps) {
                       </h3>
                       <StatusBadge status={item.status} />
                     </div>
-                    <p className="mt-3 text-sm leading-relaxed text-muted-foreground">
+                    <p className={cn("mt-3", TEXT_PROSE)}>
                       {item.description}
                     </p>
                     <div className="mt-4 flex items-center gap-2.5">
-                      <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-amber-100 text-amber-900">
-                        <Icon className="h-4 w-4" aria-hidden="true" />
+                      <span className="flex size-8 items-center justify-center rounded-lg bg-amber-100 text-amber-900">
+                        <Icon className="size-4" aria-hidden="true" />
                       </span>
-                      <span className="text-xs text-muted-foreground">
+                      <span className={TEXT_META}>
                         {item.status === "in-development"
                           ? "On the roadmap — phases 3-5"
                           : "Available in the current preview"}
@@ -395,7 +386,7 @@ export function ProductPage({ onEnterWriter }: ProductPageProps) {
               );
             })}
           </div>
-        </div>
+        </Container>
       </section>
 
       {/* P5 — Writing a ~100,000-word novel */}
@@ -403,15 +394,13 @@ export function ProductPage({ onEnterWriter }: ProductPageProps) {
         aria-labelledby="product-novel-heading"
         className="py-16 sm:py-20"
       >
-        <div className="mx-auto max-w-6xl px-4 sm:px-6">
-          <div className="mx-auto max-w-2xl text-center">
-            <h2
-              id="product-novel-heading"
-              className="font-display text-3xl font-bold tracking-tight sm:text-4xl"
-            >
-              What writing a 100,000-word novel looks like
-            </h2>
-          </div>
+        <Container>
+          <SectionIntro
+            title="What writing a 100,000-word novel looks like"
+            headingId="product-novel-heading"
+            headingSpacing="flush"
+            reveal={false}
+          />
           <div className="mt-10 grid gap-5 sm:mt-12 sm:grid-cols-2 lg:grid-cols-4">
             {NOVEL_STAGES.map((stage, index) => (
               <Card key={stage.title} className={CARD_HOVER}>
@@ -422,18 +411,18 @@ export function ProductPage({ onEnterWriter }: ProductPageProps) {
                   <h3 className="text-base font-semibold leading-snug">
                     {stage.title}
                   </h3>
-                  <p className="text-sm leading-relaxed text-muted-foreground">
+                  <p className={TEXT_PROSE}>
                     {stage.description}
                   </p>
                 </CardContent>
               </Card>
             ))}
           </div>
-          <p className="mx-auto mt-8 max-w-2xl text-center text-xs text-muted-foreground">
+          <p className={cn("mx-auto mt-8 max-w-2xl text-center", TEXT_META)}>
             Chapter and word targets are a design guide, not a hard limit —
             Novara AI adapts to the story you want to tell.
           </p>
-        </div>
+        </Container>
       </section>
 
       {/* P6 — Reduce the busywork */}
@@ -441,19 +430,14 @@ export function ProductPage({ onEnterWriter }: ProductPageProps) {
         aria-labelledby="product-busywork-heading"
         className="bg-secondary/50 py-16 sm:py-20"
       >
-        <div className="mx-auto max-w-6xl px-4 sm:px-6">
-          <div className="mx-auto max-w-2xl text-center">
-            <h2
-              id="product-busywork-heading"
-              className="font-display text-3xl font-bold tracking-tight sm:text-4xl"
-            >
-              Where the time goes — before and after
-            </h2>
-            <p className="mt-4 text-muted-foreground">
-              A qualitative comparison — how the same work is organized, not
-              how fast.
-            </p>
-          </div>
+        <Container>
+          <SectionIntro
+            title="Where the time goes — before and after"
+            headingId="product-busywork-heading"
+            headingSpacing="flush"
+            reveal={false}
+            description="A qualitative comparison — how the same work is organized, not how fast."
+          />
           <div className="mt-10 grid gap-6 lg:grid-cols-2">
             <div className="rounded-xl border bg-card p-6 sm:p-8">
               <div className="flex items-center justify-between gap-3">
@@ -471,7 +455,7 @@ export function ProductPage({ onEnterWriter }: ProductPageProps) {
                 {BUSYWORK_BEFORE.map((row) => (
                   <li key={row} className="flex items-start gap-3 text-sm">
                     <X
-                      className="mt-0.5 h-4 w-4 shrink-0 text-stone-400"
+                      className="mt-0.5 size-4 shrink-0 text-stone-400"
                       aria-hidden="true"
                     />
                     <span className="text-muted-foreground">{row}</span>
@@ -486,20 +470,15 @@ export function ProductPage({ onEnterWriter }: ProductPageProps) {
                 </h3>
                 <Badge>After</Badge>
               </div>
-              <ul className="mt-5 space-y-4">
-                {BUSYWORK_AFTER.map((row) => (
-                  <li key={row} className="flex items-start gap-3 text-sm">
-                    <Check
-                      className="mt-0.5 h-4 w-4 shrink-0 text-primary"
-                      aria-hidden="true"
-                    />
-                    <span className="text-muted-foreground">{row}</span>
-                  </li>
-                ))}
-              </ul>
+              <FeatureList
+                items={BUSYWORK_AFTER}
+                className="mt-5 space-y-4"
+                itemClassName="gap-3 text-sm"
+                textClassName="text-muted-foreground"
+              />
             </div>
           </div>
-        </div>
+        </Container>
       </section>
 
       {/* P7 — Feature tour */}
@@ -507,26 +486,24 @@ export function ProductPage({ onEnterWriter }: ProductPageProps) {
         aria-labelledby="product-tour-heading"
         className="py-16 sm:py-20"
       >
-        <div className="mx-auto max-w-6xl px-4 sm:px-6">
-          <div className="mx-auto max-w-2xl text-center">
-            <h2
-              id="product-tour-heading"
-              className="font-display text-3xl font-bold tracking-tight sm:text-4xl"
-            >
-              A closer look at the core features
-            </h2>
-          </div>
+        <Container>
+          <SectionIntro
+            title="A closer look at the core features"
+            headingId="product-tour-heading"
+            headingSpacing="flush"
+            reveal={false}
+          />
           <div className="mt-10 grid gap-5 sm:mt-12 sm:grid-cols-2 lg:grid-cols-4">
             {TOUR_ITEMS.map((item) => {
               const Icon = item.icon;
               return (
                 <Card key={item.title} className={CARD_HOVER}>
                   <CardContent className="space-y-3">
-                    <span className={ICON_SQUARE}>
-                      <Icon className="h-5 w-5" aria-hidden="true" />
+                    <span className={ICON_SQUARE_ACCENT}>
+                      <Icon className="size-5" aria-hidden="true" />
                     </span>
                     <h3 className="font-semibold">{item.title}</h3>
-                    <p className="text-sm leading-relaxed text-muted-foreground">
+                    <p className={TEXT_PROSE}>
                       {item.description}
                     </p>
                   </CardContent>
@@ -534,7 +511,7 @@ export function ProductPage({ onEnterWriter }: ProductPageProps) {
               );
             })}
           </div>
-        </div>
+        </Container>
       </section>
 
       {/* P8 — Final CTA strip */}
@@ -542,7 +519,7 @@ export function ProductPage({ onEnterWriter }: ProductPageProps) {
         aria-labelledby="product-cta-heading"
         className="bg-secondary/50 py-16 sm:py-20"
       >
-        <div className="mx-auto max-w-6xl px-4 sm:px-6">
+        <Container>
           <div className="rounded-2xl border border-primary/20 bg-card px-6 py-14 text-center sm:px-12">
             <h2
               id="product-cta-heading"
@@ -564,7 +541,7 @@ export function ProductPage({ onEnterWriter }: ProductPageProps) {
               </Button>
             </div>
           </div>
-        </div>
+        </Container>
       </section>
     </>
   );

@@ -26,6 +26,7 @@ import { useCredits } from "@/hooks/use-credits";
 import { useHashRoute } from "@/hooks/use-hash-route";
 import { SettingsDialog, type SettingsPane } from "./settings-dialog";
 import { cn } from "@/lib/utils";
+import { TEXT_CAPTION } from "@/components/novara/styles";
 
 interface MenuRowProps {
   icon: React.ReactNode;
@@ -48,12 +49,12 @@ function MenuRow({ icon, label, right, disabled, onClick }: MenuRowProps) {
           : "hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent focus-visible:text-accent-foreground",
       )}
     >
-      <span className="flex h-3.5 w-3.5 shrink-0 items-center justify-center text-muted-foreground">
+      <span className="flex size-3.5 shrink-0 items-center justify-center text-muted-foreground">
         {icon}
       </span>
       <span className="min-w-0 flex-1 truncate">{label}</span>
       {right ? (
-        <span className="shrink-0 text-[11px] text-muted-foreground">{right}</span>
+        <span className={cn("shrink-0", TEXT_CAPTION)}>{right}</span>
       ) : null}
     </button>
   );
@@ -156,24 +157,24 @@ export const UserMenu = forwardRef<UserMenuHandle, { className?: string }>(
             <div className="min-w-0 flex-1">
               <p className="truncate text-sm">{title}</p>
             </div>
-            <Badge variant="outline" className="shrink-0 text-[11px]">
+            <Badge variant="outline" className="shrink-0 text-caption">
               Preview
             </Badge>
           </div>
           <Separator className="my-1" />
           <MenuRow
-            icon={<Settings className="h-3.5 w-3.5" aria-hidden="true" />}
+            icon={<Settings className="size-3.5" aria-hidden="true" />}
             label="Settings"
             onClick={() => openSettings("account")}
           />
           <MenuRow
-            icon={<Wallet className="h-3.5 w-3.5" aria-hidden="true" />}
+            icon={<Wallet className="size-3.5" aria-hidden="true" />}
             label="Credits & usage"
             right={balanceLabel}
             onClick={() => openSettings("credits")}
           />
           <MenuRow
-            icon={<HelpCircle className="h-3.5 w-3.5" aria-hidden="true" />}
+            icon={<HelpCircle className="size-3.5" aria-hidden="true" />}
             label="Help"
             onClick={() => {
               setOpen(false);
@@ -182,7 +183,7 @@ export const UserMenu = forwardRef<UserMenuHandle, { className?: string }>(
           />
           <Separator className="my-1" />
           <MenuRow
-            icon={<LogOut className="h-3.5 w-3.5" aria-hidden="true" />}
+            icon={<LogOut className="size-3.5" aria-hidden="true" />}
             label="Sign out"
             onClick={() => void handleSignOut()}
           />
