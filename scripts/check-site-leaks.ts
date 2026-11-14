@@ -401,6 +401,12 @@ async function scanRepo(): Promise<Finding[]> {
   const { execFileSync } = await import("node:child_process");
   const { readFileSync } = await import("node:fs");
 
+  // This file contains the credential PATTERNS themselves, so a scanner that
+  // reads itself reports its own regex source as a leak. It is excluded from
+  // both the working tree and the history scan — it holds no real credential,
+  // only the shapes it looks for.
+  const SELF = "scripts/check-site-leaks.ts";
+
   const run = (cmd: string, args: string[]): string => {
     try {
       return execFileSync(cmd, args, { encoding: "utf8", maxBuffer: 256 * 1024 * 1024 });
@@ -411,6 +417,7 @@ async function scanRepo(): Promise<Finding[]> {
 
   const tracked = run("git", ["ls-files"]).split(/\r?\n/).filter(Boolean);
   for (const file of tracked) {
+    if (file === SELF) continue;
     let text: string;
     try {
       text = readFileSync(file, "utf8");
@@ -427,7 +434,9 @@ async function scanRepo(): Promise<Finding[]> {
     }
   }
 
-  const history = run("git", ["log", "--all", "-p", "--no-color"]);
+  // The scanner's own file is excluded from the history diff for the same
+  // reason as above: it carries the patterns, not a credential.
+  const history = run("git", ["log", "--all", "-p", "--no-color", "--", ".", `:(exclude)${SELF}`]);
   if (history) {
     const seen = new Set<string>();
     for (const hit of findPatterns(history)) {
