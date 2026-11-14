@@ -80,10 +80,10 @@ export async function GET() {
   const startedAt = Date.now();
 
   // The only real dependency worth probing: can we reach the database?
-  let database: { ok: true; novels: number } | { ok: false; error: string };
+  let database: { ok: true } | { ok: false; error: string };
   try {
-    const novels = await dbRaw.novel.count();
-    database = { ok: true, novels };
+    await dbRaw.novel.count();
+    database = { ok: true };
   } catch (error) {
     database = {
       ok: false,

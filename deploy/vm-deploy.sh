@@ -254,7 +254,7 @@ systemctl restart "$SERVICE"
 for i in $(seq 1 "$HEALTH_RETRIES"); do
   sleep 2
   if curl -fsS --max-time 5 "http://127.0.0.1:$LIVE_PORT/api/health" > /tmp/novara-live-health.json 2>/dev/null; then
-    log "live health OK: $(jq -c '{status,uptime:.uptimeSeconds,pid:.runtime.pid,db:.database.ok,novels:.database.novels}' /tmp/novara-live-health.json 2>/dev/null || true)"
+    log "live health OK: $(jq -c '{status,uptime:.uptimeSeconds,pid:.runtime.pid,db:.database.ok}' /tmp/novara-live-health.json 2>/dev/null || true)"
     break
   fi
   if (( i == HEALTH_RETRIES )); then

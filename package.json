@@ -20,6 +20,8 @@
     "db:prove:ownership": "bun scripts/prove-ownership-isolation.ts",
     "db:prove:credits": "bun scripts/prove-credits.ts",
     "check:credits": "bun scripts/check-credit-coverage.ts",
+    "check:leaks": "bun scripts/check-site-leaks.ts --repo",
+    "check:leaks:site": "bun scripts/check-site-leaks.ts --url",
     "verify:auth": "bun scripts/verify-auth-fetch.mjs",
     "db:reset": "prisma migrate reset"
   },

@@ -330,6 +330,8 @@ bun run db:check:ownership   # every model has exactly one ownership rule
 bun run check:credits        # every provider call has a charge path
 bun scripts/check-doc-tree.ts # document-tree invariants
 bun run verify:auth          # authFetch: token attach, 401 refresh, signed-out
+bun run check:leaks          # scan the repo + git history for credential material
+bun run check:leaks:site --url https://host   # scan a DEPLOYED site for leaks
 ```
 
 Run only the checks the project defines, once each, at the end of a change.

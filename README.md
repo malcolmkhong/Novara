@@ -341,6 +341,8 @@ bun run check:credits        # every provider call has a charge path
 bun run verify:auth          # authFetch: token attach, 401 refresh, signed-out
 bun run db:prove:ownership   # live multi-user isolation proof (needs a DB)
 bun run db:prove:credits     # live credit-concurrency proof (needs a DB)
+bun run check:leaks          # credential material in the repo or in git history
+bun run check:leaks:site --url https://host   # the same scan against a deployed site
 ```
 
 Additional checks (not wired to `package.json`):

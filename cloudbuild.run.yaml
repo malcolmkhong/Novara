@@ -19,7 +19,13 @@ steps:
     name: gcr.io/cloud-builders/docker
     args:
       - build
-      - --build-arg=NEXT_PUBLIC_AI_PROVIDERS_ENABLED=gemini,NEXT_PUBLIC_FIREBASE_API_KEY=AIzaSyBTfZEZ3WLaTjk1fLRp1G_Ftf-20Gz2zdo,NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN=novara-514009.firebaseapp.com,NEXT_PUBLIC_FIREBASE_PROJECT_ID=novara-514009,NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET=novara-514009.firebasestorage.app,NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID=9073132203,NEXT_PUBLIC_FIREBASE_APP_ID=1:9073132203:web:e5c806f40b2c3f49f42dee
+      # ONE build arg per variable. A previous version pasted the whole
+      # NEXT_PUBLIC_* block into this single arg, so the blob below became the
+      # VALUE of NEXT_PUBLIC_AI_PROVIDERS_ENABLED and Next.js inlined it into
+      # the browser bundle. Never concatenate build args with commas here:
+      # NEXT_PUBLIC_* is inlined into the client, so anything on this line is
+      # published to every visitor.
+      - --build-arg=NEXT_PUBLIC_AI_PROVIDERS_ENABLED=gemini
       - --build-arg=DATABASE_URL=postgresql://build:build@localhost:5432/build
       # Commit identity -> /api/health reports the live commit (GIT_SHA is
       # read at runtime, never inlined into the client bundle).
@@ -54,8 +60,11 @@ steps:
       - --allow-unauthenticated
       - --port=3000
       - --service-account=novara-run@novara-514009.iam.gserviceaccount.com
-      - --set-env-vars=^;^GCP_PROJECT_ID=novara-514009;NODE_ENV=production;NEXT_PUBLIC_AI_PROVIDERS_ENABLED=gemini;GEMINI_WIRE_MODEL_FAST=google/gemini-3.8-flash;GEMINI_WIRE_MODEL_PRO=google/gemini-3.8-flash;NEXT_PUBLIC_FIREBASE_API_KEY=AIzaSyBTfZEZ3WLaTjk1fLRp1G_Ftf-20Gz2zdo;NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN=novara-514009.firebaseapp.com;NEXT_PUBLIC_FIREBASE_PROJECT_ID=novara-514009;NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET=novara-514009.firebasestorage.app;NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID=9073132203;NEXT_PUBLIC_FIREBASE_APP_ID=1:9073132203:web:e5c806f40b2c3f49f42dee;ADMIN_UIDS=JFMmQdD9tbdEkWul5Z1qbZqHZcg1,hhDT4uqDnXRFHH30JJXN7j4gIjb2;GIT_SHA=$COMMIT_SHA;CREDITS_DAILY_FREE=60;CREDITS_GLOBAL_DAILY_CAP=2000;CREDITS_RESERVE_AGENT_TURN=15;CREDITS_RESERVE_TEAM_TURN=20
-      - --set-secrets=DATABASE_URL=DATABASE_URL:latest
+      - --set-env-vars=^;^GCP_PROJECT_ID=novara-514009;NODE_ENV=production;NEXT_PUBLIC_AI_PROVIDERS_ENABLED=gemini;GEMINI_WIRE_MODEL_FAST=google/gemini-3.8-flash;GEMINI_WIRE_MODEL_PRO=google/gemini-3.8-flash;NEXT_PUBLIC_FIREBASE_API_KEY=AIzaSyBTfZEZ3WLaTjk1fLRp1G_Ftf-20Gz2zdo;NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN=novara-514009.firebaseapp.com;NEXT_PUBLIC_FIREBASE_PROJECT_ID=novara-514009;NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET=novara-514009.firebasestorage.app;NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID=9073132203;NEXT_PUBLIC_FIREBASE_APP_ID=1:9073132203:web:e5c806f40b2c3f49f42dee;GIT_SHA=$COMMIT_SHA;CREDITS_DAILY_FREE=60;CREDITS_GLOBAL_DAILY_CAP=2000;CREDITS_RESERVE_AGENT_TURN=15;CREDITS_RESERVE_TEAM_TURN=20
+      # ADMIN_UIDS lives in Secret Manager, NOT in this file: this repository is
+      # public, so a literal here publishes the admin allowlist to the world.
+      # The runtime SA (novara-run) reads it through the secret reference.
+      - --set-secrets=DATABASE_URL=DATABASE_URL:latest,ADMIN_UIDS=ADMIN_UIDS:latest
       - --memory=1Gi
       - --cpu=1
       - --timeout=300

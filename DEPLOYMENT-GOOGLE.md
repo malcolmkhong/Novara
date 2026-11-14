@@ -92,7 +92,7 @@
 `cloudbuild.yaml` · `Dockerfile` · `.dockerignore` · `deploy/vm-setup.sh` · `deploy/vm-deploy.sh` · `deploy/Caddyfile.production` · `scripts/assemble-standalone.mjs` · `src/app/api/health/route.ts`。
 
 - `vm-deploy.sh` 有 3 个硬保证：原子符号链接切换、数据目录在发布树之外（有守卫）、健康门禁（候选版 3100 端口 `/api/health` 200 才切换，失败自动回滚）。**保留，别重写。**
-- `/api/health` 真查库，失败返回 503（诚实规则）。但**它公开返回 `database.novels` 数量** —— 加了登录之后这是轻微信息泄漏，第 4 步要改。
+- `/api/health` 真查库，失败返回 503（诚实规则）。公开响应**不含 `database.novels` 计数**（已去掉），只报 `database.ok`。
 - `assemble-standalone.mjs` 第 8 步强制剥离被 `next build` 复制进 standalone 的 `.env*`。**别删。**
 
 ### 1.7 AGENTS.md 法则对部署的约束（不可破）
