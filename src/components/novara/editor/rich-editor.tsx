@@ -267,7 +267,11 @@ export function RichEditor({
   );
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
+    // min-h-9 (36px) is the floor: the toolbar is h-8 (32px) and shrink-0, so
+    // the editor box can never be smaller than its own toolbar. Without that
+    // floor a squeezed editor would let the toolbar paint over whatever sits
+    // below it (the expanded Brief section).
+    <div className="flex min-h-9 flex-1 flex-col">
       {editable && (
         <EditorToolbar
           editor={editor}

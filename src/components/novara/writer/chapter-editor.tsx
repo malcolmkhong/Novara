@@ -337,8 +337,11 @@ export function ChapterEditor({
           />
 
           {/* Muted section BELOW the prose. The Brief is collapsed by default,
-              so it can never sit between the toolbar and the text. */}
-          <div className="border-t bg-muted/20">
+              so it can never sit between the toolbar and the text. The section
+              never shrinks and the expanded body scrolls inside itself: the
+              brief must be able to grow, but it must never grow INTO the
+              editor and push its toolbar around. */}
+          <div className="flex shrink-0 flex-col border-t bg-muted/20">
             <div className="flex items-center gap-1 px-4 py-1">
               <button
                 type="button"
@@ -390,7 +393,9 @@ export function ChapterEditor({
               )}
             </div>
             {briefOpen && (
-              <div className="border-t px-4 py-3">
+              /* The expanded Brief is a bounded drawer: it scrolls inside itself
+                 and can never grow into the editor above it. */
+              <div className="max-h-[40vh] overflow-y-auto border-t px-4 py-3">
                 <Textarea
                   value={brief}
                   rows={3}
@@ -403,7 +408,7 @@ export function ChapterEditor({
                     if (!isFinal && brief !== selected.brief) void persist({ brief });
                   }}
                   placeholder="Outline beats, goals, must-hit moments for this chapter…"
-                  className="resize-y bg-background text-sm text-muted-foreground placeholder:text-muted-foreground/70"
+                  className="max-h-[24vh] resize-y bg-background text-sm text-muted-foreground placeholder:text-muted-foreground/70"
                   aria-label="Chapter brief"
                 />
               </div>
