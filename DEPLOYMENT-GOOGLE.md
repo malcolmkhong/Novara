@@ -1,9 +1,13 @@
 # Novara AI — Google Cloud 完整部署方案 v2（执行手册）
 
-> 状态：**已按用户 2026-11-07 的新要求重写，待你确认架构后逐步执行**  
-> 依据：`A:\Novara` 代码实测（未使用 README）+ Google 官方定价/文档核实（2026-11-07）  
-> 取代：v1（同文件旧版，主题为「严格 $0 免费额度 + 暂不加登录」）  
-> 本文件是**唯一权威部署文档**。`agent-ctx/` 下的设计稿与 v1 结论如与本文冲突，以本文为准。
+> ⚠️ **已归档（2026-11-18）——本文是历史方案，不是现役部署指南。**
+> 本文写于 2026-11-07，推荐的「e2-micro VM + SQLite + GIS Cookie 登录 + Caddy」方案
+> **从未成为最终生产路径**，其全部核心选型已被推翻：
+> 现役架构 = **Cloud Run（asia-southeast1）+ Neon Postgres + Firebase Auth + Artifact Registry**。
+> **照本文执行会出错**（对 Postgres 跑 sqlite3、部署到不存在的 VM、用 Cookie 门替换
+> Firebase 破坏所有权隔离）。仅作历史决策记录保留。
+> **现役部署文档**：`README2.md` §10（完整）/ `README.md` §9 / `cloudbuild.run.yaml`（流水线事实源）。
+> 原状态块（已失效）：曾自称「唯一权威部署文档，待确认后逐步执行」——该声明作废。
 
 ---
 
@@ -143,6 +147,8 @@
 > **一句话回答「Cloud Run 不是免费的吗」**：Cloud Run 这个产品**确实在 Free Tier 内**，但免费额度是给「请求来了才醒、空闲缩到 0」的无状态工作负载设计的。要让它跑 Novara 的 `after()` 后台 Agent，必须把实例配成 24 小时常驻 + 常分配 CPU —— 那是**用超了额度**，不是产品在收费。同理，你的 RM1223 抵扣金是**限时信用**，不是「永久免费额度」。
 
 ### 2.3 最终选择：**方案 A**（e2-micro VM + SQLite + Google 托管周边服务）
+
+> ⚠️ **此选型已被推翻（2026-11-18 注）**：实际落地的是 Cloud Run + Neon Postgres + Firebase Auth，见文首归档横幅。以下架构图仅作历史记录。
 
 ```
 GitHub push (main)

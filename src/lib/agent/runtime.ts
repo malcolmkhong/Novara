@@ -734,6 +734,41 @@ export async function decideApproval(
   return detail;
 }
 
+// ---------------------------------------------------------------------------
+// Audit H2/H3 — paused runs are resumable, not cancel-only. A paused run has
+// no live executor (reject/timeout exit released the lease), so resuming is
+// safe once the fencing contract is checked: status paused, no live lease,
+// no stranded needs_approval gate. The seam CLAIMS the lease and hands it to
+// the caller (the resume route starts executeRun with it); it never starts an
+// executor itself, so harnesses can exercise it without model calls.
+// ---------------------------------------------------------------------------
+
+export async function resumePausedRun(
+  runId: string
+): Promise<{ ok: true; lease: ExecutorLease } | { ok: false; reason: string }> {
+  const run = await db.agentRun.findUnique({ where: { id: runId } });
+  if (!run) return { ok: false, reason: "Run not found" };
+  if (run.status !== "paused") {
+    return { ok: false, reason: "This run is not paused" };
+  }
+  const stranded = await db.agentTask.count({ where: { runId, status: "needs_approval" } });
+  if (stranded > 0) {
+    return { ok: false, reason: "Stranded pending write(s) — resolve them before resuming" };
+  }
+  if (await leaseIsAlive(runId)) {
+    return { ok: false, reason: "A live executor holds this run's lease" };
+  }
+  const lease = await claimLease(runId);
+  if (!lease) return { ok: false, reason: "A live executor holds this run's lease" };
+  await db.agentRun.update({ where: { id: runId }, data: { status: "running", error: null } });
+  await emitEvent({
+    runId,
+    kind: "message",
+    summary: "Run resumed by author — the team picks up from the last checkpoint.",
+  });
+  return { ok: true, lease };
+}
+
 export async function cancelRun(runId: string): Promise<AgentRunDetail> {
   const run = await db.agentRun.findUnique({ where: { id: runId } });
   if (!run) throw new NotFoundError("Run not found");
@@ -3660,7 +3695,7 @@ export async function executeTool(params: ExecuteToolParams): Promise<ToolResult
 // Approval gate (D2) — pause the loop until the author decides
 // ---------------------------------------------------------------------------
 
-async function pauseForApproval(params: {
+export async function pauseForApproval(params: {
   payload: PendingWritePayload;
   pendingSummary: string;
   runId: string;
@@ -3747,5 +3782,18 @@ async function pauseForApproval(params: {
       };
     }
   }
-  return { ok: false, feed: "gate timed out", stopped: true };
+  // Audit H2 — a timed-out gate must not leave a zombie: the executor is
+  // about to exit, so an untouched awaiting_approval row would accept a late
+  // approve that flips it to "running" with nobody executing. Own the honest
+  // terminal shape here: task blocked, run paused (resumable), cause visible.
+  await db.agentTask.update({ where: { id: taskId }, data: { status: "blocked" } });
+  await db.agentRun.update({ where: { id: runId }, data: { status: "paused" } });
+  await emitEvent({
+    runId,
+    taskId,
+    kind: "message",
+    summary:
+      "Approval gate timed out — nothing was written. The run is paused; resume it to re-open the gate, or discard it.",
+  });
+  return { ok: false, feed: "gate timed out — run paused, nothing written", stopped: true };
 }

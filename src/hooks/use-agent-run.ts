@@ -26,6 +26,8 @@ export interface UseAgentRunResult {
   approve: (taskId: string) => Promise<void>;
   reject: (taskId: string) => Promise<void>;
   cancel: () => Promise<void>;
+  /** Resume a paused run and re-subscribe to its live stream (audit H2/H3). */
+  resume: () => Promise<void>;
   setMode: (mode: AgentRunMode) => Promise<void>;
   /** Point the pane at a past run's transcript (history browsing). */
   viewRun: (runId: string) => Promise<void>;
@@ -120,6 +122,18 @@ export function useAgentRun(novelId: string): UseAgentRunResult {
     }
   }, []);
 
+  const resume = useCallback(async () => {
+    const current = detailRef.current;
+    if (!current) return;
+    const resumed = await agentGateway.resume(current.run.id);
+    if (novelRef.current !== resumed.run.novelId) return;
+    setDetail(resumed);
+    unsubRef.current?.();
+    unsubRef.current = agentGateway.subscribe(resumed.run.id, (next) => {
+      if (novelRef.current === next.run.novelId) setDetail(next);
+    });
+  }, []);
+
   const setMode = useCallback(async (mode: AgentRunMode) => {
     const current = detailRef.current;
     if (!current) return;
@@ -151,5 +165,5 @@ export function useAgentRun(novelId: string): UseAgentRunResult {
 
   const approval = detail?.pendingApproval ?? null;
 
-  return { detail, loading, approval, start, approve, reject, cancel, setMode, viewRun };
+  return { detail, loading, approval, start, approve, reject, cancel, resume, setMode, viewRun };
 }

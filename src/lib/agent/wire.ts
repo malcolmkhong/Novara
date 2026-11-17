@@ -4,7 +4,8 @@
 // ONE replay path for canonical transcripts. Today's inline replay (runtime.ts
 // resume init) is preserved byte-for-byte as legacyReplay(); when compaction
 // is DISABLED (or no active summary exists) assembleWire() returns exactly
-// that — the byte-identity guarantee asserted by scripts/verify-p2-b.ts.
+// that — a byte-identity guarantee formerly asserted by scripts/verify-p2-b.ts
+// (phase harness removed 2026-11-18; the guarantee itself still holds).
 //
 // Binding input rule (agent-ctx/p2-design.md §2.0): every summary row is a
 // DETERMINISTIC, ZERO-AI projection recomputed from the raw canonical

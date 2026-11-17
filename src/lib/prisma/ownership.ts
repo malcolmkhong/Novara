@@ -5,9 +5,11 @@
 // headers (set by src/middleware.ts) and use `currentUserId()` to identify
 // the caller.
 //
-// NOTE: Novel/Chapter/etc. do not yet carry a `userId` column — the
-// ownership filter is a scaffold for when auth lands (DEPLOYMENT-GOOGLE.md
-// v2 Step 4).
+// Auth has landed: Firebase Auth (Google sign-in) verified by
+// src/middleware.ts, which injects the uid these helpers read. Novel carries
+// userId; the other authored models are filtered through their novel.
+// (The old "scaffold for when auth lands / DEPLOYMENT-GOOGLE.md v2 Step 4"
+// note is obsolete — that GIS proposal was archived and never shipped.)
 //
 // The real enforcement lives in src/lib/db.ts (`$allOperations`), which
 // applies ownership to every model on every query — including queries made

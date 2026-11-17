@@ -23,6 +23,7 @@
     "check:leaks": "bun scripts/check-site-leaks.ts --repo",
     "check:leaks:site": "bun scripts/check-site-leaks.ts --url",
     "verify:auth": "bun scripts/verify-auth-fetch.mjs",
+    "verify:gate": "bun scripts/verify-gate-recovery.ts",
     "db:reset": "prisma migrate reset"
   },
   "dependencies": {

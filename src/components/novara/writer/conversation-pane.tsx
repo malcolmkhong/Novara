@@ -23,6 +23,7 @@ import {
   MessageSquare,
   PanelRight,
   PenLine,
+  Play,
   ShieldCheck,
   Wrench,
   X,
@@ -744,6 +745,18 @@ export function ConversationPane({
     }
   };
 
+  const handleResumeRun = async () => {
+    try {
+      await run.resume();
+    } catch (e) {
+      toast({
+        title: "Could not resume run",
+        description: e instanceof Error ? e.message : "Unknown error",
+        variant: "destructive",
+      });
+    }
+  };
+
   const handleComposerModeChange = (next: AgentRunMode) => {
     setMode(next);
     setLastMode(novel.id, next);
@@ -967,13 +980,19 @@ export function ConversationPane({
                   <FinalReportCard report={detail.run.finalReport} />
                 </div>
               )}
-              {/* A paused run still needs its way out — the "Last run" card
-                  that used to carry this button is gone. */}
+              {/* A paused run needs BOTH ways out (audit H2/H3): resume
+                  picks up from the last checkpoint; discard ends it. */}
               {detail.run.status === "paused" && (
-                <Button variant="outline" size="sm" className="mt-2" onClick={handleCancelRun}>
-                  <X className="size-3.5" aria-hidden="true" />
-                  Discard paused run
-                </Button>
+                <div className="mt-2 flex items-center gap-2">
+                  <Button variant="outline" size="sm" onClick={handleResumeRun}>
+                    <Play className="size-3.5" aria-hidden="true" />
+                    Resume run
+                  </Button>
+                  <Button variant="outline" size="sm" onClick={handleCancelRun}>
+                    <X className="size-3.5" aria-hidden="true" />
+                    Discard paused run
+                  </Button>
+                </div>
               )}
             </>
           )}

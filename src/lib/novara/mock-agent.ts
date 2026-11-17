@@ -426,6 +426,16 @@ export const mockAgentRuntime = {
     return snapshotOf(run);
   },
 
+  resume(runId: string): AgentRunDetail {
+    const run = runs.get(runId);
+    if (!run) throw new Error("Run not found");
+    if (run.detail.run.status !== "paused") throw new Error("This run is not paused");
+    setStatus(run, "running");
+    emit(run, { kind: "message", summary: "Run resumed by author (simulated)." });
+    notify(run);
+    return snapshotOf(run);
+  },
+
   setMode(runId: string, mode: AgentRunMode): AgentRunDetail {
     const run = runs.get(runId);
     if (!run) throw new Error("Run not found");

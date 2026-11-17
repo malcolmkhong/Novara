@@ -32,6 +32,8 @@ export interface AgentGateway {
   approve(runId: string, taskId: string): Promise<AgentRunDetail>;
   reject(runId: string, taskId: string): Promise<AgentRunDetail>;
   cancel(runId: string): Promise<AgentRunDetail>;
+  /** Resume a paused run (author reject or gate timeout) — audit H2/H3. */
+  resume(runId: string): Promise<AgentRunDetail>;
   setMode(runId: string, mode: AgentRunMode): Promise<AgentRunDetail>;
 }
 
@@ -67,6 +69,9 @@ const mockGateway: AgentGateway = {
   },
   async cancel(runId) {
     return mockAgentRuntime.cancel(runId);
+  },
+  async resume(runId) {
+    return mockAgentRuntime.resume(runId);
   },
   async setMode(runId, mode) {
     return mockAgentRuntime.setMode(runId, mode);
@@ -246,6 +251,19 @@ export const liveAgentGateway: AgentGateway = {
       `/api/agent/runs/${runId}/cancel`,
       { method: "POST" }
     );
+    return res.detail;
+  },
+
+  async resume(runId) {
+    // 202 { resumed, leaseEpoch } — the executor starts in the background;
+    // fetch the fresh detail so the pane re-subscribes to the live stream.
+    await jsonFetch<{ resumed: boolean }>(`/api/agent/runs/${runId}/resume`, {
+      method: "POST",
+    });
+    const res = await jsonFetch<{ detail: AgentRunDetail | null }>(
+      `/api/agent/runs/${runId}`
+    );
+    if (!res.detail) throw new Error("Run vanished right after resume");
     return res.detail;
   },
 

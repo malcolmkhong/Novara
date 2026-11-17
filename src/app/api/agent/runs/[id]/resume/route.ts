@@ -7,7 +7,9 @@
 //
 //   - awaiting_approval → 409 (decide the gate first — approve/reject; after
 //     an approval the run is running again and can be resumed)
-//   - paused / terminal → 409
+//   - paused → resumable (audit H2/H3): resumePausedRun checks the fencing
+//     contract (no live lease, no stranded gate), claims, flips to running
+//   - terminal → 409
 //   - stranded needs_approval task(s) (crash inside the gate-open window)
 //     → 409 unless body { resolvePending: "discard" }. Nothing is ever
 //     auto-committed — discard only abandons the uncommitted draft(s).
@@ -29,6 +31,7 @@ import {
   errorStatus,
   NotFoundError,
   reconcileWrapUpFromDb,
+  resumePausedRun,
 } from "@/lib/agent/runtime";
 import type { AgentRunStatus } from "@/lib/novara/agent-types";
 
@@ -57,10 +60,17 @@ export async function POST(req: Request, { params }: Params) {
       );
     }
     if (run.status === "paused") {
-      return Response.json(
-        { error: "This run was paused by the author — cancel it or start a new run." },
-        { status: 409 }
-      );
+      // Audit H2/H3 — paused is resumable (author reject or gate timeout).
+      // The seam checks the fencing contract (no live lease, no stranded
+      // gate), claims the lease, and flips the run back to running.
+      const resumed = await resumePausedRun(id);
+      if (!resumed.ok) {
+        return Response.json({ error: resumed.reason }, { status: 409 });
+      }
+      after(async () => {
+        await executeRun(id, { resume: true, lease: resumed.lease });
+      });
+      return Response.json({ resumed: true, leaseEpoch: resumed.lease.epoch }, { status: 202 });
     }
 
     // Stranded gate(s): a crash between the task flip and the run flip can

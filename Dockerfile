@@ -1,20 +1,16 @@
 # ---------------------------------------------------------------------------
 # Novara AI — container image (multi-stage).
 #
-# STATUS: NOT the primary deployment path. The primary path is
-# cloudbuild.yaml + deploy/vm-*.sh (see DEPLOYMENT-GOOGLE.md §2 for why:
-# Cloud Run cannot give SQLite a durable POSIX filesystem within the free
-# tier, and a warm instance exceeds the free vCPU-second allowance ~10x).
+# STATUS: THIS IS the live deploy unit. cloudbuild.run.yaml (push to main)
+# builds this image and deploys it to Cloud Run `novara` (asia-southeast1).
+# The database is EXTERNAL (Neon Postgres); DATABASE_URL/DIRECT_URL are
+# injected at runtime from Secret Manager. See README2.md §10 / README.md §9.
+# (DEPLOYMENT-GOOGLE.md is an ARCHIVED 2026-11-07 VM+SQLite proposal that was
+# never the production path — do not follow it.)
 #
-# This Dockerfile exists for three legitimate reasons:
-#   1. Local reproducibility — `docker build` proves the artifact is self-contained.
-#   2. The future Postgres migration — once the DB is external, Cloud Run
-#      becomes viable and this file is the deploy unit.
-#   3. Any non-Google host (a plain VPS with Docker) can run it unchanged.
-#
-# If you use it against SQLite you MUST mount a real volume at /data and set
-# DATABASE_URL to an absolute path inside it. Never point it at ephemeral
-# container storage — the database would vanish on restart.
+# Also usable for local reproducibility (`docker build`) and any non-Google
+# Docker host. The legacy VM pipeline (cloudbuild.yaml + deploy/vm-*.sh) is
+# unmaintained SQLite-era leftovers.
 # ---------------------------------------------------------------------------
 
 # ---- build stage -----------------------------------------------------------
@@ -87,10 +83,10 @@ ENV NODE_ENV=production \
     PORT=3000 \
     HOSTNAME=0.0.0.0
 
-# Absolute path is deliberate: a relative sqlite URL resolves against the
-# schema file's directory (prisma/), which is how the current dev layout ends
-# up at prisma/db/custom.db. Absolute removes that ambiguity in a container.
-ENV DATABASE_URL=file:/data/custom.db
+# The live database is EXTERNAL (Neon Postgres). Cloud Run injects the real
+# DATABASE_URL/DIRECT_URL from Secret Manager at deploy time; no database URL
+# is baked into the image. (The old SQLite default `file:/data/custom.db` was
+# a pre-Postgres leftover and has been removed.)
 
 # The commit this image was built from. Cloud Run also injects GIT_SHA via
 # `--set-env-vars` (that value wins over the image ENV); re-declaring the ARG
@@ -100,17 +96,14 @@ ENV GIT_SHA=$GIT_SHA
 
 # Non-root runtime user
 RUN groupadd --system --gid 1001 nodejs \
- && useradd --system --uid 1001 --gid nodejs novara \
- && mkdir -p /data \
- && chown -R novara:nodejs /data
+ && useradd --system --uid 1001 --gid nodejs novara
 
 COPY --from=build --chown=novara:nodejs /out /app
 USER novara
 
-VOLUME ["/data"]
 EXPOSE 3000
 
 # The container only serves; schema push/migrate is an explicit ops step
-# (see deploy/vm-deploy.sh) so a bad migration can never ride along silently
-# with a deploy.
+# (bun run db:push / db:migrate:deploy against the external Neon database)
+# so a bad migration can never ride along silently with a deploy.
 CMD ["bun", "server.js"]

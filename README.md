@@ -345,17 +345,18 @@ bun run check:leaks          # credential material in the repo or in git history
 bun run check:leaks:site --url https://host   # the same scan against a deployed site
 ```
 
-Additional checks (not wired to `package.json`):
+Additional checks:
 
 ```bash
-bun scripts/check-doc-tree.ts   # document-tree invariants
-bun scripts/verify-stage-a.ts    # lease / fencing / sequencing
-bun scripts/verify-p2-a.ts       # compaction groundwork (inert by design)
-bun scripts/verify-p2-b.ts       # context compaction wire equivalence
-bun scripts/verify-p2-c.ts       # compaction markers and idempotence
-bun scripts/verify-p5-e1.ts      # guarded failure flip / lease fencing
-bun scripts/verify-p5-f.ts       # usage retention, rollup, purge, CSV statement
+bun scripts/check-doc-tree.ts         # document-tree invariants (not wired to package.json)
+bun scripts/check-editor-roundtrip.ts # markdown byte-roundtrip (uses scripts/fixtures/)
+bun run verify:gate                   # approval timeout/reject -> paused -> resumable (audit H2/H3)
 ```
+
+The historical phase harnesses (verify-stage-a, verify-p2-*, verify-p5-*, p4-*, p5*-*,
+stage-b-*) were removed on 2026-11-18 (recycle bin) — one-off development-phase
+artifacts, several orphaned or stale. `scripts/` now holds only permanent checks and
+build/ops tooling.
 
 Type checking is part of the build: `next.config.ts` deliberately omits the
 `typescript.ignoreBuildErrors` escape hatch, so a type error fails `next build`.
